@@ -1,0 +1,221 @@
+//! 启动失败时的可见反馈。
+//!
+//! 发布版以 `windows_subsystem = "windows"` 编译，**没有控制台**：
+//! panic 信息无处可见，用户双击后只会看到「什么都没发生」。
+//!
+//! 这不是假想的边界情况：实测把 WebView2 的用户数据目录弄成损坏状态后，
+//! 应用会立刻退出、不留任何痕迹，连日志都没有。用户无从判断是程序坏了、
+//! 缺运行库，还是被杀毒软件拦了。
+//!
+//! 因此启动失败走两条可见途径：
+//!   1. 写一份日志（优先程序目录，不可写时退到临时目录）
+//!   2. Windows 上弹一个原生消息框
+//!
+//! 消息框直接调用 user32 的 MessageBoxW，不引入新依赖：为一个弹窗
+//! 增加一个 crate 不划算，而这只需要几个 FFI 声明。
+
+use std::path::PathBuf;
+
+/// 启动失败日志的文件名
+const LOG_NAME: &str = "启动失败.log";
+
+/// 写日志并返回实际写入的位置。
+///
+/// 优先程序所在目录（用户容易找到），但程序可能装在 Program Files 这类
+/// 不可写的位置，因此退到临时目录。两处都失败时返回 None——此时只能靠
+/// 消息框把错误显示给用户。
+fn write_log(text: &str) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+    {
+        candidates.push(dir.join(LOG_NAME));
+    }
+    candidates.push(std::env::temp_dir().join(format!("schematic-manager-{LOG_NAME}")));
+
+    for p in candidates {
+        if std::fs::write(&p, text).is_ok() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// 安装 panic 钩子，把崩溃也变成可见反馈。
+///
+/// 为什么必须有：Tauri 在建立窗口失败时是 **panic**，不是返回 `Err`。
+/// 实测它内部报的是
+///   `Failed to setup app: runtime error: failed to create webview`
+/// 且直接终止进程。若只判断 `run()` 的返回值，这条路径完全捕获不到，
+/// 用户依旧看到「双击没反应」。
+///
+/// 钩子里不显式写出 `PanicHookInfo` 的类型名：该类型在 Rust 1.82 才有，
+/// 而本 crate 声明的最低版本是 1.77。不写类型让闭包自行推断，
+/// 两边都能编译。
+pub fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let mut msg = match info.payload().downcast_ref::<&str>() {
+            Some(s) => (*s).to_string(),
+            None => match info.payload().downcast_ref::<String>() {
+                Some(s) => s.clone(),
+                None => "未知错误".to_string(),
+            },
+        };
+        if let Some(loc) = info.location() {
+            msg.push_str(&format!("\n（{}:{}）", loc.file(), loc.line()));
+        }
+        // 保留默认钩子：它会把信息打到 stderr，便于从终端启动时排查
+        default_hook(info);
+        report(&msg);
+    }));
+}
+
+/// 构造要展示给用户的正文。
+///
+/// 与弹窗和写日志分开，便于直接测试其内容——否则测试只能靠复现同一段
+/// 拼接逻辑，测的就不是真实代码了。
+fn build_body(err: &str, exe: &str, log_path: Option<&str>) -> String {
+    let mut body = String::new();
+    body.push_str("投影文件管理器启动失败\n\n");
+    body.push_str(&format!("原因：{err}\n\n"));
+    body.push_str(&format!("程序位置：{exe}\n"));
+
+    // WebView2 建不起来时，最常见的原因是用户数据目录损坏。
+    // 实测：换一个全新的该目录后应用即可正常启动。因此这里给出可操作的
+    // 建议，而不是让用户对着一个 HRESULT 发呆。
+    if err.to_ascii_lowercase().contains("webview") {
+        body.push_str(
+            "\n这通常是界面组件（WebView2）的用户数据目录损坏所致。\n\
+             可尝试删除下面这个目录后重新启动：\n",
+        );
+        match std::env::var("LOCALAPPDATA") {
+            Ok(local) => {
+                body.push_str(&format!("  {local}\\com.heiheids.schematic-manager\n"))
+            }
+            Err(_) => body.push_str("  %LOCALAPPDATA%\\com.heiheids.schematic-manager\n"),
+        }
+        body.push_str(
+            "\n若仍无法启动，请确认系统已安装 Microsoft Edge WebView2 运行时：\n\
+             https://developer.microsoft.com/microsoft-edge/webview2/\n",
+        );
+    }
+
+    match log_path {
+        Some(p) => body.push_str(&format!("\n详细信息已写入：{p}\n")),
+        None => body.push_str("\n（无法写入日志文件，请截图本窗口）\n"),
+    }
+    body
+}
+
+/// 把启动失败报告给用户：写日志 + 弹窗，并返回展示过的文本。
+pub fn report(err: &str) -> String {
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "(未知)".into());
+
+    // 先把日志写掉，再把路径写进正文——顺序不能反，否则正文里的
+    // 路径与实际写入位置可能不一致
+    let probe = build_body(err, &exe, None);
+    let log = write_log(&probe);
+    let body = build_body(err, &exe, log.as_ref().map(|p| p.display().to_string()).as_deref());
+    if let Some(p) = &log {
+        // 用最终正文覆盖，使日志内容与弹窗完全一致
+        let _ = std::fs::write(p, &body);
+    }
+
+    show_message(&body);
+    body
+}
+
+#[cfg(windows)]
+pub fn show_message(text: &str) {
+    // 直接声明 user32 的 MessageBoxW：只需一个函数，不值得引入依赖。
+    // 参数字符串必须是 UTF-16 且以 0 结尾。
+    #[link(name = "user32")]
+    extern "system" {
+        fn MessageBoxW(
+            hwnd: *mut core::ffi::c_void,
+            text: *const u16,
+            caption: *const u16,
+            utype: u32,
+        ) -> i32;
+    }
+    const MB_OK: u32 = 0x0000_0000;
+    const MB_ICONERROR: u32 = 0x0000_0010;
+    const MB_TOPMOST: u32 = 0x0004_0000;
+
+    let to_wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+    let text_w = to_wide(text);
+    let cap_w = to_wide("投影文件管理器");
+    // SAFETY: 两个字符串都是本函数内的局部量、以 0 结尾、在调用期间存活；
+    // 窗口句柄为 null 表示不指定父窗口，是 MessageBoxW 允许的取值。
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text_w.as_ptr(),
+            cap_w.as_ptr(),
+            MB_OK | MB_ICONERROR | MB_TOPMOST,
+        );
+    }
+}
+
+/// 非 Windows 平台没有统一的原生弹窗，写到 stderr。
+///
+/// Linux/macOS 上从终端启动时 stderr 可见；桌面环境下用户可从日志文件看到。
+#[cfg(not(windows))]
+pub fn show_message(text: &str) {
+    eprintln!("{text}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_is_written_somewhere() {
+        // 两处候选位置至少要有一处可写，否则错误只能靠弹窗传达
+        let p = write_log("测试内容").expect("应能写入日志");
+        assert!(p.exists());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "测试内容");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn body_always_carries_the_real_error() {
+        let b = build_body("磁盘已满", "C:\\app\\a.exe", Some("C:\\app\\启动失败.log"));
+        assert!(b.contains("磁盘已满"), "必须保留原始错误，否则无从排查");
+        assert!(b.contains("C:\\app\\a.exe"), "应给出程序位置");
+        assert!(b.contains("C:\\app\\启动失败.log"), "应给日志位置");
+    }
+
+    #[test]
+    fn webview_error_gets_actionable_hint() {
+        let b = build_body("failed to create webview: WebView2 error", "a.exe", None);
+        assert!(
+            b.contains("com.heiheids.schematic-manager"),
+            "WebView2 失败时应给出可操作的数据目录路径"
+        );
+        assert!(b.contains("WebView2 运行时"), "应提示安装运行库");
+    }
+
+    #[test]
+    fn unrelated_error_has_no_webview_hint() {
+        let b = build_body("找不到方块库 blocks.dat.z", "a.exe", None);
+        assert!(
+            !b.contains("WebView2"),
+            "与界面无关的错误不应误导用户去删数据目录"
+        );
+        assert!(b.contains("找不到方块库"), "应保留原始错误信息");
+    }
+
+    #[test]
+    fn missing_log_path_is_stated_plainly() {
+        let b = build_body("x", "a.exe", None);
+        assert!(
+            b.contains("无法写入日志文件"),
+            "写不了日志时要如实说明，不能让用户以为有日志可查"
+        );
+    }
+}

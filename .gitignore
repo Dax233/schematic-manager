@@ -52,3 +52,6 @@ diag.log
 
 # 本地构建日志（演练 tauri build 时产生）
 build_out.log
+
+# 启动失败时在程序目录旁生成的诊断日志
+启动失败.log
