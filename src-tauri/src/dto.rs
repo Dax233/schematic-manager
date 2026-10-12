@@ -161,7 +161,8 @@ pub struct ConvertTargetDto {
 }
 
 /// 转换结果
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+// 不能派生 Copy：该结构体含 String 字段，Copy 无法实现。
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConvertOutcomeDto {
     pub replaced_kinds: usize,

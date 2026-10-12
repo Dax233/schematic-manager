@@ -56,7 +56,37 @@ if ($errs -gt 0) { exit $errs }
 # 说明：flate2 桩不实现真正的压缩，因此依赖 gzip/zlib 的测试会失败——
 # 这些失败属于桩的局限，不代表代码有问题，下面会单独列出。
 Write-Host ""
-Write-Host "3/3 运行单元测试…"
+# 命令层与 DTO 单独检查一次：它们依赖 tauri 与 serde 的过程宏，
+# 无法并入上面的检查，但手工核对极易漏错（实测漏过接口名与导入）。
+Write-Host ""
+Write-Host "3/4 检查命令层与 DTO…"
+$cmdsErr = 0
+$py = "C:\Users\hsds\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
+if (-not (Test-Path $py)) { $py = "python" }
+& $py (Join-Path $here 'gen_cmd_check.py') | Out-Null
+
+foreach ($pair in @(
+    @{ name = 'tauri'; src = 'tauri_stub_crate.rs'; out = 'libtauri.rlib' },
+    @{ name = 'serde'; src = 'serde_stub_crate.rs'; out = 'libserde.rlib' }
+)) {
+    $rlib = Join-Path $here $pair.out
+    if (-not (Test-Path $rlib)) {
+        & cmd /c "rustc --edition 2021 --crate-type lib --crate-name $($pair.name) --emit=link -o `"$rlib`" `"$(Join-Path $here $pair.src)`" 2>nul"
+    }
+}
+$cmdsOut = & rustc --edition 2021 --crate-type bin --crate-name cmds `
+    --extern "flate2=$stub" `
+    --extern "tauri=$(Join-Path $here 'libtauri.rlib')" `
+    --extern "serde=$(Join-Path $here 'libserde.rlib')" `
+    (Join-Path $here 'check_cmds.rs') --emit=metadata -o (Join-Path $here 'cmds.rmeta') 2>&1
+$cmdsErr = @($cmdsOut | Select-String -Pattern '^error').Count
+if ($cmdsErr -gt 0) {
+    $cmdsOut | Select-Object -First 40
+}
+Write-Host "命令层 -> 错误: $cmdsErr"
+if ($cmdsErr -gt 0) { exit $cmdsErr }
+
+Write-Host "4/4 运行单元测试…"
 $exe = Join-Path $here 'check.exe'
 Remove-Item $exe -Force -ErrorAction SilentlyContinue
 & cmd /c "rustc --edition 2021 --crate-type lib --crate-name check --test --extern `"flate2=$stub`" `"$((Join-Path $here 'check.rs'))`" -o `"$exe`" 2>nul"

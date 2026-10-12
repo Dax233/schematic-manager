@@ -1,3 +1,7 @@
 ﻿libflate2.rlib
 *.rmeta
 *.exe
+generated/
+*.rlib
+libtauri.rlib
+libserde.rlib
