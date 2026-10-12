@@ -12,7 +12,9 @@
  * 环境变量：
  *   GITHUB_TOKEN / GH_TOKEN   必填
  *   GITHUB_REPOSITORY         必填，形如 user/repo
- *   TAG                       必填，本次发布的 tag
+ *   TAG                       必填，本次发布的 tag（同时用于拼下载链接）
+ *   HEAD_REF                  可选，用于提交对比的 ref，默认取 TAG。
+ *                             快照发布时 tag 尚未创建，必须传 github.sha
  *   PRERELEASE                可选，'true' 表示预发布
  *   ASSETS_JSON               可选，资产文件名的 JSON 数组（形如 ["a.zip", ...]）
  *   OUTPUT                    可选，输出文件路径，默认 release-notes.md
@@ -21,6 +23,9 @@ import { writeFileSync, readFileSync, existsSync } from "node:fs";
 
 const REPO = process.env.GITHUB_REPOSITORY || "";
 const TAG = process.env.TAG || "";
+// 快照发布的 tag 由 gh release create 创建，生成说明时它还不存在于远端，
+// 因此对比要用提交 sha；下载链接仍然用 tag。
+const HEAD_REF = process.env.HEAD_REF || TAG;
 const PRERELEASE = String(process.env.PRERELEASE || "false") === "true";
 const OUTPUT = process.env.OUTPUT || "release-notes.md";
 const TOKEN = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "";
@@ -169,11 +174,11 @@ async function main() {
 
   let commits = [];
   if (prev) {
-    const cmp = await api(`/compare/${prev}...${TAG}`);
+    const cmp = await api(`/compare/${prev}...${HEAD_REF}`);
     if (cmp && Array.isArray(cmp.commits)) commits = cmp.commits;
   } else {
     // 没有上一版：取到仓库首个提交为止
-    const list = await api(`/commits?sha=${TAG}&per_page=100`);
+    const list = await api(`/commits?sha=${HEAD_REF}&per_page=100`);
     if (Array.isArray(list)) commits = list.reverse();
   }
 
