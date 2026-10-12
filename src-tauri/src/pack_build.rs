@@ -199,7 +199,6 @@ where
                 let Some(converted) = crate::model_pack::convert_model(
                     mdef,
                     chain,
-                    false,
                     |face_ref| {
                         let path = crate::model_pack::resolve_face_texture_path(chain, face_ref, ns)?;
                         let idx = strings.get(&path)?;

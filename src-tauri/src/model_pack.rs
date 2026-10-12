@@ -67,6 +67,10 @@ pub struct ConvertedModel {
 
 /// 把元素转成 pack 形态。
 ///
+/// 返回 `(元素, 用到的贴图路径, 是否有面强制半透明)`。第三个分量用于让
+/// `convert_model` 判定整个模型是否半透明——面直接声明 `force_translucent`
+/// 时也要反映到模型上，否则玻璃一类方块会被当成不透明而剔除错面。
+///
 /// `tex_of` 把贴图引用解析成「字符串池下标」：
 ///   - 变量 `#x` 先沿链解析成路径，再规范成 `ns:path`，最后取字符串下标
 ///   - 直接给路径的同样规范化后取下标
@@ -77,7 +81,7 @@ pub fn convert_element<F>(
     e: &ModelElementDef,
     chain: &Chain,
     mut tex_of: F,
-) -> Option<(ModelElement, Vec<String>)>
+) -> Option<(ModelElement, Vec<String>, bool)>
 where
     F: FnMut(&str) -> Option<(u32, String)>,
 {
@@ -89,6 +93,7 @@ where
     // 面必须按面序存放：读取端是按 faceMask 的位序依次取面的
     let mut by_index: Vec<Option<ModelFace>> = vec![None; 6];
     let mut used = Vec::new();
+    let mut translucent = false;
 
     for (name, f) in &e.faces {
         let Some(idx) = face_index(name) else {
@@ -97,8 +102,11 @@ where
         let Some((tex_idx, path)) = tex_of(&f.texture) else {
             continue;
         };
-        // 沿变量链判断是否强制半透明
-        let _ = is_force_translucent(&chain.textures, &f.texture);
+        // 沿变量链判断是否强制半透明。结果必须向上传递而不是丢弃：
+        // 丢弃会让「该面声明了强制半透明」这件事永远到不了写出的模型上。
+        if is_force_translucent(&chain.textures, &f.texture) {
+            translucent = true;
+        }
 
         let uv = f
             .uv
@@ -171,17 +179,22 @@ where
             faces,
         },
         used,
+        translucent,
     ))
 }
 
 /// 把模型链（已合并 textures 与 elements）转成 pack 形态。
+///
+/// 半透明标志取自 `chain.force_translucent`——它由 build_chain 沿继承链
+/// 累积（链上任意一级声明过即为真），也包含每个面直接声明的情况。
+/// 此前该标志靠调用方传入，而唯一的调用点硬编码 false，导致
+/// `force_translucent` 这个特性实际不可达：玻璃一类方块会被当成不透明。
 ///
 /// 返回 None 表示没有任何可用元素——这种模型写入后不可见，
 /// 不如让调用方按「模型缺失」处理并计入统计。
 pub fn convert_model<F>(
     def: &ModelDef,
     chain: &Chain,
-    translucent: bool,
     mut tex_of: F,
 ) -> Option<ConvertedModel>
 where
@@ -199,8 +212,11 @@ where
 
     let mut out_elements = Vec::new();
     let mut used = Vec::new();
+    // 链级标志是起点；下面每个元素还会补充「该面直接声明」的情况
+    let mut translucent = chain.force_translucent;
     for e in elements {
-        if let Some((el, mut u)) = convert_element(e, chain, &mut tex_of) {
+        if let Some((el, mut u, face_force)) = convert_element(e, chain, &mut tex_of) {
+            translucent |= face_force;
             out_elements.push(el);
             used.append(&mut u);
         }
@@ -351,7 +367,7 @@ mod tests {
         );
         let ch = chain_with(&[("all", "minecraft:block/stone")]);
         let pool = HashMap::from([("minecraft:block/stone".to_string(), 7u32)]);
-        let (el, used) = convert_element(&e, &ch, |raw| {
+        let (el, used, _) = convert_element(&e, &ch, |raw| {
             resolve_face_texture(&ch, raw, "minecraft", &pool)
         })
         .expect("应转换成功");
@@ -368,7 +384,7 @@ mod tests {
         );
         let ch = chain_with(&[("all", "minecraft:block/x")]);
         let pool = HashMap::from([("minecraft:block/x".to_string(), 0u32)]);
-        let (el, _) = convert_element(&e, &ch, |raw| {
+        let (el, _, _) = convert_element(&e, &ch, |raw| {
             resolve_face_texture(&ch, raw, "minecraft", &pool)
         })
         .unwrap();
@@ -387,7 +403,7 @@ mod tests {
         );
         let ch = chain_with(&[("all", "minecraft:block/x")]);
         let pool = HashMap::from([("minecraft:block/x".to_string(), 0u32)]);
-        let (el, _) = convert_element(&e, &ch, |raw| {
+        let (el, _, _) = convert_element(&e, &ch, |raw| {
             resolve_face_texture(&ch, raw, "minecraft", &pool)
         })
         .unwrap();
@@ -412,7 +428,7 @@ mod tests {
         );
         let ch = chain_with(&[("all", "minecraft:block/x")]);
         let pool = HashMap::from([("minecraft:block/x".to_string(), 0u32)]);
-        let (el, _) = convert_element(&e, &ch, |raw| {
+        let (el, _, _) = convert_element(&e, &ch, |raw| {
             resolve_face_texture(&ch, raw, "minecraft", &pool)
         })
         .unwrap();
@@ -434,7 +450,7 @@ mod tests {
         );
         let ch = chain_with(&[("all", "minecraft:block/x")]);
         let pool = HashMap::from([("minecraft:block/x".to_string(), 0u32)]);
-        let (el, used) = convert_element(&e, &ch, |raw| {
+        let (el, used, _) = convert_element(&e, &ch, |raw| {
             resolve_face_texture(&ch, raw, "minecraft", &pool)
         })
         .unwrap();
@@ -470,7 +486,7 @@ mod tests {
         );
         let ch = chain_with(&[("all", "minecraft:block/x")]);
         let pool = HashMap::from([("minecraft:block/x".to_string(), 0u32)]);
-        let (el, _) = convert_element(&e, &ch, |raw| {
+        let (el, _, _) = convert_element(&e, &ch, |raw| {
             resolve_face_texture(&ch, raw, "minecraft", &pool)
         })
         .unwrap();
@@ -494,7 +510,7 @@ mod tests {
         });
         let ch = chain_with(&[("all", "minecraft:block/x")]);
         let pool = HashMap::from([("minecraft:block/x".to_string(), 0u32)]);
-        let (el, _) = convert_element(&e, &ch, |raw| {
+        let (el, _, _) = convert_element(&e, &ch, |raw| {
             resolve_face_texture(&ch, raw, "minecraft", &pool)
         })
         .unwrap();
@@ -522,7 +538,7 @@ mod tests {
         });
         let ch = chain_with(&[("all", "minecraft:block/x")]);
         let pool = HashMap::from([("minecraft:block/x".to_string(), 0u32)]);
-        let (el, _) = convert_element(&e, &ch, |raw| {
+        let (el, _, _) = convert_element(&e, &ch, |raw| {
             resolve_face_texture(&ch, raw, "minecraft", &pool)
         })
         .unwrap();
@@ -536,7 +552,7 @@ mod tests {
     fn convert_model_collects_textures_and_dedups() {
         let def = ModelDef {
             parent: String::new(),
-            textures: vec![("all".into(), "#base".into())],
+            textures: vec![("all".into(), "#base".into(), false)],
             elements: vec![
                 def_elem(vec![("up", def_face("#all", "", None))], [0.0; 3], [16.0; 3]),
                 def_elem(vec![("down", def_face("#all", "", None))], [0.0; 3], [16.0; 3]),
@@ -546,7 +562,7 @@ mod tests {
         // #all -> #base -> 实际路径
         let ch = chain_with(&[("all", "#base"), ("base", "minecraft:block/x")]);
         let pool = HashMap::from([("minecraft:block/x".to_string(), 3u32)]);
-        let cm = convert_model(&def, &ch, false, |raw| {
+        let cm = convert_model(&def, &ch, |raw| {
             resolve_face_texture(&ch, raw, "minecraft", &pool)
         })
         .unwrap();
@@ -569,7 +585,7 @@ mod tests {
         let ch = chain_with(&[]);
         let pool: HashMap<String, u32> = HashMap::new();
         assert!(
-            convert_model(&def, &ch, false, |raw| {
+            convert_model(&def, &ch, |raw| {
                 resolve_face_texture(&ch, raw, "minecraft", &pool)
             })
             .is_none(),
@@ -597,15 +613,20 @@ mod tests {
             [16.0; 3],
         )];
         let pool = HashMap::from([("minecraft:block/x".to_string(), 0u32)]);
-        let cm = convert_model(&def, &ch, false, |raw| {
+        let cm = convert_model(&def, &ch, |raw| {
             resolve_face_texture(&ch, raw, "minecraft", &pool)
         })
         .unwrap();
         assert_eq!(cm.model.elements.len(), 1, "应使用 chain 里的 elements");
     }
 
+    /// 链级的 force_translucent 必须传到写出的模型上。
+    ///
+    /// 这条覆盖的是一个曾经断掉的链路：标志由 build_chain 累积，但
+    /// convert_model 原先从调用方参数取值，而唯一的产品调用点硬编码
+    /// false，于是「玻璃不当成不透明」这个特性实际不可达。
     #[test]
-    fn translucent_flag_is_carried() {
+    fn chain_translucent_flag_reaches_the_model() {
         let def = ModelDef {
             parent: String::new(),
             textures: vec![],
@@ -616,13 +637,77 @@ mod tests {
             )],
             ambientocclusion: true,
         };
-        let ch = chain_with(&[("all", "minecraft:block/x")]);
+        let mut ch = chain_with(&[("all", "minecraft:block/x")]);
+        ch.force_translucent = true;
         let pool = HashMap::from([("minecraft:block/x".to_string(), 0u32)]);
-        let cm = convert_model(&def, &ch, true, |raw| {
+        let cm = convert_model(&def, &ch, |raw| {
             resolve_face_texture(&ch, raw, "minecraft", &pool)
         })
         .unwrap();
-        assert!(cm.model.translucent);
+        assert!(
+            cm.model.translucent,
+            "链上声明了强制半透明，写出的模型也必须是半透明"
+        );
+    }
+
+    /// 面直接声明 force_translucent 时也要反映到模型上。
+    ///
+    /// 这是 legacy-cpp 的第二条来源（packbuild.cpp:335 在每个面上检查
+    /// tv.forceTranslucent 并置 out.translucent）。只处理链级标志会漏掉它。
+    #[test]
+    fn face_level_translucent_flag_reaches_the_model() {
+        let def = ModelDef {
+            parent: String::new(),
+            textures: vec![],
+            elements: vec![def_elem(
+                vec![("up", def_face("#all", "", None))],
+                [0.0; 3],
+                [16.0; 3],
+            )],
+            ambientocclusion: true,
+        };
+        // 链上变量自身带 force_translucent
+        let mut ch = chain_with(&[("all", "#glass")]);
+        ch.textures.insert(
+            "glass".to_string(),
+            crate::blockstate_chain::TexValue {
+                sprite: "minecraft:block/glass".to_string(),
+                force_translucent: true,
+            },
+        );
+        let pool = HashMap::from([("minecraft:block/glass".to_string(), 0u32)]);
+        let cm = convert_model(&def, &ch, |raw| {
+            resolve_face_texture(&ch, raw, "minecraft", &pool)
+        })
+        .unwrap();
+        assert!(
+            cm.model.translucent,
+            "沿变量链查到强制半透明时，模型也必须是半透明"
+        );
+    }
+
+    /// 没有声明时不应误判为半透明。
+    ///
+    /// 半透明会让渲染走另一条混合路径，误判会改变所有普通方块的观感。
+    #[test]
+    fn plain_model_is_not_translucent() {
+        let def = ModelDef {
+            parent: String::new(),
+            textures: vec![],
+            elements: vec![def_elem(
+                vec![("up", def_face("#all", "", None))],
+                [0.0; 3],
+                [16.0; 3],
+            )],
+            ambientocclusion: true,
+        };
+        let ch = chain_with(&[("all", "minecraft:block/stone")]);
+        let pool = HashMap::from([("minecraft:block/stone".to_string(), 0u32)]);
+        let cm = convert_model(&def, &ch, |raw| {
+            resolve_face_texture(&ch, raw, "minecraft", &pool)
+        })
+        .unwrap();
+        assert!(!cm.model.translucent, "普通模型不应被判为半透明");
     }
 
     // ---- 贴图引用解析 ----

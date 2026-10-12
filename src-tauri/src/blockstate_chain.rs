@@ -119,11 +119,15 @@ where
     visiting.pop();
 
     // 本级的 textures 覆盖父级
-    for (k, v) in &def.textures {
+    for (k, v, force) in &def.textures {
         let tv = TexValue {
             sprite: v.clone(),
-            force_translucent: false,
+            force_translucent: *force,
         };
+        // 链上任意一级声明过即为真：父级已经置位时不能被本级的 false 抹掉
+        if *force {
+            ch.force_translucent = true;
+        }
         ch.textures.insert(k.clone(), tv);
     }
     // 本级的 elements 存在则整体替换父级的
@@ -211,12 +215,22 @@ mod tests {
         }
     }
 
+    /// 构造一个模型。`force` 为该模型全部贴图变量的强制半透明标记。
     fn model(parent: &str, textures: &[(&str, &str)], elements: Vec<ModelElementDef>) -> ModelDef {
+        model_tex(parent, textures, elements, false)
+    }
+
+    fn model_tex(
+        parent: &str,
+        textures: &[(&str, &str)],
+        elements: Vec<ModelElementDef>,
+        force: bool,
+    ) -> ModelDef {
         ModelDef {
             parent: parent.to_string(),
             textures: textures
                 .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .map(|(k, v)| (k.to_string(), v.to_string(), force))
                 .collect(),
             elements,
             ambientocclusion: true,
@@ -258,6 +272,63 @@ mod tests {
         assert_eq!(
             ch.textures.get("all").unwrap().sprite, "block/wood",
             "子级应覆盖父级同名变量"
+        );
+    }
+
+    /// 链级的 force_translucent 必须由 build_chain 累积出来。
+    ///
+    /// 此前 blockstate.rs 解析时整段丢掉了这个字段，TexValue 恒为 false，
+    /// 于是下游的 is_force_translucent 永远返回 false，特性静默失效。
+    /// 这条同时覆盖「解析结果被带入链」这一环。
+    #[test]
+    fn chain_translucent_is_accumulated_from_model_textures() {
+        let table = vec![(
+            "minecraft:block/glass",
+            model_tex("", &[("all", "block/glass")], vec![elem(0.0)], true),
+        )];
+        let mut l = loader(&table);
+        let ch = build_chain("block/glass", "minecraft", &mut l);
+        assert!(
+            ch.force_translucent,
+            "模型声明了 force_translucent，链上标志应为真"
+        );
+        assert!(
+            ch.textures.get("all").unwrap().force_translucent,
+            "对应变量的标记也应为真"
+        );
+    }
+
+    /// 普通模型不应把链级标志置位。
+    #[test]
+    fn chain_translucent_stays_false_for_plain_model() {
+        let table = vec![(
+            "minecraft:block/stone",
+            model("", &[("all", "block/stone")], vec![elem(0.0)]),
+        )];
+        let mut l = loader(&table);
+        let ch = build_chain("block/stone", "minecraft", &mut l);
+        assert!(!ch.force_translucent, "普通模型不应被判为半透明");
+    }
+
+    /// 父级声明过、子级未声明时，链级标志仍应为真。
+    ///
+    /// 「链上任意一级声明过即为真」是本模块写在文件头的约定，
+    /// 子级覆盖贴图变量时不能把它抹掉。
+    #[test]
+    fn chain_translucent_survives_child_override() {
+        let table = vec![
+            (
+                "minecraft:block/cube",
+                model_tex("", &[("all", "block/glass")], vec![elem(0.0)], true),
+            ),
+            // 子级覆盖了 all，但自身没有 force_translucent
+            ("minecraft:block/door", model("block/cube", &[("all", "block/wood")], vec![])),
+        ];
+        let mut l = loader(&table);
+        let ch = build_chain("block/door", "minecraft", &mut l);
+        assert!(
+            ch.force_translucent,
+            "父级声明过，子级覆盖贴图后链级标志仍应为真"
         );
     }
 

@@ -252,8 +252,11 @@ pub struct ElementRotation {
 pub struct ModelDef {
     /// 父模型引用（用于继承链）
     pub parent: String,
-    /// 贴图变量：`all` -> `minecraft:block/stone`
-    pub textures: Vec<(String, String)>,
+    /// 贴图变量：`all` -> (`minecraft:block/stone`, 是否强制半透明)
+    ///
+    /// 第二个分量来自 `{"sprite": "...", "force_translucent": true}` 形式；
+    /// 字符串形式恒为 false。玻璃、冰一类方块靠它避免被剔除成不透明。
+    pub textures: Vec<(String, String, bool)>,
     pub elements: Vec<ModelElementDef>,
     /// 是否参与环境光遮蔽（仅记录，不影响渲染）
     pub ambientocclusion: bool,
@@ -294,17 +297,24 @@ pub fn parse_model(json: &[u8]) -> AppResult<ModelDef> {
 
     if let Some(Value::Object(tex)) = obj.get("textures") {
         for (k, v) in tex {
-            // 贴图值可以是字符串，也可以是 `{"sprite": "..."}` 之类的对象；
-            // 后者取 sprite 字段，取不到就跳过——猜一个路径比留空更糟。
-            let path = match v {
-                Value::String(s) => s.clone(),
+            // 贴图值可以是字符串，也可以是 `{"sprite": "...", "force_translucent": true}`
+            // 形式，后者取 sprite 与 force_translucent，取不到 sprite 就跳过——
+            // 猜一个路径比留空更糟。force_translucent 丢失会让玻璃一类方块
+            // 被当成不透明，与 legacy-cpp 的行为不一致。
+            let (path, force) = match v {
+                Value::String(s) => (s.clone(), false),
                 Value::Object(o) => match o.get("sprite").and_then(|s| s.as_str()) {
-                    Some(s) => s.to_string(),
+                    Some(s) => (
+                        s.to_string(),
+                        o.get("force_translucent")
+                            .and_then(|x| x.as_bool())
+                            .unwrap_or(false),
+                    ),
                     None => continue,
                 },
                 _ => continue,
             };
-            m.textures.push((k.clone(), path));
+            m.textures.push((k.clone(), path, force));
         }
     }
 
@@ -630,7 +640,31 @@ mod tests {
     fn texture_object_takes_sprite() {
         let json = br##"{"textures":{"all":{"sprite":"block/x"},"bad":42}}"##;
         let m = parse_model(json).unwrap();
-        assert_eq!(m.textures, vec![("all".to_string(), "block/x".to_string())]);
+        assert_eq!(m.textures, vec![("all".to_string(), "block/x".to_string(), false)]);
+    }
+
+    /// 贴图对象里的 force_translucent 必须被解析出来。
+    ///
+    /// 这是 `{"sprite": "...", "force_translucent": true}` 形式，玻璃一类
+    /// 方块靠它避免被当成不透明。此前该字段被整段忽略，导致特性失效。
+    #[test]
+    fn texture_object_reads_force_translucent() {
+        let json = br##"{"textures":{
+            "glass":{"sprite":"block/glass","force_translucent":true},
+            "stone":"block/stone",
+            "ice":{"sprite":"block/ice","force_translucent":false}
+        }}"##;
+        let m = parse_model(json).unwrap();
+        let get = |k: &str| {
+            m.textures
+                .iter()
+                .find(|(name, _, _)| name == k)
+                .map(|(_, p, f)| (p.clone(), *f))
+                .expect("应存在该贴图变量")
+        };
+        assert_eq!(get("glass"), ("block/glass".to_string(), true));
+        assert_eq!(get("stone"), ("block/stone".to_string(), false), "字符串形式应为 false");
+        assert_eq!(get("ice"), ("block/ice".to_string(), false), "显式 false 应为 false");
     }
 
     #[test]
