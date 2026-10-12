@@ -89,14 +89,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: windows-latest,  target: x86_64-pc-windows-msvc,   platform: windows, arch: x86_64 }
-          - { runner: windows-11-arm,  target: aarch64-pc-windows-msvc,  platform: windows, arch: arm64  }
-          - { runner: ubuntu-22.04,    target: x86_64-unknown-linux-gnu, platform: linux,   arch: x86_64 }
-          - { runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, platform: linux, arch: arm64 }
+          - { runner: windows-latest,  target: x86_64-pc-windows-msvc,   platform: windows, arch: x86_64, bundles: nsis }
+          - { runner: windows-11-arm,  target: aarch64-pc-windows-msvc,  platform: windows, arch: arm64,  bundles: nsis }
+          - { runner: ubuntu-22.04,    target: x86_64-unknown-linux-gnu, platform: linux,   arch: x86_64, bundles: deb,appimage }
+          - { runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, platform: linux, arch: arm64, bundles: deb,appimage }
           # macos-13 已被 GitHub 弃用：实测该标签的任务永远停在 queued，
           # 会连带让整个运行无法结束（日志也因此无法下载）。改用 macos-15-intel。
-          - { runner: macos-15-intel,  target: x86_64-apple-darwin,      platform: macos,   arch: x86_64 }
-          - { runner: macos-14,        target: aarch64-apple-darwin,     platform: macos,   arch: arm64  }
+          - { runner: macos-15-intel,  target: x86_64-apple-darwin,      platform: macos,   arch: x86_64, bundles: dmg }
+          - { runner: macos-14,        target: aarch64-apple-darwin,     platform: macos,   arch: arm64,  bundles: dmg }
 
     steps:
       - uses: actions/checkout@v4
@@ -152,12 +152,19 @@ jobs:
       - name: 安装前端依赖
         run: pnpm install --no-frozen-lockfile
 
+      # Windows 只打 NSIS，不打 MSI。
+      # 原因：项目的 productName 与版权信息是中文，WiX 的 light.exe 会报
+      #   error LGHT0311: A string was provided with characters that are not
+      #   available in the specified database code page
+      # 即 MSI 数据库代码页无法容纳中文字符，打包阶段直接失败
+      # （Rust 代码本身已编译通过）。NSIS 完整支持 Unicode，故改用 NSIS。
+      # 若日后需要 MSI，可为 wix 指定 language: "zh-CN" 后再启用。
       - name: 构建（Tauri 打包）
         id: tauri
         shell: bash
         run: |
           set -o pipefail
-          pnpm tauri build --target ${{ matrix.target }} --verbose 2>&1 | tee build.log
+          pnpm tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --verbose 2>&1 | tee build.log
 
       # 构建失败时把关键输出登记为 Issue。
       # 原因：GitHub 的作业日志要等整个运行结束才能下载，而并行矩阵中
