@@ -9,9 +9,12 @@ on:
     tags: [ 'v*' ]
   workflow_dispatch:
 
-# 创建 Release、上传资产、回推版本号提交都需要写权限
+# 创建 Release、上传资产、回推版本号提交需要 contents: write；
+# 构建失败时登记诊断 Issue 需要 issues: write（缺少它 gh issue create 会被 403 拒绝，
+# 而步骤又带 continue-on-error，会表现为"成功但什么都没做"）。
 permissions:
   contents: write
+  issues: write
 
 jobs:
   # ---------------------------------------------------------------- 计算版本
@@ -178,7 +181,7 @@ jobs:
           } > report.md
           gh issue create --title "$title" --body-file report.md \
             --label "ci" 2>/dev/null || \
-          gh issue create --title "$title" --body-file report.md || true
+          gh issue create --title "$title" --body-file report.md
 
       - name: 收集并规范化产物
         run: node scripts/collect-artifacts.mjs --version ${{ needs.prepare.outputs.version }} --platform ${{ matrix.platform }} --arch ${{ matrix.arch }}
