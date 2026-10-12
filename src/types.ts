@@ -36,6 +36,15 @@ export interface EntityCount {
   count: number;
 }
 
+/** 目录扫描结果 */
+export interface ScanResult {
+  items: SchematicSummary[];
+  /** 因权限或 IO 错误被跳过的目录数 */
+  skippedDirs: number;
+  /** 被跳过的目录路径（最多前若干条） */
+  skippedPaths: string[];
+}
+
 /** 保存操作的结果 */
 export interface SaveOutcome {
   path: string;

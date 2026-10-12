@@ -4,7 +4,7 @@
 //! 不在这里承载业务规则，便于解析层独立测试。
 
 use crate::backup;
-use crate::dto::{AnalysisResult, BlockCount, EntityCount, SaveOutcome, SchematicSummary};
+use crate::dto::{AnalysisResult, BlockCount, EntityCount, SaveOutcome, ScanResult, SchematicSummary};
 use crate::litematic::{self, Summary};
 use std::path::{Path, PathBuf};
 
@@ -59,40 +59,82 @@ pub fn peek_schematic(path: String) -> SchematicSummary {
 /// 递归扫描目录下的全部 .litematic 文件。
 ///
 /// depth 限制递归层数，避免误选到盘符根目录时遍历整块磁盘。
+/// 不可读的子目录会被跳过并计数，随结果返回给界面提示，
+/// 而不是静默给出一个看起来完整、实则缺项的结果。
 #[tauri::command]
-pub fn scan_litematics(dir: String, max_depth: Option<u32>) -> Vec<SchematicSummary> {
+pub fn scan_litematics(dir: String, max_depth: Option<u32>) -> ScanResult {
     let depth = max_depth.unwrap_or(6).min(16);
     let mut found: Vec<PathBuf> = Vec::new();
-    collect_litematics(Path::new(&dir), depth, &mut found);
+    let mut skipped = SkipReport::default();
+    collect_litematics(Path::new(&dir), depth, &mut found, &mut skipped);
     found.sort();
 
-    found
-        .iter()
-        .map(|p| {
-            let path = p.to_string_lossy().into_owned();
-            to_dto(litematic::Schematic::peek(&path))
-        })
-        .collect()
+    ScanResult {
+        items: found
+            .iter()
+            .map(|p| {
+                let path = p.to_string_lossy().into_owned();
+                to_dto(litematic::Schematic::peek(&path))
+            })
+            .collect(),
+        skipped_dirs: skipped.count,
+        skipped_paths: skipped.paths,
+    }
 }
 
-fn collect_litematics(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+/// 跳过的目录统计。路径只保留前若干条，避免异常目录结构下无限增长。
+#[derive(Default)]
+struct SkipReport {
+    count: u32,
+    paths: Vec<String>,
+}
+
+const MAX_SKIP_PATHS: usize = 20;
+
+impl SkipReport {
+    fn record(&mut self, dir: &Path) {
+        self.count = self.count.saturating_add(1);
+        if self.paths.len() < MAX_SKIP_PATHS {
+            self.paths.push(dir.to_string_lossy().into_owned());
+        }
+    }
+}
+
+fn collect_litematics(dir: &Path, depth: u32, out: &mut Vec<PathBuf>, skipped: &mut SkipReport) {
     if depth == 0 {
         return;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    for e in entries.flatten() {
-        let p = e.path();
-        let Ok(ft) = e.file_type() else { continue };
-        if ft.is_dir() {
-            collect_litematics(&p, depth - 1, out);
-        } else if ft.is_file() {
-            let is_ltm = p
-                .extension()
-                .map(|x| x.eq_ignore_ascii_case("litematic"))
-                .unwrap_or(false);
-            if is_ltm {
-                out.push(p);
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => {
+            skipped.record(dir);
+            return;
+        }
+    };
+    for e in entries {
+        let entry = match e {
+            Ok(v) => v,
+            Err(_) => {
+                skipped.record(dir);
+                continue;
             }
+        };
+        let p = entry.path();
+        let ft = match entry.file_type() {
+            Ok(v) => v,
+            Err(_) => {
+                skipped.record(&p);
+                continue;
+            }
+        };
+        if ft.is_dir() {
+            collect_litematics(&p, depth - 1, out, skipped);
+        } else if ft.is_file()
+            && p.extension()
+                .map(|x| x.eq_ignore_ascii_case("litematic"))
+                .unwrap_or(false)
+        {
+            out.push(p);
         }
     }
 }
@@ -217,7 +259,8 @@ mod tests {
     #[test]
     fn scan_missing_dir_returns_empty() {
         let r = scan_litematics("__sm_not_exist_dir__".into(), Some(2));
-        assert!(r.is_empty());
+        assert!(r.items.is_empty());
+        assert!(r.skipped_dirs > 0, "不存在的目录应计入跳过数");
     }
 
     #[test]
@@ -237,10 +280,11 @@ mod tests {
         std::fs::write(dir.join("sub/c.LITEMATIC"), b"x").unwrap();
 
         let r = scan_litematics(dir.to_string_lossy().into_owned(), Some(4));
-        let names: Vec<&str> = r.iter().map(|s| s.file_name.as_str()).collect();
+        let names: Vec<&str> = r.items.iter().map(|s| s.file_name.as_str()).collect();
         assert_eq!(names.len(), 2, "应只收录 .litematic，实际 {names:?}");
         assert!(names.contains(&"a.litematic"));
         assert!(names.contains(&"c.LITEMATIC"), "扩展名匹配应忽略大小写");
+        assert_eq!(r.skipped_dirs, 0, "正常目录不应产生跳过");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

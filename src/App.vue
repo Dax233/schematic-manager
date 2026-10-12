@@ -50,9 +50,14 @@ async function pickDirectory() {
   if (typeof dir !== "string") return;
   status.value = "正在扫描…";
   try {
-    files.value = await scanLitematics(dir);
-    const bad = files.value.filter((f) => f.error).length;
-    status.value = bad > 0 ? `扫描完成，其中 ${bad} 个文件解析失败` : "扫描完成";
+    const r = await scanLitematics(dir);
+    files.value = r.items;
+    const parts: string[] = [];
+    const bad = r.items.filter((f) => f.error).length;
+    if (bad > 0) parts.push(`${bad} 个文件解析失败`);
+    // 被跳过的目录必须告知：否则结果看起来完整，用户会以为文件真的不存在
+    if (r.skippedDirs > 0) parts.push(`已跳过 ${r.skippedDirs} 个无法读取的目录`);
+    status.value = parts.length > 0 ? `扫描完成，${parts.join("，")}` : "扫描完成";
   } catch (e) {
     status.value = "扫描失败";
     Message.error(`扫描失败：${e}`);
@@ -81,14 +86,19 @@ async function saveDraft() {
     dirty.value = false;
     // 重新读取，确保界面显示的是文件中的真实内容而不是内存里的草稿
     const fresh = await scanLitematics(cur.dirName, 1);
-    const hit = fresh.find((f) => f.path === cur.path);
+    const hit = fresh.items.find((f) => f.path === cur.path);
     if (hit) {
       selected.value = hit;
       resetDraft(hit);
       const idx = files.value.findIndex((f) => f.path === hit.path);
       if (idx >= 0) files.value[idx] = hit;
+      Message.success(`已保存，备份在：${out.backupPath}`);
+    } else {
+      // 文件被移动或重命名时，界面若继续显示旧记录会误导用户
+      Message.warning(
+        `已保存，但重新读取时未在该目录找到该文件（可能已被移动或重命名）。备份在：${out.backupPath}`,
+      );
     }
-    Message.success(`已保存，备份在：${out.backupPath}`);
   } catch (e) {
     Message.error(`保存失败：${e}`);
   } finally {

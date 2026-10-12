@@ -1,15 +1,15 @@
 // Rust 命令的类型化封装，避免各组件直接拼命令名与参数。
 import { invoke } from "@tauri-apps/api/core";
-import type { AnalysisResult, SaveOutcome, SchematicSummary } from "./types";
+import type { AnalysisResult, SaveOutcome, ScanResult, SchematicSummary } from "./types";
 
 /** 只读扫描单个投影文件（不解码方块） */
 export function peekSchematic(path: string): Promise<SchematicSummary> {
   return invoke<SchematicSummary>("peek_schematic", { path });
 }
 
-/** 递归扫描目录下全部 .litematic */
-export function scanLitematics(dir: string, maxDepth = 6): Promise<SchematicSummary[]> {
-  return invoke<SchematicSummary[]>("scan_litematics", { dir, maxDepth });
+/** 递归扫描目录下全部 .litematic。返回值含被跳过的目录数，便于界面提示。 */
+export function scanLitematics(dir: string, maxDepth = 6): Promise<ScanResult> {
+  return invoke<ScanResult>("scan_litematics", { dir, maxDepth });
 }
 
 /** 完整解码并统计方块与实体 */

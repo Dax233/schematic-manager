@@ -54,6 +54,20 @@ pub struct EntityCount {
     pub count: u64,
 }
 
+/// 目录扫描结果
+///
+/// 带上 skipped：不可读的子目录会被跳过，若不告知用户，
+/// 结果看起来是完整的，用户会以为文件真的不存在。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanResult {
+    pub items: Vec<SchematicSummary>,
+    /// 因权限或 IO 错误被跳过的目录数
+    pub skipped_dirs: u32,
+    /// 被跳过的目录路径（最多记录前若干个，便于用户定位）
+    pub skipped_paths: Vec<String>,
+}
+
 /// 保存操作的结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
