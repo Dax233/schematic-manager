@@ -256,8 +256,6 @@ pub struct Summary {
 /// 完整分析结果
 #[derive(Debug, Clone, Default)]
 pub struct Analysis {
-    /// 按方块名统计（不含属性）
-    pub blocks_by_name: BTreeMap<String, u64>,
     /// 按完整状态统计（含属性）
     pub blocks_by_state: BTreeMap<String, u64>,
     pub entities_by_id: BTreeMap<String, u64>,
@@ -502,7 +500,6 @@ impl Schematic {
                     continue;
                 }
                 a.non_air_total += 1;
-                *a.blocks_by_name.entry(b.name.clone()).or_insert(0) += 1;
                 *a.blocks_by_state.entry(b.key()).or_insert(0) += 1;
             }
         }
@@ -553,15 +550,6 @@ impl Schematic {
     pub fn set_meta_description(&mut self, v: &str) -> bool {
         self.meta_set_str("Description", v)
     }
-    pub fn set_data_version(&mut self, v: i32) -> bool {
-        if self.root.get("MinecraftDataVersion").is_none() {
-            return false;
-        }
-        self.root.set("MinecraftDataVersion", Value::Int(v));
-        self.meta_modified = true;
-        true
-    }
-
     /// 把编辑后的索引重新编码回 NBT 并保存
     pub fn save_to(&mut self, path: &str) -> AppResult<()> {
         self.sync_to_nbt()?;
@@ -573,11 +561,6 @@ impl Schematic {
         self.meta_modified = false;
         self.blocks_modified = false;
         Ok(())
-    }
-
-    pub fn to_bytes(&mut self) -> AppResult<Vec<u8>> {
-        self.sync_to_nbt()?;
-        nbt::serialize_gzip(&self.root, "", 6)
     }
 
     /// 把内存中的区域索引写回 NBT 的 BlockStates 字段

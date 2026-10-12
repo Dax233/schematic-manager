@@ -56,7 +56,14 @@ async function pickDirectory() {
     const bad = r.items.filter((f) => f.error).length;
     if (bad > 0) parts.push(`${bad} 个文件解析失败`);
     // 被跳过的目录必须告知：否则结果看起来完整，用户会以为文件真的不存在
-    if (r.skippedDirs > 0) parts.push(`已跳过 ${r.skippedDirs} 个无法读取的目录`);
+    if (r.skippedDirs > 0) {
+      parts.push(`已跳过 ${r.skippedDirs} 个无法读取的目录`);
+      // 列出被跳过的路径，否则用户无从判断少了哪些内容
+      Message.warning({
+        content: `以下目录无法读取，已跳过：\n${r.skippedPaths.join("\n")}`,
+        duration: 8000,
+      });
+    }
     status.value = parts.length > 0 ? `扫描完成，${parts.join("，")}` : "扫描完成";
   } catch (e) {
     status.value = "扫描失败";
@@ -228,6 +235,10 @@ const close = () => appWindow.close();
               <a-descriptions-item label="方块总数">{{ selected.totalBlocks }}</a-descriptions-item>
               <a-descriptions-item label="实体数量">{{ selected.entityCount }}</a-descriptions-item>
               <a-descriptions-item label="方块实体">{{ selected.tileEntityCount }}</a-descriptions-item>
+              <a-descriptions-item label="待处理刻">{{ selected.pendingTicks }}</a-descriptions-item>
+              <a-descriptions-item label="内含预览图">
+                {{ selected.hasPreview ? "是" : "否" }}
+              </a-descriptions-item>
               <a-descriptions-item label="文件大小">{{ formatSize(selected.fileSize) }}</a-descriptions-item>
               <a-descriptions-item v-if="selected.error" label="解析错误">
                 <span style="color: rgb(var(--danger-6))">{{ selected.error }}</span>
@@ -241,6 +252,7 @@ const close = () => appWindow.close();
               <template v-if="analysis">
                 <a-space style="margin-bottom: 8px" :size="16">
                   <span>非空气方块：<b>{{ analysis.nonAirTotal }}</b></span>
+                  <span>空气方块：<b>{{ analysis.airTotal }}</b></span>
                   <span>方块种类：<b>{{ analysis.distinctBlockTypes }}</b></span>
                   <span>状态种类：<b>{{ analysis.distinctStates }}</b></span>
                 </a-space>
