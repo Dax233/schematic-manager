@@ -145,17 +145,21 @@ pub fn mc_version_name(data_version: i32) -> String {
 mod tests {
     use super::*;
 
+    // 注意：这里的路径必须与平台无关。
+    // std::path::Path 按各平台的分隔符切分，在 Unix 上反斜杠只是普通字符，
+    // 因此 Windows 风格的 "Z:\\x.litematic" 在 Linux 上会被整体当作文件名。
+    // 测试只关心「文件不存在时的行为」，用纯文件名即可。
     #[test]
     fn scan_missing_dir_returns_empty() {
-        let r = scan_litematics(r"Z:\__not_exist__".into(), Some(2));
+        let r = scan_litematics("__sm_not_exist_dir__".into(), Some(2));
         assert!(r.is_empty());
     }
 
     #[test]
     fn peek_missing_file_reports_error() {
-        let s = peek_schematic(r"Z:\__not_exist__.litematic".into());
-        assert!(!s.error.is_empty());
-        assert_eq!(s.file_name, "__not_exist__.litematic");
+        let s = peek_schematic("__sm_not_exist__.litematic".into());
+        assert!(!s.error.is_empty(), "文件不存在时应给出错误原因");
+        assert_eq!(s.file_name, "__sm_not_exist__.litematic");
     }
 
     #[test]
