@@ -155,3 +155,51 @@ body,
 .detail .arco-tabs-content {
   overflow-y: auto;
 }
+
+// 3D 预览区
+.preview {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--color-border-1);
+  background: var(--color-bg-2);
+
+  &__stage {
+    height: 400px;
+    min-height: 240px;
+    background: var(--color-fill-1);
+  }
+
+  &__bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+  }
+
+  &__label {
+    color: var(--color-text-3);
+    font-size: 12px;
+    margin-left: 8px;
+  }
+
+  &__value {
+    color: var(--color-text-3);
+    font-size: 12px;
+    width: 42px;
+  }
+
+  &__spacer {
+    flex: 1 1 auto;
+  }
+
+  &__info {
+    color: var(--color-text-3);
+    font-size: 12px;
+  }
+
+  &__error {
+    color: rgb(var(--danger-6));
+    font-size: 12px;
+  }
+}

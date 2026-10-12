@@ -10,6 +10,7 @@ use crate::dto::{
 };
 use crate::litematic::{self, Summary};
 use std::path::{Path, PathBuf};
+use tauri::{Manager, path::BaseDirectory};
 
 /// 程序所在目录。备份目录以它为根，与旧版行为一致。
 fn exe_dir() -> PathBuf {
@@ -191,11 +192,18 @@ pub fn analyze_schematic(path: String) -> Result<AnalysisResult, String> {
 
 /// 组装前端 Three.js 渲染所需的场景。
 ///
-/// db_path 为方块库文件（blocks.dat 的 zlib 压缩形式）的路径。
-/// 逻辑全在 scene 模块，这里只做错误类型的转换。
+/// 方块库作为应用资源随包分发，路径由这里解析，
+/// 前端不必知道它在哪个目录，也不必关心各平台的资源布局差异。
 #[tauri::command]
-pub fn build_scene(schematic_path: String, db_path: String) -> Result<SceneDto, String> {
-    crate::scene::build(&schematic_path, &db_path)
+pub fn build_scene(app: tauri::AppHandle, schematic_path: String) -> Result<SceneDto, String> {
+    let db = app
+        .path()
+        .resolve("resources/blocks.dat.z", BaseDirectory::Resource)
+        .map_err(|e| format!("找不到内置方块库：{e}"))?;
+    if !db.is_file() {
+        return Err(format!("内置方块库不存在：{}", db.display()));
+    }
+    crate::scene::build(&schematic_path, &db.to_string_lossy())
         .map(SceneDto::from)
         .map_err(|e| e.to_string())
 }

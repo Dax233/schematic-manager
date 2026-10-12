@@ -4,8 +4,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { TableColumnData, TableData } from "@arco-design/web-vue";
 import { Message } from "@arco-design/web-vue";
-import { analyzeSchematic, saveMetadata, scanLitematics } from "./api";
-import type { AnalysisResult, SchematicSummary } from "./types";
+import { analyzeSchematic, buildScene, saveMetadata, scanLitematics } from "./api";
+import SceneViewer from "./components/SceneViewer.vue";
+import type { AnalysisResult, SceneData, SchematicSummary } from "./types";
 import { formatDims, formatSize, formatStacks } from "./utils/format";
 
 const appWindow = getCurrentWindow();
@@ -18,6 +19,21 @@ const saving = ref(false);
 // 元数据编辑草稿。选中文件时用文件中的值填充
 const draft = ref({ name: "", author: "", description: "" });
 const dirty = ref(false);
+
+// 3D 预览
+const viewer = ref<InstanceType<typeof SceneViewer> | null>(null);
+const scene = ref<SceneData | null>(null);
+const sceneLoading = ref(false);
+const sceneError = ref("");
+const brightness = ref(1.45);
+const activeView = ref("left45");
+const sceneInfo = computed(() => {
+  if (!scene.value) return "";
+  const s = scene.value;
+  const parts = [`${s.totalTriangles.toLocaleString()} 个三角形`];
+  if (s.unresolvedBlocks > 0) parts.push(`${s.unresolvedBlocks} 种方块无贴图`);
+  return parts.join("　");
+});
 const status = ref("就绪");
 
 const columns: TableColumnData[] = [
@@ -115,12 +131,31 @@ async function saveDraft() {
 
 // Arco 的 row-click 回调给出的是通用的 TableData，
 // 这里收窄回业务类型；行数据本就来自 files，字段是一致的。
+async function loadScene(record: SchematicSummary) {
+  scene.value = null;
+  sceneError.value = "";
+  sceneLoading.value = true;
+  try {
+    scene.value = await buildScene(record.path);
+  } catch (e) {
+    sceneError.value = String(e);
+  } finally {
+    sceneLoading.value = false;
+  }
+}
+
+function setView(name: string) {
+  activeView.value = name;
+  viewer.value?.applyPreset(name);
+}
+
 async function onRowClick(raw: TableData) {
   const record = raw as unknown as SchematicSummary;
   selected.value = record;
   analysis.value = null;
   resetDraft(record);
   if (record.error) return;
+  void loadScene(record);
   analyzing.value = true;
   try {
     analysis.value = await analyzeSchematic(record.path);
@@ -172,6 +207,43 @@ const close = () => appWindow.close();
       </div>
 
       <div class="detail">
+        <div class="preview">
+          <div class="preview__stage">
+            <a-spin :loading="sceneLoading" style="width: 100%; height: 100%">
+              <SceneViewer
+                ref="viewer"
+                :scene="scene"
+                :brightness="brightness"
+              />
+            </a-spin>
+          </div>
+          <div class="preview__bar">
+            <a-radio-group
+              v-model="activeView"
+              type="button"
+              size="small"
+              :disabled="!scene"
+              @change="setView(String(activeView))"
+            >
+              <a-radio value="front">正面</a-radio>
+              <a-radio value="left45">左侧 45°</a-radio>
+              <a-radio value="right45">右侧 45°</a-radio>
+              <a-radio value="back">背面</a-radio>
+            </a-radio-group>
+            <span class="preview__label">亮度</span>
+            <a-slider
+              v-model="brightness"
+              :min="0.5"
+              :max="2"
+              :step="0.05"
+              :style="{ width: '140px' }"
+            />
+            <span class="preview__value">{{ Math.round(brightness * 100) }}%</span>
+            <span class="preview__spacer" />
+            <span v-if="sceneError" class="preview__error">{{ sceneError }}</span>
+            <span v-else-if="sceneInfo" class="preview__info">{{ sceneInfo }}</span>
+          </div>
+        </div>
         <a-tabs default-active-key="info" style="padding: 0 8px">
           <a-tab-pane key="info" title="信息">
             <template v-if="selected">

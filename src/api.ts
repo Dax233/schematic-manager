@@ -36,10 +36,10 @@ export function saveMetadata(
 
 /**
  * 组装前端渲染所需的场景。
- * dbPath 为方块库文件（blocks.dat 的 zlib 压缩形式）的路径。
+ * 内置方块库的路径由后端解析，前端只提供投影文件路径。
  */
-export function buildScene(schematicPath: string, dbPath: string): Promise<SceneData> {
-  return invoke<SceneData>("build_scene", { schematicPath, dbPath });
+export function buildScene(schematicPath: string): Promise<SceneData> {
+  return invoke<SceneData>("build_scene", { schematicPath });
 }
 
 /** dataVersion 对应的游戏版本名 */
