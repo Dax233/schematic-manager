@@ -164,7 +164,21 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          pnpm tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --verbose 2>&1 | tee build.log
+          # 失败重试：Tauri 打包阶段需要联网下载打包工具链
+          # （如 NSIS），实测出现过 http status: 504 的瞬时失败，
+          # 同一提交重跑即通过。这类基础设施抖动不应让整个发布失败。
+          for attempt in 1 2 3; do
+            echo "===== 构建尝试 $attempt/3  target=${{ matrix.target }} ====="
+            if pnpm tauri build --target ${{ matrix.target }} \
+                 --bundles ${{ matrix.bundles }} --verbose 2>&1 | tee build.log; then
+              echo "构建成功（第 $attempt 次尝试）"
+              exit 0
+            fi
+            echo "第 $attempt 次构建失败"
+            if [ "$attempt" -lt 3 ]; then sleep 20; fi
+          done
+          echo "三次尝试均失败"
+          exit 1
 
       # 构建失败时把关键输出登记为 Issue。
       # 原因：GitHub 的作业日志要等整个运行结束才能下载，而并行矩阵中
