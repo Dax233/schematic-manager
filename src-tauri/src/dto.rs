@@ -349,3 +349,135 @@ pub struct PackListDto {
     /// 无从解释。
     pub skipped: Vec<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 取排序后的键名。
+    fn keys(v: &serde_json::Value) -> Vec<String> {
+        let mut k: Vec<String> = v
+            .as_object()
+            .expect("应是对象")
+            .keys()
+            .cloned()
+            .collect();
+        k.sort();
+        k
+    }
+
+    /// 断言键名集合（**忽略顺序**）。
+    ///
+    /// 两端都排序：手写顺序极易出错，例如 `failedBlocks` 是
+    /// `failedBlockstates` 的前缀、排序时在前，而按业务语序写就会写成
+    /// 相反的顺序。这类错误只在 CI 才暴露（本地 check 不编译 cfg(test)）。
+    fn assert_keys(v: &serde_json::Value, expected: &[&str]) {
+        let mut want: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
+        want.sort();
+        assert_eq!(keys(v), want);
+    }
+
+    /// 前端的字段名是驼峰；后端靠 `#[serde(rename_all = "camelCase")]` 转换。
+    /// 这条契约没有任何编译期保障：改名或漏写属性都不会编译失败，
+    /// 只会在运行时表现为「前端读到的字段是 undefined」。
+    ///
+    /// 因此这里对每个跨边界的 DTO 断言其**序列化后的键名**，
+    /// 与前端 `src/types.ts` 的字段逐一对应。
+    ///
+    /// 注意：本地检查环境用 serde 桩（无过程宏，rename_all 不生效），
+    /// 该测试只在 CI 的真实 serde 下运行。
+    #[test]
+    fn pack_entry_keys_match_frontend() {
+        let dto = PackEntryDto {
+            file: "a.pack".into(),
+            name: "A".into(),
+            source: "/j/a.jar".into(),
+            kind: 2,
+            kind_label: "模组包".into(),
+            data_version: 3465,
+            mc_version: "1.20.1".into(),
+            enabled: true,
+            size: 123,
+            exists: true,
+        };
+        let v = serde_json::to_value(&dto).expect("序列化失败");
+        assert_keys(&v, &[
+                "dataVersion", "enabled", "exists", "file", "kind", "kindLabel",
+                "mcVersion", "name", "size", "source",
+            ]);
+    }
+
+    #[test]
+    fn import_outcome_keys_match_frontend() {
+        let dto = ImportOutcomeDto {
+            file: "a.pack".into(),
+            name: "A".into(),
+            kind: 1,
+            kind_label: "MC 版本包".into(),
+            data_version: 3465,
+            mc_version: "1.20.1".into(),
+            blocks: 1,
+            models: 2,
+            textures: 3,
+            // 易错项：不是 failedBlockStates，而是一个词
+            failed_blockstates: 4,
+            failed_blocks: 5,
+            namespaces: 6,
+            size: 7,
+        };
+        let v = serde_json::to_value(&dto).expect("序列化失败");
+        assert_keys(&v, &[
+                "blocks", "dataVersion", "failedBlockstates", "failedBlocks", "file",
+                "kind", "kindLabel", "mcVersion", "models", "name", "namespaces",
+                "size", "textures",
+            ]);
+    }
+
+    #[test]
+    fn pack_list_keys_match_frontend() {
+        let dto = PackListDto {
+            packs: Vec::new(),
+            skipped: vec!["第 3 行有误".into()],
+        };
+        let v = serde_json::to_value(&dto).expect("序列化失败");
+        assert_keys(&v, &["packs", "skipped"]);
+    }
+
+    /// 纳秒时间戳必须以字符串传递：数值会超出 JavaScript 的安全整数范围
+    #[test]
+    fn backup_entry_created_ns_is_a_string() {
+        let dto = BackupEntryDto {
+            path: "/b/x".into(),
+            stem: "x".into(),
+            op: "编辑".into(),
+            created_ns: "1791826869720983600".into(),
+            size: 12,
+        };
+        let v = serde_json::to_value(&dto).expect("序列化失败");
+        assert!(
+            v.get("createdNs").expect("应有 createdNs").is_string(),
+            "createdNs 必须是字符串，用数值会丢精度"
+        );
+    }
+
+    #[test]
+    fn convertible_keys_are_camel_case() {
+        // 抽查几个既有 DTO，防止后续改动破坏既有契约
+        let v = serde_json::to_value(SaveOutcome {
+            path: "/x".into(),
+            backup_path: "/b/x".into(),
+        })
+        .unwrap();
+        assert_keys(&v, &["backupPath", "path"]);
+
+        let v = serde_json::to_value(VersionOptionDto {
+            index: 0,
+            name: "1.20.1".into(),
+            data_version: 3465,
+            is_overlay: false,
+            block_count: 1005,
+        })
+        .unwrap();
+        assert_keys(&v, &["blockCount", "dataVersion", "index", "isOverlay", "name"]);
+    }
+}

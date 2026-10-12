@@ -2,12 +2,6 @@
 import { computed, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import {
-  deletePack,
-  importJar,
-  listPacks,
-  setPackEnabled,
-} from "./api";
 import type { ImportOutcome, PackEntry } from "./types";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import type { TableColumnData, TableData } from "@arco-design/web-vue";
@@ -15,7 +9,11 @@ import { Message } from "@arco-design/web-vue";
 import {
   analyzeSchematic,
   applyReplace,
+  deletePack,
+  importJar,
   listBlockVersions,
+  listPacks,
+  setPackEnabled,
   previewReplace,
   buildScene,
   deleteBackup,
@@ -536,6 +534,8 @@ async function onDelete(row: BackupEntry) {
 
 const packOpen = ref(false);
 const packBusy = ref(false);
+/** 打开弹窗过程中的加载态，供工具栏按钮显示 */
+const packOnOpen = ref(false);
 const packs = ref<PackEntry[]>([]);
 /** 清单里解析失败被跳过的行；必须显示，否则"导入的包不见了"无从解释 */
 const packSkipped = ref<string[]>([]);
@@ -545,7 +545,12 @@ const importKind = ref<number>(1);
 const importDataVersion = ref<number>(0);
 const importBusy = ref(false);
 
-/** 可选的叠加目标版本（取自方块库，由新到旧） */
+/**
+ * 可选的叠加目标版本。
+ *
+ * `list_block_versions` 按 dataVersion **升序**返回，因此末项是最新的。
+ * 这里不依赖该顺序去取最大值，避免后端排序一变就选错版本。
+ */
 const overlayVersions = ref<VersionOption[]>([]);
 
 const packColumns = [
@@ -575,11 +580,6 @@ function markPending(file: string, on: boolean) {
   if (on) next.add(file);
   else next.delete(file);
   packPending.value = next;
-}
-
-async function openPacks() {
-  packOpen.value = true;
-  await refreshPacks();
 }
 
 async function refreshPacks() {
@@ -639,7 +639,7 @@ async function runImportJar() {
     Message.success({
       content:
         `已导入 ${out.name}：${out.blocks} 方块 / ${out.models} 模型 / ${out.textures} 贴图` +
-        `（${out.kindLabel}，${out.mcVersion}，${formatSize(out.size)}）`,
+        `（${out.kindLabel}，${out.mcVersion || "版本未知"}，${formatSize(out.size)}）`,
       duration: 6000,
     });
     // 跳过的内容必须告知：否则用户以为导入完整
@@ -649,6 +649,14 @@ async function runImportJar() {
     }
     if (out.failedBlocks > 0) {
       notes.push(`${out.failedBlocks} 个方块因模型无法解析被跳过`);
+    }
+    // 版本包却读不出游戏版本：多半是把模组或非客户端 jar 当成了版本包。
+    // 这样的包在版本选择里不会命中任何投影，必须明确提醒。
+    if (kind === 1 && out.dataVersion <= 0) {
+      notes.push(
+        "该 jar 内没有可识别的游戏版本（缺 version.json），" +
+          "多半不是客户端 jar；这个包不会参与版本匹配",
+      );
     }
     if (notes.length > 0) {
       Message.warning({ content: notes.join("；"), duration: 8000 });
@@ -663,7 +671,10 @@ async function runImportJar() {
 
 async function togglePack(rec: PackEntry, enabled: boolean) {
   // 同一项有操作在执行时不再受理，避免两个请求交错后开关与实际不符
-  if (packPending.value.has(rec.file)) return;
+  if (packPending.value.has(rec.file)) {
+    Message.warning(`${rec.name} 正在处理中，请稍候`);
+    return;
+  }
   markPending(rec.file, true);
   try {
     await setPackEnabled(rec.file, enabled);
@@ -678,7 +689,10 @@ async function togglePack(rec: PackEntry, enabled: boolean) {
 }
 
 async function removePack(rec: PackEntry) {
-  if (packPending.value.has(rec.file)) return;
+  if (packPending.value.has(rec.file)) {
+    Message.warning(`${rec.name} 正在处理中，请稍候`);
+    return;
+  }
   markPending(rec.file, true);
   try {
     await deletePack(rec.file);
@@ -695,11 +709,18 @@ async function removePack(rec: PackEntry) {
 async function prepareOverlayVersions() {
   if (overlayVersions.value.length > 0) return;
   try {
-    overlayVersions.value = await listBlockVersions();
-    // 默认选最新版本：模组通常针对较新的版本
+    // 只保留非叠加版本作为叠加目标：叠加包本身不能再作为另一个叠加包的
+    // 目标（语义上不通），而且它与所依附的基础版本共享 dataVersion，
+    // 会让下拉项互相冲突
+    const all = await listBlockVersions();
+    overlayVersions.value = all.filter((v) => !v.isOverlay);
+    // 默认选最新版本：模组通常针对较新的版本。
+    // 取最大 dataVersion 而不是末元素，去掉对返回顺序的依赖。
     if (importDataVersion.value <= 0 && overlayVersions.value.length > 0) {
-      importDataVersion.value =
-        overlayVersions.value[overlayVersions.value.length - 1].dataVersion;
+      importDataVersion.value = overlayVersions.value.reduce(
+        (best, v) => (v.dataVersion > best ? v.dataVersion : best),
+        overlayVersions.value[0].dataVersion,
+      );
     }
   } catch (e) {
     // 取不到版本列表时模组包无法指定叠加目标，导入会被拒绝；
@@ -708,9 +729,23 @@ async function prepareOverlayVersions() {
   }
 }
 
+/**
+ * 打开资源包管理。
+ *
+ * 弹窗与清单先出来，可选的叠加版本在后台补：首次打开会触发内置方块库
+ * 的载入（解压后约 5.6 MB），若等它完成再开弹窗，用户点了按钮会长时间
+ * 没有任何反应。叠加版本只用于模组包的下拉，晚一点到不影响其余操作。
+ */
 async function openPacksPanel() {
-  await prepareOverlayVersions();
-  await openPacks();
+  if (packOpen.value) return;
+  // 先置位再取数据，避免连点开出重复请求
+  packOpen.value = true;
+  packOnOpen.value = true;
+  try {
+    await Promise.all([refreshPacks(), prepareOverlayVersions()]);
+  } finally {
+    packOnOpen.value = false;
+  }
 }
 
 async function openBackups() {
@@ -795,7 +830,9 @@ const close = () => appWindow.close();
       <a-button size="small" :disabled="!selected" @click="openConvert">版本转换</a-button>
       <a-button size="small" @click="openDuplicates">重复文件筛查</a-button>
       <a-button size="small" @click="openBackups">备份管理</a-button>
-      <a-button size="small" @click="openPacksPanel">资源包管理</a-button>
+      <a-button size="small" :loading="packOnOpen" @click="openPacksPanel">
+        资源包管理
+      </a-button>
       <span class="preview__spacer" />
       <span class="hint-dim">
         共 {{ files.length }} 个投影<span v-if="searchText">，匹配 {{ filteredFiles.length }} 个</span>
@@ -1086,7 +1123,7 @@ const close = () => appWindow.close();
         >
           <a-option
             v-for="v in overlayVersions"
-            :key="v.dataVersion"
+            :key="v.index"
             :value="v.dataVersion"
           >
             {{ v.name }}
@@ -1104,9 +1141,27 @@ const close = () => appWindow.close();
         。要选客户端而不是服务端——服务端没有贴图资源。
       </div>
 
+      <a-alert
+        v-if="packSkipped.length > 0"
+        type="warning"
+        style="margin-bottom: 10px"
+      >
+        <template #title>
+          清单有 {{ packSkipped.length }} 行无法解析，这些记录不会被加载
+        </template>
+        <div v-for="s in packSkipped" :key="s" class="dup-path">{{ s }}</div>
+        <div style="margin-top: 6px">
+          修好这些行之前，导入、启用与删除都会被拒绝——否则重写清单会把它们
+          连同内容一起抹掉。清单位置：&lt;程序目录&gt;\packs\packs.tsv
+        </div>
+      </a-alert>
+
       <a-spin :loading="packBusy" style="width: 100%">
-        <a-alert v-if="packs.length === 0" type="normal">
+        <a-alert v-if="packs.length === 0 && packSkipped.length === 0" type="normal">
           尚未导入任何资源包
+        </a-alert>
+        <a-alert v-else-if="packs.length === 0" type="warning">
+          清单里的记录全部无法解析，请按上方说明修复后再刷新
         </a-alert>
         <a-table
           v-else

@@ -524,6 +524,11 @@ impl BlockDb {
     /// 模型跨版本共享，而路径到池下标的映射按版本不同，解析必须发生在
     /// 知道版本之后。找不到对应贴图时返回 NO_TEXTURE，下游据此跳过该面，
     /// 而不是拿一个错误的索引去取完全无关的贴图。
+    ///
+    /// 查找顺序与 legacy-cpp 的 FindTexture 一致：
+    /// 本版本 -> 挂在该版本上的叠加包 -> 全局。
+    /// 少了叠加包这一层，模组导入的贴图永远用不上——模组的方块定义
+    /// 引用的贴图只存在于模组包里。
     pub fn texture_pool_index(&self, version_idx: usize, tex_str_idx: u32) -> u32 {
         if tex_str_idx == NO_TEXTURE {
             return NO_TEXTURE;
@@ -531,17 +536,58 @@ impl BlockDb {
         let Some(path) = self.strings.get(tex_str_idx as usize) else {
             return NO_TEXTURE;
         };
-        self.versions
+        if let Some(i) = self
+            .versions
             .get(version_idx)
-            .and_then(|v| v.texture_by_path.get(path).copied())
-            .unwrap_or(NO_TEXTURE)
+            .and_then(|v| v.texture_by_path.get(path))
+        {
+            return *i;
+        }
+        // 叠加包：按挂载顺序查找，先挂上的优先
+        for ov in self.overlays_of(version_idx) {
+            if let Some(i) = self.versions[ov].texture_by_path.get(path) {
+                return *i;
+            }
+        }
+        // 全局回退：某个贴图只被其他版本登记过时仍可命中
+        for v in &self.versions {
+            if let Some(i) = v.texture_by_path.get(path) {
+                return *i;
+            }
+        }
+        NO_TEXTURE
     }
 
-    /// 取某个贴图的像素切片
-    pub fn texture_pixels(&self, idx: usize) -> Option<&[u8]> {
-        let t = self.textures.get(idx)?;
-        let start = t.offset as usize;
-        self.pixels.get(start..start + t.len as usize)
+    /// 挂载在某个基础版本上的叠加包下标，按挂载顺序（先挂的在前）。
+    ///
+    /// 叠加包挂到 dataVersion 最接近的基础版本上。这个关系在载入后确定，
+    /// 因为它取决于「库中实际存在哪些基础版本」，而单个包文件里没有
+    /// 这个信息。每次调用重新计算：库是只读的，且版本数不大。
+    pub fn overlays_of(&self, version_idx: usize) -> Vec<usize> {
+        let Some(base) = self.versions.get(version_idx) else {
+            return Vec::new();
+        };
+        if base.is_overlay {
+            // 叠加包自身不承载其他叠加包
+            return Vec::new();
+        }
+        self.versions
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.is_overlay)
+            .filter(|(_, v)| self.nearest_base(v.data_version) == Some(version_idx))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// dataVersion 最接近的基础版本下标（不含叠加包）
+    fn nearest_base(&self, data_version: i32) -> Option<usize> {
+        self.versions
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| !v.is_overlay)
+            .min_by_key(|(_, v)| (v.data_version as i64 - data_version as i64).abs())
+            .map(|(i, _)| i)
     }
 
     /// 按 dataVersion 选最接近的版本（下标）。
@@ -549,13 +595,95 @@ impl BlockDb {
     /// 差值按 i64 计算：两个 i32 相减可能溢出，极端取值下
     /// （dataVersion 经截断后接近 i32 边界）会让距离算成负数或 panic。
     /// legacy-cpp 同样显式提升为 64 位（blockdb.cpp:366）。
+    ///
+    /// 叠加包不参与选择（与 legacy-cpp 的 PickVersion 一致）：它们不是
+    /// 某个游戏版本的定义，而是叠加在某个基础版本之上的一层。
     pub fn pick_version(&self, data_version: i32) -> Option<usize> {
-        self.versions
-            .iter()
-            .enumerate()
-            .filter(|(_, v)| !v.is_overlay)
-            .min_by_key(|(_, v)| (v.data_version as i64 - data_version as i64).abs())
-            .map(|(i, _)| i)
+        self.nearest_base(data_version)
+    }
+
+    /// 把另一个方块库并入自身。
+    ///
+    /// 用途：用户导入的资源包是独立的 pack 文件，要合并进基础库后
+    /// 才能参与检索与渲染。
+    ///
+    /// 合并必须平移所有池下标：字符串、语言表、贴图、模型、像素缓冲
+    /// 各自被追加，而**已有的下标是相对各自池的**。不平移会让叠加包的
+    /// 方块指向基础库里毫不相干的模型与贴图——不崩溃，只是画面全错。
+    ///
+    /// 各层的平移量：
+    ///   - 模型面里的 `texture`（字符串表下标） += 字符串池原长度
+    ///   - 版本里 `texture_by_path` 的值（贴图池下标） += 贴图池原长度
+    ///   - 版本的 `lang_idx`（语言表下标） += 语言表原长度
+    ///   - 变体的 `model_idx`（模型池下标） += 模型池原长度
+    ///   - 贴图记录的 `offset`（像素缓冲偏移） += 像素缓冲原长度
+    pub fn merge_from(&mut self, other: &BlockDb, is_overlay: bool) -> AppResult<()> {
+        if other.versions.is_empty() {
+            return Err(AppError::Parse("资源包里没有版本数据".into()));
+        }
+        let str_base = self.strings.len() as u32;
+        let lang_base = self.langs.len() as u32;
+        let tex_base = self.textures.len() as u32;
+        let model_base = self.models.len() as u32;
+        let pix_base = self.pixels.len() as u32;
+
+        // 字符串池：语言表与模型面都引用它
+        self.strings.extend(other.strings.iter().cloned());
+
+        // 语言表：LangEntry 里存的是字符串本身，直接追加
+        self.langs.extend(other.langs.iter().cloned());
+
+        // 贴图池：像素偏移要加上现有缓冲长度
+        for t in &other.textures {
+            let mut t = t.clone();
+            t.offset = t.offset.saturating_add(pix_base);
+            self.textures.push(t);
+        }
+        self.pixels.extend_from_slice(&other.pixels);
+
+        // 模型池：面里的贴图是字符串表下标，必须平移
+        for m in &other.models {
+            let mut m = m.clone();
+            for e in &mut m.elements {
+                for f in &mut e.faces {
+                    if f.texture != NO_TEXTURE {
+                        f.texture = f.texture.saturating_add(str_base);
+                    }
+                }
+            }
+            self.models.push(m);
+        }
+
+        // 版本
+        for v in &other.versions {
+            let mut v = v.clone();
+            v.lang_idx = v.lang_idx.saturating_add(lang_base);
+            v.is_overlay = is_overlay;
+            // 语言表要重新取出：读取端就是按 lang_idx 从语言表池里取的，
+            // 只平移下标而不重挂，display_name 会拿不到中文名
+            v.langs = other
+                .langs
+                .get(v.lang_idx as usize - lang_base as usize)
+                .cloned()
+                .unwrap_or_default();
+            for idx in v.texture_by_path.values_mut() {
+                *idx = idx.saturating_add(tex_base);
+            }
+            for b in &mut v.blocks {
+                for var in b.variants.iter_mut().chain(b.multipart.iter_mut()) {
+                    var.model_idx = var.model_idx.saturating_add(model_base);
+                }
+            }
+            self.versions.push(v);
+        }
+        Ok(())
+    }
+
+    /// 取某个贴图的像素切片
+    pub fn texture_pixels(&self, idx: usize) -> Option<&[u8]> {
+        let t = self.textures.get(idx)?;
+        let start = t.offset as usize;
+        self.pixels.get(start..start + t.len as usize)
     }
 }
 
@@ -880,6 +1008,235 @@ mod tests {
         // 首字节低 4 位恰为 8、但头校验不通过的数据不应被当成 zlib
         let raw = b"\x78\x00not-a-zlib-stream";
         assert_eq!(BlockDb::decompress(raw).unwrap(), raw, "头校验不通过应按未压缩处理");
+    }
+
+
+    // ---- 叠加包合并 ----
+
+    /// 造一个最小可用的库：一个基础版本 + 一张贴图 + 一个模型 + 一个方块
+    fn tiny_db(name: &str, dv: i32, block: &str, tex_path: &str, alpha: u8) -> BlockDb {
+        let strings = vec!["1.20.1".to_string(), tex_path.to_string()];
+        let model = Model {
+            translucent: false,
+            elements: vec![ModelElement {
+                from: [0.0, 0.0, 0.0],
+                to: [16.0, 16.0, 16.0],
+                has_rotation: false,
+                rot_kind: 0,
+                origin: [0.0; 3],
+                axis: 0,
+                angle: 0.0,
+                rescale: false,
+                rot_vec: [0.0; 3],
+                face_mask: 0b1,
+                // 贴图字段是**字符串表下标**：这里指向 tex_path
+                faces: vec![ModelFace {
+                    texture: 1,
+                    uv: [0.0, 0.0, 16.0, 16.0],
+                    cullface: 0xFF,
+                    tintindex: -1,
+                    rotation: 0,
+                }],
+            }],
+        };
+        let version = VersionDef {
+            name: name.into(),
+            data_version: dv,
+            lang_idx: 0,
+            texture_by_path: HashMap::from([(tex_path.to_string(), 0u32)]),
+            blocks: vec![BlockDef {
+                name: block.into(),
+                variants: vec![Variant {
+                    when: String::new(),
+                    model_idx: 0,
+                    rot_x_div90: 0,
+                    rot_y_div90: 0,
+                    uvlock: false,
+                }],
+                multipart: Vec::new(),
+            }],
+            langs: Vec::new(),
+            is_overlay: false,
+        };
+        BlockDb {
+            format_version: 3,
+            strings,
+            langs: vec![vec![LangEntry {
+                block_name: block.into(),
+                en: "EN".into(),
+                zh: "中".into(),
+            }]],
+            textures: vec![TextureInfo { w: 1, h: 1, offset: 0, len: 4, has_alpha: alpha != 255 }],
+            models: vec![model],
+            versions: vec![version],
+            pixels: vec![10, 20, 30, alpha],
+        }
+    }
+
+    #[test]
+    fn merge_offsets_model_texture_string_index() {
+        let mut base = tiny_db("1.20.1", 3465, "minecraft:stone", "block/stone", 255);
+        let pack = tiny_db("mymod", 3465, "mymod:thing", "block/thing", 128);
+        base.merge_from(&pack, true).unwrap();
+
+        // 叠加包的模型面原本指向自己的字符串表下标 1，
+        // 合并后必须指向基础库字符串表里的 "block/thing"
+        let m = base.models.last().unwrap();
+        let idx = m.elements[0].faces[0].texture as usize;
+        assert_eq!(
+            base.strings[idx], "block/thing",
+            "模型面的贴图字符串下标必须平移，否则指向基础库里无关的字符串"
+        );
+    }
+
+    #[test]
+    fn merge_offsets_texture_pool_index_and_pixels() {
+        let mut base = tiny_db("1.20.1", 3465, "minecraft:stone", "block/stone", 255);
+        let pack = tiny_db("mymod", 3465, "mymod:thing", "block/thing", 128);
+        base.merge_from(&pack, true).unwrap();
+
+        assert_eq!(base.textures.len(), 2);
+        // 叠加包的纹理偏移原本为 0，合并后必须落在自己的像素段上
+        let t = &base.textures[1];
+        assert_eq!(t.offset, 4, "贴图像素偏移必须加上原缓冲长度");
+        assert_eq!(
+            base.texture_pixels(1).unwrap(),
+            &[10, 20, 30, 128],
+            "必须取到叠加包自己的像素，而不是基础库的前 4 字节"
+        );
+        assert!(t.has_alpha, "alpha 应保留");
+    }
+
+    #[test]
+    fn merge_offsets_variant_model_index() {
+        let mut base = tiny_db("1.20.1", 3465, "minecraft:stone", "block/stone", 255);
+        let pack = tiny_db("mymod", 3465, "mymod:thing", "block/thing", 128);
+        base.merge_from(&pack, true).unwrap();
+
+        assert_eq!(base.models.len(), 2);
+        let ov = base.versions.last().unwrap();
+        assert_eq!(
+            ov.blocks[0].variants[0].model_idx, 1,
+            "变体的模型下标必须平移，否则模组方块会用基础库的模型"
+        );
+    }
+
+    #[test]
+    fn merge_marks_version_as_overlay_and_keeps_lang_index() {
+        let mut base = tiny_db("1.20.1", 3465, "minecraft:stone", "block/stone", 255);
+        let pack = tiny_db("mymod", 3465, "mymod:thing", "block/thing", 128);
+        base.merge_from(&pack, true).unwrap();
+
+        assert!(base.versions[0].is_overlay == false, "基础版本不受影响");
+        assert!(base.versions[1].is_overlay, "并入的版本应标记为叠加包");
+        assert_eq!(base.langs.len(), 2);
+        // 叠加包的语言表下标原本为 0，合并后应指向 1
+        assert_eq!(base.versions[1].lang_idx, 1);
+        // 版本上的语言表也要挂对
+        assert_eq!(base.versions[1].langs[0].zh, "中");
+    }
+
+    #[test]
+    fn merged_pack_block_is_findable() {
+        let mut base = tiny_db("1.20.1", 3465, "minecraft:stone", "block/stone", 255);
+        let pack = tiny_db("mymod", 3465, "mymod:thing", "block/thing", 128);
+        base.merge_from(&pack, true).unwrap();
+
+        let ov = base.versions.last().unwrap();
+        assert!(
+            crate::block_model::find_block(&base, ov, "mymod:thing").is_some(),
+            "合并后模组方块应能查到"
+        );
+    }
+
+    #[test]
+    fn overlay_attaches_to_nearest_base_version() {
+        // 叠加包的 dataVersion 与基础版本不完全相同：应挂到最接近的那个
+        let mut base = tiny_db("1.20.1", 3465, "minecraft:stone", "block/stone", 255);
+        let mut second = tiny_db("1.21", 3953, "minecraft:deepslate", "block/deepslate", 255);
+        second.versions[0].blocks[0].name = "minecraft:deepslate".into();
+        base.merge_from(&second, false).unwrap();
+
+        let pack = tiny_db("mymod", 3400, "mymod:thing", "block/thing", 255);
+        base.merge_from(&pack, true).unwrap();
+
+        // 3400 离 3465 更近（差 65），离 3953 差 553
+        let ov_idx = base.versions.len() - 1;
+        let attached = base.overlays_of(0);
+        assert!(attached.contains(&ov_idx), "应挂到 1.20.1：{attached:?}");
+        assert!(!base.overlays_of(1).contains(&ov_idx), "不应挂到 1.21");
+    }
+
+    #[test]
+    fn texture_lookup_falls_back_to_overlay() {
+        let mut base = tiny_db("1.20.1", 3465, "minecraft:stone", "block/stone", 255);
+        let pack = tiny_db("mymod", 3465, "mymod:thing", "block/thing", 128);
+        base.merge_from(&pack, true).unwrap();
+
+        // "block/thing" 只登记在叠加包里，基础版本查不到；
+        // 查找必须能落到叠加包上，否则模组贴图永远用不上
+        let sidx = base
+            .strings
+            .iter()
+            .position(|s| s == "block/thing")
+            .expect("字符串表里应有该路径") as u32;
+        let idx = base.texture_pool_index(0, sidx);
+        assert_ne!(idx, NO_TEXTURE, "应通过叠加包找到贴图");
+        assert_eq!(base.texture_pixels(idx as usize).unwrap(), &[10, 20, 30, 128]);
+    }
+
+    #[test]
+    fn texture_lookup_prefers_own_version_over_overlay() {
+        // 同名路径在本版本与叠加包里都有：必须用本版本的
+        let mut base = tiny_db("1.20.1", 3465, "minecraft:stone", "block/shared", 255);
+        base.pixels = vec![1, 1, 1, 255];
+        let pack = tiny_db("mymod", 3465, "mymod:thing", "block/shared", 128);
+        base.merge_from(&pack, true).unwrap();
+
+        let sidx = base
+            .strings
+            .iter()
+            .position(|s| s == "block/shared")
+            .unwrap() as u32;
+        let idx = base.texture_pool_index(0, sidx);
+        assert_eq!(idx, 0, "应命中本版本登记的贴图");
+        assert_eq!(base.texture_pixels(idx as usize).unwrap(), &[1, 1, 1, 255]);
+    }
+
+    #[test]
+    fn overlay_does_not_participate_in_version_picking() {
+        let mut base = tiny_db("1.20.1", 3465, "minecraft:stone", "block/stone", 255);
+        let pack = tiny_db("mymod", 9999, "mymod:thing", "block/thing", 255);
+        base.merge_from(&pack, true).unwrap();
+
+        let picked = base.pick_version(9999).expect("应选出一个基础版本");
+        assert!(
+            !base.versions[picked].is_overlay,
+            "叠加包不应参与版本选择（与 legacy-cpp 一致）"
+        );
+        assert_eq!(picked, 0);
+    }
+
+    #[test]
+    fn merge_rejects_pack_without_versions() {
+        let mut base = tiny_db("1.20.1", 3465, "minecraft:stone", "block/stone", 255);
+        let mut empty = tiny_db("x", 1, "x", "x", 255);
+        empty.versions.clear();
+        let e = base.merge_from(&empty, true).unwrap_err().to_string();
+        assert!(e.contains("没有版本数据"), "应说明原因：{e}");
+        assert_eq!(base.versions.len(), 1, "失败时不应留下部分合并的结果");
+    }
+
+    #[test]
+    fn merging_non_overlay_adds_a_base_version() {
+        // 版本包（kind=1）并入的是基础版本，应参与版本选择
+        let mut base = tiny_db("1.20.1", 3465, "minecraft:stone", "block/stone", 255);
+        let pack = tiny_db("1.21", 3953, "minecraft:deepslate", "block/deepslate", 255);
+        base.merge_from(&pack, false).unwrap();
+
+        assert!(!base.versions[1].is_overlay, "版本包不应标记为叠加包");
+        assert_eq!(base.pick_version(3953), Some(1), "新基础版本应可被选中");
+        assert!(base.overlays_of(1).is_empty());
     }
 
 }

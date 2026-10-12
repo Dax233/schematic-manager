@@ -789,17 +789,7 @@ pub fn import_jar(
             .ok_or_else(|| format!("无法从路径推出资源包名：{jar_path}"))?,
     };
 
-    let (mut entries, skipped) = read_manifest().map_err(|e| e.to_string())?;
-    if !skipped.is_empty() {
-        // 清单里有坏行说明状态不可靠：此时追加新项会连同坏行一起被覆盖，
-        // 用户损失的记录无从追回。因此明确拒绝并给出修复指引。
-        return Err(format!(
-            "资源包清单有 {} 行无法解析，请先修复 {} 后再导入：{}",
-            skipped.len(),
-            manifest_path().display(),
-            skipped.join("；")
-        ));
-    }
+    let mut entries = read_manifest_for_write().map_err(|e| e.to_string())?;
 
     let file = crate::pack_registry::pack_file_name(&pack_name, &entries)
         .map_err(|e| e.to_string())?;
@@ -857,10 +847,29 @@ fn read_pack_data_version(path: &Path, is_overlay: bool) -> Option<i32> {
         .and_then(|db| db.versions.first().map(|v| v.data_version))
 }
 
+/// 读取清单，并要求其中没有解析失败的行。
+///
+/// 用于**所有会整份重写清单的操作**。清单里存在坏行时，重写会把它们
+/// 连同其内容一起抹掉，而用户损失的记录无从追回；因此宁可拒绝操作并
+/// 指出清单位置，让用户先修好。三个写清单的命令必须用同一个判断，
+/// 只在其中一个上加保护会让另外两个成为数据丢失的入口。
+fn read_manifest_for_write() -> AppResult<Vec<crate::pack_registry::PackEntry>> {
+    let (entries, skipped) = read_manifest()?;
+    if !skipped.is_empty() {
+        return Err(AppError::Parse(format!(
+            "资源包清单有 {} 行无法解析，请先修复 {} 后再操作：{}",
+            skipped.len(),
+            manifest_path().display(),
+            skipped.join("；")
+        )));
+    }
+    Ok(entries)
+}
+
 /// 启用或停用某个资源包
 #[tauri::command]
 pub fn set_pack_enabled(file: String, enabled: bool) -> Result<(), String> {
-    let (mut entries, _) = read_manifest().map_err(|e| e.to_string())?;
+    let mut entries = read_manifest_for_write().map_err(|e| e.to_string())?;
     if !crate::pack_registry::set_enabled(&mut entries, &file, enabled) {
         return Err(format!("清单里没有资源包 {file}"));
     }
@@ -879,7 +888,7 @@ pub fn delete_pack(file: String) -> Result<(), String> {
     if file.contains('/') || file.contains('\\') || file.contains("..") {
         return Err(format!("资源包文件名不合法：{file}"));
     }
-    let (mut entries, _) = read_manifest().map_err(|e| e.to_string())?;
+    let mut entries = read_manifest_for_write().map_err(|e| e.to_string())?;
     let target = packs_dir().join(&file);
     if target.exists() {
         std::fs::remove_file(&target).map_err(|e| {
