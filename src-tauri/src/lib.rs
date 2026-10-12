@@ -9,6 +9,7 @@ mod geometry;
 mod litematic;
 mod mcver;
 mod nbt;
+mod visibility;
 
 /// 应用入口。以库形式导出，便于将来接入移动端入口。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
