@@ -79,6 +79,38 @@ jobs:
             exit 1
           fi
 
+  # ---------------------------------------------------------------- 单元测试
+  # 只在一个平台跑：测试验证的是与平台无关的解析/位打包逻辑，
+  # 六个平台重复执行没有额外价值，反而拖慢反馈。
+  test:
+    name: 单元测试
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust 构建缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: test
+
+      - name: 安装 Linux 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            libgtk-3-dev
+
+      - name: 运行单元测试
+        # 位打包、NBT 往返、区域索引等逻辑的回归防线
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib -- --nocapture
+
   # ---------------------------------------------------------------- 多平台构建
   build:
     name: 构建 ${{ matrix.platform }}-${{ matrix.arch }}
@@ -218,7 +250,7 @@ jobs:
   # ---------------------------------------------------------------- 发布
   release:
     name: 创建 Release
-    needs: [ prepare, build ]
+    needs: [ prepare, test, build ]
     if: needs.prepare.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
