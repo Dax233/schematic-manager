@@ -84,6 +84,25 @@ export interface VersionOption {
   blockCount: number;
 }
 
+/** 一组内容相同的投影文件 */
+export interface DuplicateGroup {
+  size: number;
+  paths: string[];
+}
+
+/** 未能读取的文件 */
+export interface UnreadableFile {
+  path: string;
+  reason: string;
+}
+
+/** 重复文件筛查结果 */
+export interface DuplicateScan {
+  groups: DuplicateGroup[];
+  /** 读取失败、未能参与判定的文件 */
+  unreadable: UnreadableFile[];
+}
+
 /** 一条备份记录 */
 export interface BackupEntry {
   path: string;

@@ -219,3 +219,11 @@ body,
     word-break: break-all;
   }
 }
+
+// 重复文件列表中的路径，允许换行以便看清完整位置
+.dup-path {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  color: var(--color-text-2);
+  word-break: break-all;
+}

@@ -39,6 +39,7 @@ pub fn run() {
             commands::list_block_versions,
             commands::preview_replace,
             commands::apply_replace,
+            commands::scan_duplicates,
             commands::save_metadata,
         ])
         .run(tauri::generate_context!())

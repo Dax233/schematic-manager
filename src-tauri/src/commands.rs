@@ -6,9 +6,10 @@
 use crate::backup;
 use crate::error::{AppError, AppResult};
 use crate::dto::{
-    AnalysisResult, BackupEntryDto, BlockCount, BlockHitDto, BlockVersionDto, EntityCount,
+    AnalysisResult, BackupEntryDto, BlockCount, BlockHitDto, BlockVersionDto,
+    DuplicateGroupDto, DuplicateScanDto, EntityCount,
     ReplaceOutcomeDto, ReplaceRuleDto, SceneDto, SaveOutcome, ScanResult, SchematicSummary,
-    VersionOptionDto,
+    UnreadableFileDto, VersionOptionDto,
 };
 use crate::litematic::{self, Summary};
 use std::path::{Path, PathBuf};
@@ -351,6 +352,51 @@ pub fn apply_replace(
         &format!("替换 {name}：{} -> {}，共 {} 个", rule.from_name, rule.to_name, out.replaced),
     );
     Ok(out.into())
+}
+
+/// 在一个目录下筛查内容重复的投影文件。
+///
+/// 只探测该目录本身，不递归子目录：重复筛查的目的通常是整理一个
+/// 导出目录，递归会把不同用途目录下的同名文件也卷进来。
+#[tauri::command]
+pub fn scan_duplicates(dir: String) -> Result<DuplicateScanDto, String> {
+    let mut candidates = Vec::new();
+    let entries = std::fs::read_dir(&dir).map_err(|e| format!("无法读取目录 {dir}：{e}"))?;
+    for e in entries.flatten() {
+        let path = e.path();
+        if !path.is_file() {
+            continue;
+        }
+        let is_litematic = path
+            .extension()
+            .map(|x| x.eq_ignore_ascii_case("litematic"))
+            .unwrap_or(false);
+        if !is_litematic {
+            continue;
+        }
+        let size = e.metadata().map(|m| m.len()).unwrap_or(0);
+        candidates.push(crate::duplicate::Candidate { path, size });
+    }
+
+    let r = crate::duplicate::find(&candidates);
+    Ok(DuplicateScanDto {
+        groups: r
+            .groups
+            .into_iter()
+            .map(|g| DuplicateGroupDto {
+                size: g.size,
+                paths: g.paths.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
+            })
+            .collect(),
+        unreadable: r
+            .unreadable
+            .into_iter()
+            .map(|(p, reason)| UnreadableFileDto {
+                path: p.to_string_lossy().into_owned(),
+                reason,
+            })
+            .collect(),
+    })
 }
 
 /// 列出备份。stem 非空时只返回该文件的备份。

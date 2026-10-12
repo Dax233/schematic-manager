@@ -11,6 +11,18 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+/// 筛查结果
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DuplicateScan {
+    /// 内容相同的文件组
+    pub groups: Vec<DuplicateGroup>,
+    /// 读取失败、因而未能参与判定的文件及原因。
+    ///
+    /// 必须上报而不是丢弃：这些文件既不能判为「有重复」，
+    /// 也不能被当成「与谁都不重复」——对用户来说两者含义完全不同。
+    pub unreadable: Vec<(PathBuf, String)>,
+}
+
 /// 一组内容完全相同的文件
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DuplicateGroup {
@@ -29,7 +41,7 @@ pub struct Candidate {
 /// FNV-1a 64 位哈希。
 ///
 /// 只用于把候选集合收窄，不承担正确性——最终由逐字节比对定论。
-fn hash_reader<R: Read>(mut r: R) -> std::io::Result<Option<u64>> {
+fn hash_reader<R: Read>(mut r: R) -> std::io::Result<u64> {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x1000_0000_01b3;
     let mut h = OFFSET;
@@ -44,10 +56,10 @@ fn hash_reader<R: Read>(mut r: R) -> std::io::Result<Option<u64>> {
             h = h.wrapping_mul(PRIME);
         }
     }
-    Ok(Some(h))
+    Ok(h)
 }
 
-fn content_hash(path: &Path) -> std::io::Result<Option<u64>> {
+fn content_hash(path: &Path) -> std::io::Result<u64> {
     let f = std::fs::File::open(path)?;
     hash_reader(std::io::BufReader::new(f))
 }
@@ -79,10 +91,10 @@ fn same_content(a: &Path, b: &Path) -> std::io::Result<bool> {
 
 /// 找出内容相同的文件组。
 ///
-/// 只返回至少两个成员的组；读取失败的文件会被跳过——某个文件读不了
-/// 不应让整次筛查失败，但也绝不能把读不了的文件当成「与谁都不重复」，
-/// 因此这里直接不纳入结果。
-pub fn find(candidates: &[Candidate]) -> Vec<DuplicateGroup> {
+/// 只返回至少两个成员的组。某个文件读不了不应让整次筛查失败，
+/// 但也不能把它当成「与谁都不重复」——对用户来说两者含义完全不同，
+/// 因此读不了的文件单独列入 unreadable 上报。
+pub fn find(candidates: &[Candidate]) -> DuplicateScan {
     use std::collections::HashMap;
 
     // 第一轮：按大小分组，大小不同的必然不重复
@@ -92,6 +104,7 @@ pub fn find(candidates: &[Candidate]) -> Vec<DuplicateGroup> {
     }
 
     let mut out: Vec<DuplicateGroup> = Vec::new();
+    let mut unreadable: Vec<(PathBuf, String)> = Vec::new();
 
     for (size, group) in by_size {
         if group.len() < 2 {
@@ -101,9 +114,8 @@ pub fn find(candidates: &[Candidate]) -> Vec<DuplicateGroup> {
         let mut by_hash: HashMap<u64, Vec<&Candidate>> = HashMap::new();
         for c in group {
             match content_hash(&c.path) {
-                Ok(Some(h)) => by_hash.entry(h).or_default().push(c),
-                Ok(None) => continue,
-                Err(_) => continue,
+                Ok(h) => by_hash.entry(h).or_default().push(c),
+                Err(e) => unreadable.push((c.path.clone(), e.to_string())),
             }
         }
 
@@ -116,15 +128,21 @@ pub fn find(candidates: &[Candidate]) -> Vec<DuplicateGroup> {
             while !remaining.is_empty() {
                 let head = remaining.remove(0);
                 let mut same: Vec<PathBuf> = vec![head.path.clone()];
-                remaining.retain(|other| {
-                    match same_content(&head.path, &other.path) {
-                        Ok(true) => {
-                            same.push(other.path.clone());
-                            false // 已归入本组，从待处理中移除
-                        }
-                        Ok(false) | Err(_) => true,
+                let mut failed: Vec<(PathBuf, String)> = Vec::new();
+                remaining.retain(|other| match same_content(&head.path, &other.path) {
+                    Ok(true) => {
+                        same.push(other.path.clone());
+                        false // 已归入本组，从待处理中移除
+                    }
+                    Ok(false) => true,
+                    Err(e) => {
+                        // 比对失败的文件留在待处理集合里，交由后续轮次
+                        // 再试；同时如实上报，不静默丢弃
+                        failed.push((other.path.clone(), e.to_string()));
+                        false
                     }
                 });
+                unreadable.extend(failed);
                 if same.len() > 1 {
                     same.sort();
                     out.push(DuplicateGroup { size, paths: same });
@@ -135,7 +153,8 @@ pub fn find(candidates: &[Candidate]) -> Vec<DuplicateGroup> {
 
     // 组间按路径排序，结果稳定可复现
     out.sort_by(|a, b| a.paths.cmp(&b.paths));
-    out
+    unreadable.sort();
+    DuplicateScan { groups: out, unreadable }
 }
 
 #[cfg(test)]
@@ -164,12 +183,12 @@ mod tests {
         let a = write(&d, "a.litematic", b"same content here");
         let b = write(&d, "b.litematic", b"same content here");
         let c = write(&d, "c.litematic", b"different content!");
-        // 大小与 a、b 不同，必然不重复
-        let groups = find(&[a, b, c]);
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].paths.len(), 2);
-        assert!(groups[0].paths.contains(&d.join("a.litematic")));
-        assert!(groups[0].paths.contains(&d.join("b.litematic")));
+        let r = find(&[a, b, c]);
+        assert_eq!(r.groups.len(), 1);
+        assert_eq!(r.groups[0].paths.len(), 2);
+        assert!(r.groups[0].paths.contains(&d.join("a.litematic")));
+        assert!(r.groups[0].paths.contains(&d.join("b.litematic")));
+        assert!(r.unreadable.is_empty(), "不应有读取失败");
     }
 
     #[test]
@@ -178,7 +197,7 @@ mod tests {
         // 大小相同但内容不同，必须靠逐字节比对排除
         let a = write(&d, "a.litematic", b"AAAA");
         let b = write(&d, "b.litematic", b"BBBB");
-        assert!(find(&[a, b]).is_empty(), "内容不同不应判为重复");
+        assert!(find(&[a, b]).groups.is_empty(), "内容不同不应判为重复");
     }
 
     #[test]
@@ -186,8 +205,8 @@ mod tests {
         let d = temp_dir("none");
         let a = write(&d, "a.litematic", b"one");
         let b = write(&d, "b.litematic", b"two two");
-        assert!(find(&[a, b]).is_empty());
-        assert!(find(&[]).is_empty(), "空输入不应 panic");
+        assert!(find(&[a, b]).groups.is_empty());
+        assert!(find(&[]).groups.is_empty(), "空输入不应 panic");
     }
 
     #[test]
@@ -196,10 +215,10 @@ mod tests {
         let a = write(&d, "a.litematic", b"xyz");
         let b = write(&d, "b.litematic", b"xyz");
         let c = write(&d, "c.litematic", b"xyz");
-        let groups = find(&[a, b, c]);
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].paths.len(), 3);
-        assert_eq!(groups[0].size, 3);
+        let r = find(&[a, b, c]);
+        assert_eq!(r.groups.len(), 1);
+        assert_eq!(r.groups[0].paths.len(), 3);
+        assert_eq!(r.groups[0].size, 3);
     }
 
     #[test]
@@ -209,19 +228,37 @@ mod tests {
         let a2 = write(&d, "a2.litematic", b"first");
         let b1 = write(&d, "b1.litematic", b"second!!");
         let b2 = write(&d, "b2.litematic", b"second!!");
-        let groups = find(&[a1, a2, b1, b2]);
-        assert_eq!(groups.len(), 2, "应识别出两组独立的重复");
-        assert!(groups.iter().all(|g| g.paths.len() == 2));
+        let r = find(&[a1, a2, b1, b2]);
+        assert_eq!(r.groups.len(), 2, "应识别出两组独立的重复");
+        assert!(r.groups.iter().all(|g| g.paths.len() == 2));
     }
 
     #[test]
-    fn unreadable_file_is_skipped_not_reported() {
+    fn unreadable_file_is_reported_not_silently_dropped() {
         let d = temp_dir("missing");
         let a = write(&d, "a.litematic", b"data");
-        let ghost = Candidate { path: d.join("不存在的文件.litematic"), size: 4 };
-        // 读不了的文件既不报错，也不能被当成重复组成员
-        let groups = find(&[a, ghost]);
-        assert!(groups.is_empty(), "无法读取的文件不应成组");
+        let ghost_path = d.join("不存在的文件.litematic");
+        let ghost = Candidate { path: ghost_path.clone(), size: 4 };
+        let r = find(&[a, ghost]);
+
+        // 读不了的文件既不能成组，也不能被默默当成「与谁都不重复」
+        assert!(r.groups.is_empty());
+        assert_eq!(r.unreadable.len(), 1, "必须上报读取失败");
+        assert_eq!(r.unreadable[0].0, ghost_path, "应报告具体是哪个文件");
+        assert!(!r.unreadable[0].1.is_empty(), "应带上失败原因");
+    }
+
+    #[test]
+    fn unreadable_member_does_not_hide_real_group() {
+        let d = temp_dir("mixed");
+        let a = write(&d, "a.litematic", b"same");
+        let b = write(&d, "b.litematic", b"same");
+        // 与 a、b 大小相同但读不出来的文件混在中间
+        let ghost = Candidate { path: d.join("ghost.litematic"), size: 4 };
+        let r = find(&[a, b, ghost]);
+        assert_eq!(r.groups.len(), 1, "读取失败不应影响真实的重复判定");
+        assert_eq!(r.groups[0].paths.len(), 2);
+        assert_eq!(r.unreadable.len(), 1);
     }
 
     #[test]
@@ -229,9 +266,9 @@ mod tests {
         let d = temp_dir("empty");
         let a = write(&d, "a.litematic", b"");
         let b = write(&d, "b.litematic", b"");
-        let groups = find(&[a, b]);
-        assert_eq!(groups.len(), 1, "两个空文件内容相同，应判为重复");
-        assert_eq!(groups[0].size, 0);
+        let r = find(&[a, b]);
+        assert_eq!(r.groups.len(), 1, "两个空文件内容相同，应判为重复");
+        assert_eq!(r.groups[0].size, 0);
     }
 
     #[test]
@@ -246,8 +283,7 @@ mod tests {
         rev.reverse();
         let g2 = find(&rev);
         assert_eq!(g1, g2, "输入顺序不应影响结果");
-        // 组内路径按字典序
-        let names: Vec<String> = g1[0]
+        let names: Vec<String> = g1.groups[0]
             .paths
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())

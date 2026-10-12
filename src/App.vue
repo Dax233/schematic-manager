@@ -14,6 +14,7 @@ import {
   deleteBackup,
   listBackups,
   readOperationLog,
+  scanDuplicates,
   restoreBackup,
   saveMetadata,
   scanLitematics,
@@ -25,6 +26,8 @@ import type {
   BackupEntry,
   BlockCount,
   BlockHit,
+  DuplicateGroup,
+  DuplicateScan,
   ReplaceRule,
   SceneData,
   SchematicSummary,
@@ -43,6 +46,58 @@ const saving = ref(false);
 const draft = ref({ name: "", author: "", description: "" });
 const dirty = ref(false);
 const searchText = ref("");
+
+// 重复文件筛查
+const dupOpen = ref(false);
+const dupBusy = ref(false);
+const dupResult = ref<DuplicateScan | null>(null);
+const dupDir = ref("");
+
+async function openDuplicates() {
+  dupOpen.value = true;
+  dupResult.value = null;
+  // 默认扫描当前列表第一个文件所在目录，省去用户再选一次
+  dupDir.value = selected.value?.dirName ?? files.value[0]?.dirName ?? "";
+  if (!dupDir.value) return;
+  await runDuplicateScan();
+}
+
+async function runDuplicateScan() {
+  const dir = dupDir.value.trim();
+  if (!dir) {
+    Message.warning("请先填写要筛查的目录");
+    return;
+  }
+  dupBusy.value = true;
+  try {
+    dupResult.value = await scanDuplicates(dir);
+    const n = dupResult.value.groups.length;
+    Message.success(n > 0 ? `发现 ${n} 组重复文件` : "没有发现重复文件");
+  } catch (e) {
+    Message.error(`筛查失败：${e}`);
+    dupResult.value = null;
+  } finally {
+    dupBusy.value = false;
+  }
+}
+
+/** 表格行键：组内路径拼接后唯一 */
+function dupGroupKey(r: DuplicateGroup): string {
+  return r.paths.join("|");
+}
+
+/** 一组重复文件可回收的空间：组内除保留一份外的其余副本之和 */
+function wastedOf(paths: string[]): number {
+  if (paths.length < 2) return 0;
+  const one = files.value.find((f) => f.path === paths[0])?.fileSize ?? 0;
+  return one * (paths.length - 1);
+}
+
+const dupGroupColumns = [
+  { title: "文件", slotName: "files" },
+  { title: "单个大小", slotName: "size", width: 110 },
+  { title: "可回收", slotName: "wasted", width: 110 },
+];
 
 /// 按名称、作者、文件名、路径过滤；同时匹配中英文输入不做转换，
 /// 保持与输入一致即可——投影命名本身就是混合的。
@@ -471,6 +526,7 @@ const close = () => appWindow.close();
         allow-clear
       />
       <a-button size="small" :disabled="!selected" @click="openReplace">方块替换</a-button>
+      <a-button size="small" @click="openDuplicates">重复文件筛查</a-button>
       <a-button size="small" @click="openBackups">备份管理</a-button>
       <span class="preview__spacer" />
       <span class="hint-dim">
@@ -675,6 +731,57 @@ const close = () => appWindow.close();
         </a-tabs>
       </div>
     </div>
+
+    <a-modal
+      v-model:visible="dupOpen"
+      title="重复文件筛查"
+      :width="720"
+      :footer="false"
+      unmount-on-close
+    >
+      <a-space style="margin-bottom: 10px; width: 100%">
+        <a-input v-model="dupDir" placeholder="要筛查的目录" allow-clear style="width: 420px" />
+        <a-button size="small" :loading="dupBusy" @click="runDuplicateScan">开始筛查</a-button>
+      </a-space>
+      <div class="hint-dim" style="margin-bottom: 10px">
+        只筛查该目录本身、不递归子目录；判定依据是文件内容，与文件名无关。
+      </div>
+      <a-spin :loading="dupBusy" style="width: 100%">
+        <template v-if="dupResult">
+          <a-alert v-if="dupResult.groups.length === 0" type="success">
+            没有发现内容相同的文件
+          </a-alert>
+          <a-table
+            v-else
+            :columns="dupGroupColumns"
+            :data="dupResult.groups"
+            :pagination="{ pageSize: 8 }"
+            size="small"
+            :row-key="dupGroupKey"
+          >
+            <template #files="{ record }">
+              <div v-for="p in record.paths" :key="p" class="dup-path">{{ p }}</div>
+            </template>
+            <template #size="{ record }">{{ formatSize(record.size) }}</template>
+            <template #wasted="{ record }">{{ formatSize(wastedOf(record.paths)) }}</template>
+          </a-table>
+
+          <a-alert
+            v-if="dupResult.unreadable.length > 0"
+            type="warning"
+            style="margin-top: 12px"
+          >
+            <template #title>
+              有 {{ dupResult.unreadable.length }} 个文件无法读取，未参与判定
+            </template>
+            <div v-for="u in dupResult.unreadable" :key="u.path" class="dup-path">
+              {{ u.path }} —— {{ u.reason }}
+            </div>
+          </a-alert>
+        </template>
+        <a-empty v-else description="尚未筛查" />
+      </a-spin>
+    </a-modal>
 
     <a-modal
       v-model:visible="replaceOpen"

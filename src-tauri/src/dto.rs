@@ -141,6 +141,31 @@ pub struct VersionOptionDto {
     pub block_count: usize,
 }
 
+/// 一组内容相同的投影文件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateGroupDto {
+    pub size: u64,
+    pub paths: Vec<String>,
+}
+
+/// 重复文件筛查结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateScanDto {
+    pub groups: Vec<DuplicateGroupDto>,
+    /// 读取失败、未能参与判定的文件及原因
+    pub unreadable: Vec<UnreadableFileDto>,
+}
+
+/// 未能读取的文件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnreadableFileDto {
+    pub path: String,
+    pub reason: String,
+}
+
 /// 一条备份记录
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

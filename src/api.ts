@@ -6,6 +6,7 @@ import type {
   BlockHit,
   SaveOutcome,
   ScanResult,
+  DuplicateScan,
   ReplaceOutcome,
   ReplaceRule,
   SceneData,
@@ -65,6 +66,11 @@ export function previewReplace(schematicPath: string, rule: ReplaceRule): Promis
 /** 执行替换并写回文件；后端会先备份 */
 export function applyReplace(schematicPath: string, rule: ReplaceRule): Promise<ReplaceOutcome> {
   return invoke<ReplaceOutcome>("apply_replace", { schematicPath, rule });
+}
+
+/** 在一个目录下筛查内容重复的投影文件（只探测该目录，不递归） */
+export function scanDuplicates(dir: string): Promise<DuplicateScan> {
+  return invoke<DuplicateScan>("scan_duplicates", { dir });
 }
 
 /** 列出备份；传 stem 时只返回该文件的备份 */
