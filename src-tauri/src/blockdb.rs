@@ -653,14 +653,14 @@ mod tests {
 
     #[test]
     fn bad_magic_is_rejected() {
-        let mut b = build_minimal_pack();
+        let mut b = assert_baseline_parses();
         b[0] = b'X';
         assert!(BlockDb::load_from_bytes(&b).is_err());
     }
 
     #[test]
     fn unsupported_format_version_is_rejected() {
-        let mut b = build_minimal_pack();
+        let mut b = assert_baseline_parses();
         b[8..12].copy_from_slice(&99u32.to_le_bytes());
         let e = BlockDb::load_from_bytes(&b).unwrap_err().to_string();
         assert!(e.contains("格式版本"), "错误信息应说明版本不支持：{e}");
@@ -674,11 +674,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn section_count_mismatch_is_reported() {
-        // 把语言表段内计数改错，应被显式拒绝
-        let mut b = build_minimal_pack();
-        let mut pos = 8 + 5 * 4; // 跳过文件头
+    /// 语言表段内重复计数字段的字节偏移。
+    ///
+    /// 按布局逐段跳过：文件头(8+5*4) -> 字符串计数与各字符串 -> 该字段。
+    fn lang_section_count_offset(b: &[u8]) -> usize {
+        let mut pos = 8 + 5 * 4;
         let n = u32::from_le_bytes([b[pos], b[pos + 1], b[pos + 2], b[pos + 3]]) as usize;
         pos += 4;
         for _ in 0..n {
@@ -687,9 +687,32 @@ mod tests {
             }
             pos += 1;
         }
+        pos
+    }
+
+    /// 篡改型测试的公共前置。
+    ///
+    /// 必须先确认未篡改的 pack 能正常解析：否则篡改后的失败可能来自
+    /// 别的错误，测试就变成「因为错误的原因通过」——此前就踩过这个坑。
+    fn assert_baseline_parses() -> Vec<u8> {
+        let good = build_minimal_pack();
+        assert!(
+            BlockDb::load_from_bytes(&good).is_ok(),
+            "基准 pack 必须能正常解析，否则本测试验证的不是被篡改的那个校验"
+        );
+        good
+    }
+
+    #[test]
+    fn section_count_mismatch_is_reported() {
+        let mut b = assert_baseline_parses();
+        let pos = lang_section_count_offset(&b);
         b[pos..pos + 4].copy_from_slice(&7u32.to_le_bytes());
+
         let e = BlockDb::load_from_bytes(&b).unwrap_err().to_string();
         assert!(e.contains("不一致"), "应报段内计数不一致：{e}");
+        // 错误信息应指明是哪个段，便于排查
+        assert!(e.contains("语言表"), "错误信息应指明段名：{e}");
     }
 
     #[test]
@@ -703,15 +726,8 @@ mod tests {
     #[test]
     fn texture_out_of_range_is_reported() {
         // 把贴图的长度改到超出像素池，应被显式拒绝而不是留下越界偏移
-        let mut b = build_minimal_pack();
-        // 贴图段的 len 字段位置：文件头 + 字符串表 + 语言表 + 段内计数 + w,h,offset
-        let mut pos = 8 + 5 * 4;
-        let n = u32::from_le_bytes([b[pos], b[pos+1], b[pos+2], b[pos+3]]) as usize;
-        pos += 4;
-        for _ in 0..n {
-            while b[pos] != 0 { pos += 1; }
-            pos += 1;
-        }
+        let mut b = assert_baseline_parses();
+        let mut pos = lang_section_count_offset(&b);
         pos += 4;                 // 语言表段内重复计数
         pos += 4;                 // 第 0 组条目数
         pos += 12;                // 三个字符串下标
