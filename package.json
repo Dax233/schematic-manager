@@ -8,24 +8,30 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check:ipc": "node scripts/check-ipc-contract.mjs"
   },
   "dependencies": {
     "@arco-design/web-vue": "^2.56.0",
     "@tauri-apps/api": "^2.1.1",
     "@tauri-apps/plugin-dialog": "^2.2.0",
     "@tauri-apps/plugin-fs": "^2.2.0",
-    "vue": "^3.5.13",
-    "three": "^0.180.0"
+    "three": "^0.180.0",
+    "vue": "^3.5.13"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",
+    "@types/node": "^22.10.0",
+    "@types/three": "^0.180.0",
     "@vitejs/plugin-vue": "^5.2.1",
+    "@vue/test-utils": "^2.5.1",
+    "jsdom": "^30.1.2",
     "sass-embedded": "^1.83.0",
     "typescript": "~5.7.2",
     "vite": "^6.0.5",
-    "vue-tsc": "^2.2.0",
-    "@types/three": "^0.180.0",
-    "@types/node": "^22.10.0"
+    "vitest": "^2.1.9",
+    "vue-tsc": "^2.2.0"
   }
 }

@@ -185,6 +185,21 @@ jobs:
         # 本地已确认 0 错误，因此这里改为阻断。
         run: pnpm typecheck
 
+      # 前后端命令契约的静态检查。
+      #
+      # 前端 invoke 的命令名或参数名与后端对不上时，Rust 侧编译照样通过，
+      # 只在运行时表现为「点了按钮没反应」——而界面无法在 CI 里自动化测试，
+      # 因此这道检查是拦住这类错误唯一的自动化防线。
+      # 已用四种典型错误（命令名写错、参数写成下划线、漏传必填、多传参数）
+      # 验证过它确实会失败。
+      - name: 前后端命令契约检查
+        run: pnpm check:ipc
+
+      # 前端单元测试：覆盖各功能发出的命令名与参数、以及界面渲染。
+      # 此前项目只有 Rust 侧测试，前端逻辑完全没有自动化保护。
+      - name: 前端单元测试
+        run: pnpm test
+
       # Windows 只打 NSIS，不打 MSI。
       # 原因：项目的 productName 与版权信息是中文，WiX 的 light.exe 会报
       #   error LGHT0311: A string was provided with characters that are not

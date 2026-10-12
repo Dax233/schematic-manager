@@ -108,11 +108,19 @@ pnpm tauri dev      # 开发
 pnpm tauri build    # 打包
 ```
 
-前端类型检查与构建：
+前端类型检查、单元测试与构建：
 
 ```bash
 pnpm typecheck      # vue-tsc
+pnpm test           # vitest：API 契约 + 界面挂载与交互流程
+pnpm check:ipc      # 前后端命令名与参数名的一致性检查
 pnpm build          # vite build
+```
+
+后端的单元测试：
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml --lib
 ```
 
 ## 版本号规则
