@@ -111,12 +111,20 @@ pub fn collect_quads(sc: &Schematic, db: &BlockDb, ver_idx: usize) -> Vec<Quad> 
             // 注意：legacy-cpp 只用 PosFromIndex、从不加 r.pos
             // （render.cpp:323-326 是全仓库唯一一处取方块坐标的地方），
             // 因此多区域投影在旧版下会重叠。这是有意修正，单区域行为不变。
+            //
+            // 坐标用 checked_add：pos 与 local 都来自文件内容（Size 分量
+            // 最大 i32::MAX），相加可能溢出——debug 构建会 panic，
+            // release 会回绕成负坐标而把方块画到错误位置。
+            // 溢出说明该方块落在可表示范围之外，跳过它而不是给出错误坐标。
             let local = r.pos_from_index(i);
-            let bp = [
-                r.pos[0] + local[0],
-                r.pos[1] + local[1],
-                r.pos[2] + local[2],
-            ];
+            let (Some(bx), Some(by), Some(bz)) = (
+                r.pos[0].checked_add(local[0]),
+                r.pos[1].checked_add(local[1]),
+                r.pos[2].checked_add(local[2]),
+            ) else {
+                continue;
+            };
+            let bp = [bx, by, bz];
 
             let models = resolve_models(db, version, state);
             for rm in &models {
@@ -331,6 +339,52 @@ mod tests {
                         *v >= lo - 1e-4 && *v <= hi + 1e-4,
                         "角点 {c:?} 超出方块范围；轴 {axis} 应在 {lo}..{hi}，\
                          说明角点没有被变换到世界坐标"
+                    );
+                }
+            }
+        }
+    }
+
+    /// 坐标相加溢出时必须跳过该方块，而不是 panic 或给出回绕的坐标。
+    ///
+    /// pos 与 local 都来自文件内容：Size 分量最大 i32::MAX，pos 也可接近
+    /// 该值。原先直接相加，debug 构建（cargo test）会 panic
+    /// `attempt to add with overflow`，release 构建会回绕成负坐标，
+    /// 把方块画到完全错误的位置。
+    #[test]
+    fn overflowing_block_position_is_skipped_not_wrapped() {
+        let (db, _v) = build(false, |_| {});
+        let sc = Schematic {
+            root: crate::nbt::Value::Compound(vec![]),
+            regions: vec![crate::litematic::Region {
+                name: "r".into(),
+                // 原点取 i32::MAX：再加任何非零偏移都会溢出
+                pos: [i32::MAX, i32::MAX, i32::MAX],
+                // 尺寸 2 使 local 可以为 1，从而触发相加溢出
+                size: [2, 2, 2],
+                volume: 8,
+                bits: 2,
+                palette: vec![BlockState::new("minecraft:stone")],
+                indices: vec![0; 8],
+                ..Default::default()
+            }],
+            path: String::new(),
+            loaded: true,
+            meta_modified: false,
+            blocks_modified: false,
+        };
+        // 不应 panic；可以输出为空（全部跳过），但绝不能带出错坐标
+        let quads = collect_quads(&sc, &db, 0);
+        for q in &quads {
+            for c in &q.corners {
+                for v in c {
+                    assert!(
+                        v.is_finite(),
+                        "角点坐标必须是有限值，实际 {c:?}"
+                    );
+                    assert!(
+                        *v >= i32::MAX as f32 - 2.0,
+                        "不应出现回绕后的负坐标，实际 {c:?}"
                     );
                 }
             }

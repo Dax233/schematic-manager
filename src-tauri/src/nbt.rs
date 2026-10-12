@@ -118,9 +118,18 @@ impl Value {
         }
     }
 
-    /// 读取 {x,y,z} 三元组，缺失时返回 None。
+    /// 读取 {x,y,z} 三元组，缺失或超出 i32 范围时返回 None。
+    ///
+    /// 用 try_from 而不是 `as i32`：NBT 里的 Position 可能是 TAG_Long，
+    /// 直接截断会把一个超范围的值悄悄变成某个看起来正常的坐标
+    /// （2^32 变成 0、2^32+5 变成 5），后续算出的方块位置与渲染结果
+    /// 都是错的，且从数值上看不出异常。
     pub fn as_xyz(&self) -> Option<[i32; 3]> {
-        let get = |k: &str| self.get(k).and_then(|v| v.as_i64()).map(|v| v as i32);
+        let get = |k: &str| {
+            self.get(k)
+                .and_then(|v| v.as_i64())
+                .and_then(|v| i32::try_from(v).ok())
+        };
         Some([get("x")?, get("y")?, get("z")?])
     }
 }
@@ -595,6 +604,52 @@ mod tests {
             ("z".into(), Value::Int(3)),
         ]);
         assert_eq!(v.as_xyz(), Some([1, -2, 3]));
+    }
+
+    /// 超出 i32 范围的坐标必须判为无效，而不是截断成一个看似正常的数。
+    ///
+    /// Position 在 NBT 里可能是 TAG_Long。原先用 `as i32` 截断，
+    /// 例如 2^32 会变成 0、2^32+5 会变成 5——后续按它算出的方块位置
+    /// 全是错的，且从数值上看不出异常。
+    ///
+    /// 已验证有效性：把实现改回 `as i32` 后这条会失败。
+    #[test]
+    fn xyz_accessor_rejects_out_of_range_values() {
+        for bad in [
+            i64::from(i32::MAX) + 1,
+            i64::from(i32::MIN) - 1,
+            1i64 << 32,
+            (1i64 << 32) + 5,
+            i64::MAX,
+            i64::MIN,
+        ] {
+            let v = Value::Compound(vec![
+                ("x".into(), Value::Long(bad)),
+                ("y".into(), Value::Int(0)),
+                ("z".into(), Value::Int(0)),
+            ]);
+            assert!(
+                v.as_xyz().is_none(),
+                "x={bad} 超出 i32 范围，应判为无效而不是截断"
+            );
+        }
+    }
+
+    /// 边界值本身必须仍然有效，避免把范围判错。
+    #[test]
+    fn xyz_accessor_accepts_i32_boundaries() {
+        for ok in [i64::from(i32::MAX), i64::from(i32::MIN), 0] {
+            let v = Value::Compound(vec![
+                ("x".into(), Value::Long(ok)),
+                ("y".into(), Value::Int(0)),
+                ("z".into(), Value::Int(0)),
+            ]);
+            assert_eq!(
+                v.as_xyz(),
+                Some([ok as i32, 0, 0]),
+                "x={ok} 恰在 i32 范围内，应被接受"
+            );
+        }
     }
 
     /// 截断的数据必须返回错误，而不是 panic，也不能「解析成功」。
