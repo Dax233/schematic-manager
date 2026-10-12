@@ -13,11 +13,6 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  # 同一 tag/分支的重复触发只保留最新一次
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   # ---------------------------------------------------------------- 计算版本
   prepare:
