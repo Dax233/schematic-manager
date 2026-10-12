@@ -137,10 +137,19 @@ const ARCH_LABEL = { x86_64: "x86_64", arm64: "arm64", universal: "universal" };
 
 /** 从规范化资产名解析平台/架构/格式：<name>-<ver>-<platform>-<arch>[-suffix].<ext> */
 function parseAsset(name, ver) {
+  // assets.json 由上游脚本生成；格式一旦变化（例如变成对象数组），
+  // 直接 name.match 会抛异常并让整个 Release 失败，
+  // 而表格少几行不该阻塞发布。这里显式拒绝非字符串输入。
+  if (typeof name !== "string") return null;
   const re = new RegExp(
     `^schematic-manager-${ver.replace(/\./g, "\\.")}-(windows|linux|macos)-(x86_64|arm64|universal)(?:-[^.]+)*\\.(.+)$`,
   );
-  const m = name.match(re);
+  let m = null;
+  try {
+    m = name.match(re);
+  } catch {
+    return null; // ver 含异常字符时不该让发布失败
+  }
   if (!m) return null;
   const [, platform, arch, ext] = m;
   const FORMAT_LABEL = {
