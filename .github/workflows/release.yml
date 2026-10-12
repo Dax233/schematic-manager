@@ -90,7 +90,9 @@ jobs:
           - { runner: windows-11-arm,  target: aarch64-pc-windows-msvc,  platform: windows, arch: arm64  }
           - { runner: ubuntu-22.04,    target: x86_64-unknown-linux-gnu, platform: linux,   arch: x86_64 }
           - { runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, platform: linux, arch: arm64 }
-          - { runner: macos-13,        target: x86_64-apple-darwin,      platform: macos,   arch: x86_64 }
+          # macos-13 已被 GitHub 弃用：实测该标签的任务永远停在 queued，
+          # 会连带让整个运行无法结束（日志也因此无法下载）。改用 macos-15-intel。
+          - { runner: macos-15-intel,  target: x86_64-apple-darwin,      platform: macos,   arch: x86_64 }
           - { runner: macos-14,        target: aarch64-apple-darwin,     platform: macos,   arch: arm64  }
 
     steps:
