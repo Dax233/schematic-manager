@@ -7,6 +7,8 @@
 //!   - 条件串用 `,` 表示「与」，用 `|` 表示「或」
 
 use crate::blockdb::{BlockDb, BlockDef, Variant, VersionDef};
+use crate::replace::BlockInfo;
+use std::collections::BTreeMap;
 use crate::litematic::BlockState;
 
 /// 解析 "a=1,b=2" 形式的与条件。
@@ -115,6 +117,79 @@ pub fn resolve_models<'a>(
     }
 
     out
+}
+
+/// 一个方块支持的属性及其取值域：属性名 -> 取值（有序，便于结果稳定）
+pub type PropDomain = BTreeMap<String, Vec<String>>;
+
+/// 收集方块支持的属性取值域。
+///
+/// 信息全部来自变体与 multipart 的条件串——方块库并不单独存属性表，
+/// 条件串里出现过的 prop=value 就是该方块支持的取值。
+pub fn block_prop_domain(
+    db: &BlockDb,
+    version: &VersionDef,
+    name: &str,
+) -> Option<(PropDomain, Vec<(String, String)>)> {
+    let bd = find_block(db, version, name)?;
+    let mut domain: PropDomain = BTreeMap::new();
+    // 默认值取自第一个变体的条件：blockstate 文件里默认变体排在前面，
+    // 因此它列出的取值最接近游戏内的默认状态。
+    let mut defaults: Vec<(String, String)> = Vec::new();
+
+    for (i, v) in bd.variants.iter().chain(bd.multipart.iter()).enumerate() {
+        if v.when.is_empty() {
+            continue;
+        }
+        for alt in v.when.split('|') {
+            for (k, val) in parse_conds(alt) {
+                let slot = domain.entry(k.clone()).or_default();
+                if !slot.contains(&val) {
+                    slot.push(val.clone());
+                }
+                // 只有第一个变体参与默认值
+                if i == 0 && !defaults.iter().any(|(dk, _)| dk == &k) {
+                    defaults.push((k, val));
+                }
+            }
+        }
+    }
+    for vals in domain.values_mut() {
+        vals.sort();
+    }
+    // 第一个变体没覆盖到的属性，用其取值域中的第一个值兜底
+    for (k, vals) in &domain {
+        if !defaults.iter().any(|(dk, _)| dk == k) {
+            if let Some(v) = vals.first() {
+                defaults.push((k.clone(), v.clone()));
+            }
+        }
+    }
+    Some((domain, defaults))
+}
+
+/// 以方块库为知识来源的替换信息
+pub struct DbBlockInfo<'a> {
+    pub db: &'a BlockDb,
+    pub version: &'a VersionDef,
+}
+
+impl BlockInfo for DbBlockInfo<'_> {
+    fn supports_prop(&self, block: &str, prop: &str, value: &str) -> bool {
+        match block_prop_domain(self.db, self.version, block) {
+            Some((domain, _)) => domain
+                .get(prop)
+                .map(|vals| vals.iter().any(|v| v == value))
+                .unwrap_or(false),
+            None => false,
+        }
+    }
+
+    fn default_props(&self, block: &str) -> Vec<(String, String)> {
+        block_prop_domain(self.db, self.version, block)
+            .map(|(_, d)| d)
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -269,6 +344,80 @@ mod tests {
         });
         let got = resolve_models(&db, &db.versions[0], &st("mod:custom", &[]));
         assert_eq!(got.len(), 1, "叠加包中的方块应能被解析到");
+    }
+
+    #[test]
+    fn prop_domain_comes_from_condition_strings() {
+        let bd = BlockDef {
+            name: "minecraft:oak_stairs".into(),
+            variants: vec![
+                var("facing=north,half=bottom,shape=straight", 0),
+                var("facing=east,half=top,shape=outer_left", 0),
+            ],
+            multipart: Vec::new(),
+        };
+        let db = db_with(bd, "1.20.1", 3465);
+        let (domain, defaults) = block_prop_domain(&db, &db.versions[0], "minecraft:oak_stairs").unwrap();
+
+        let facing = domain.get("facing").expect("应有 facing");
+        assert_eq!(facing, &vec!["east".to_string(), "north".to_string()], "取值应去重且有序");
+        assert_eq!(domain.get("half").unwrap().len(), 2);
+        // 默认值取自第一个变体，而不是字母序第一个
+        assert_eq!(
+            defaults.iter().find(|(k, _)| k == "facing").map(|(_, v)| v.as_str()),
+            Some("north"),
+            "默认值应来自第一个变体"
+        );
+    }
+
+    #[test]
+    fn prop_domain_includes_multipart_conditions() {
+        let bd = BlockDef {
+            name: "minecraft:oak_fence".into(),
+            variants: vec![var("north=true", 0)],
+            multipart: vec![var("waterlogged=true", 0), var("south=true", 0)],
+        };
+        let db = db_with(bd, "1.20.1", 3465);
+        let (domain, _) = block_prop_domain(&db, &db.versions[0], "minecraft:oak_fence").unwrap();
+        assert!(domain.contains_key("north"));
+        assert!(domain.contains_key("south"), "multipart 的条件也应计入");
+        assert!(domain.contains_key("waterlogged"));
+    }
+
+    #[test]
+    fn supports_prop_checks_value_not_just_name() {
+        let bd = BlockDef {
+            name: "minecraft:oak_stairs".into(),
+            variants: vec![var("facing=north|facing=south", 0)],
+            multipart: Vec::new(),
+        };
+        let db = db_with(bd, "1.20.1", 3465);
+        let info = DbBlockInfo { db: &db, version: &db.versions[0] };
+        assert!(info.supports_prop("minecraft:oak_stairs", "facing", "north"));
+        assert!(info.supports_prop("minecraft:oak_stairs", "facing", "south"));
+        // 属性名对但取值不支持，仍应判为不支持
+        assert!(!info.supports_prop("minecraft:oak_stairs", "facing", "up"));
+        // 未知方块一律不支持
+        assert!(!info.supports_prop("mod:unknown", "facing", "north"));
+    }
+
+    #[test]
+    fn defaults_fall_back_to_domain_first_value() {
+        // 第一个变体没提到 shape，但后续变体提到了，
+        // 此时默认值应取自取值域中的第一个值，而不是缺失
+        let bd = BlockDef {
+            name: "minecraft:oak_stairs".into(),
+            variants: vec![var("facing=north", 0), var("shape=outer_left|shape=straight", 0)],
+            multipart: Vec::new(),
+        };
+        let db = db_with(bd, "1.20.1", 3465);
+        let info = DbBlockInfo { db: &db, version: &db.versions[0] };
+        let d = info.default_props("minecraft:oak_stairs");
+        assert!(d.iter().any(|(k, v)| k == "facing" && v == "north"));
+        assert!(
+            d.iter().any(|(k, v)| k == "shape" && v == "outer_left"),
+            "未在首变体出现的属性应取取值域第一个值，实际 {d:?}"
+        );
     }
 
     #[test]
