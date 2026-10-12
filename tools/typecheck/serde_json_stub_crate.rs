@@ -375,3 +375,14 @@ pub fn from_str<T: FromValue>(s: &str) -> Result<T, Error> {
 pub fn json(v: Value) -> Value {
     v
 }
+
+/// 把值序列化成 JSON。
+///
+/// 真实 serde_json 的签名是 `to_value<T: Serialize>(&T) -> Result<Value>`，
+/// 由派生宏生成的实现真正执行序列化（含 `rename_all` 的字段改名）。
+/// 桩里没有派生宏，因此这里对任意类型都返回一个**空对象**——
+/// 它足以让 `to_value(..)` 通过类型检查，也让基于它的测试能在本地编译，
+/// 但**不会**验证重命名行为；那部分只在 CI 的真实 serde 下生效。
+pub fn to_value<T: ?Sized>(_v: &T) -> Result<Value, Error> {
+    Ok(Value::Object(Map::new()))
+}

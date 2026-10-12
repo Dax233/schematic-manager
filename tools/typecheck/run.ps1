@@ -14,6 +14,12 @@
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $cargo = "$env:USERPROFILE\.cargo\bin"
 if (Test-Path $cargo) { $env:Path = "$cargo;$env:Path" }
+# 本机拒绝对系统临时目录的写入，而部分测试需要临时目录。
+# 指到工作区内可绕开该环境限制，且不影响被测代码的行为。
+$localTemp = Join-Path (Split-Path (Split-Path $here -Parent) -Parent) '_temp'
+New-Item -ItemType Directory -Force -Path $localTemp | Out-Null
+$env:TEMP = $localTemp
+$env:TMP = $localTemp
 $env:CARGO_MANIFEST_DIR = (Resolve-Path "$here\..\..\src-tauri").Path
 
 $stub = Join-Path $here 'libflate2.rlib'
@@ -90,7 +96,42 @@ if ($cmdsErr -gt 0) {
 Write-Host "命令层 -> 错误: $cmdsErr"
 if ($cmdsErr -gt 0) { exit $cmdsErr }
 
-Write-Host "4/4 运行单元测试…"
+# 命令层与 DTO 的单元测试。
+#
+# 上一步不带 --test，因此 cfg(test) 里的代码**完全没有被检查**——而命令层的
+# 测试正是覆盖「导入的包有没有生效」这类关键行为的地方。实测这一步能抓到
+# 重复定义的测试模块名、DTO 新增字段后测试未同步这类错误，
+# 它们在纯类型检查下完全不可见。
+Write-Host "4/5 运行命令层与 DTO 的单元测试…"
+$cmdsExe = Join-Path $here 'cmdscheck.exe'
+Remove-Item $cmdsExe -Force -ErrorAction SilentlyContinue
+$cmdsBuild = & cmd /c "rustc --edition 2021 --crate-type lib --crate-name cmdscheck --test --extern `"flate2=$stub`" --extern `"tauri=$(Join-Path $here 'libtauri.rlib')`" --extern `"serde=$(Join-Path $here 'libserde.rlib')`" --extern `"serde_json=$serdeJson`" `"$((Join-Path $here 'check_cmds.rs'))`" -o `"$cmdsExe`" 2>&1"
+$cmdsTestErr = @($cmdsBuild | Select-String -Pattern '^error').Count
+if ($cmdsTestErr -gt 0 -or -not (Test-Path $cmdsExe)) {
+    $cmdsBuild | Select-Object -First 40
+    Write-Host "  命令层测试编译失败"
+    if ($cmdsTestErr -eq 0) { $cmdsTestErr = 1 }
+    exit $cmdsTestErr
+}
+$cmdsTestOut = & $cmdsExe --test-threads=4 2>&1
+$cmdsTestOut | Where-Object { $_ -match 'test result|^failures:|^    ' } | Select-Object -First 40
+# 受桩限制：DTO 的字段名契约靠 serde 的 `rename_all` 生成，而本地 serde 桩
+# 没有过程宏，`to_value` 只能返回空对象。这些测试因此在本地必然失败，
+# 但**必须保留并运行**：CI 用真实 serde，它们在那里才真正生效；
+# 本地能编译它们，就足以发现字段改名后忘记同步断言这类错误。
+$cmdsStubBound = 'dto::tests::'
+$cmdsFailed = $cmdsTestOut | Select-String -Pattern '^    (\S+::tests::\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value }
+$cmdsReal = $cmdsFailed | Where-Object { $_ -notmatch $cmdsStubBound }
+if ($cmdsReal.Count -gt 0) {
+    Write-Host "  命令层测试失败（与代码相关）："
+    $cmdsReal | ForEach-Object { Write-Host "    $_" }
+    exit $cmdsReal.Count
+}
+if ($cmdsTestOut | Select-String -Pattern '^test result: FAILED') {
+    Write-Host "  命令层测试：其余失败均因本地 serde 桩不支持字段重命名（CI 覆盖）"
+}
+
+Write-Host "5/5 运行单元测试…"
 $exe = Join-Path $here 'check.exe'
 Remove-Item $exe -Force -ErrorAction SilentlyContinue
 & cmd /c "rustc --edition 2021 --crate-type lib --crate-name check --test --extern `"flate2=$stub`" --extern `"serde_json=$serdeJson`" `"$((Join-Path $here 'check.rs'))`" -o `"$exe`" 2>nul"

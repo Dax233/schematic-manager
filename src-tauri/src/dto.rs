@@ -339,11 +339,26 @@ pub struct ImportOutcomeDto {
     pub size: u64,
 }
 
+
+/// 一个已启用却未能载入的资源包
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackLoadFailureDto {
+    pub file: String,
+    /// 失败原因
+    pub reason: String,
+}
+
 /// 清单读取结果，含被跳过的行
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackListDto {
     pub packs: Vec<PackEntryDto>,
+    /// 已启用但载入或合并失败的包：`(文件名, 原因)`。
+    ///
+    /// 必须上报：这类包在界面上看起来是启用状态，实际却不参与解析，
+    /// 用户会以为贴图已经生效而困惑于「为什么没变化」。
+    pub load_failures: Vec<PackLoadFailureDto>,
     /// 清单里解析失败而被跳过的行说明。
     /// 必须上报：用户手工编辑过清单时，静默丢弃会让「导入的包不见了」
     /// 无从解释。
@@ -437,10 +452,26 @@ mod tests {
     fn pack_list_keys_match_frontend() {
         let dto = PackListDto {
             packs: Vec::new(),
+            load_failures: vec![PackLoadFailureDto {
+                file: "broken.pack".into(),
+                reason: "载入失败：文件不存在".into(),
+            }],
             skipped: vec!["第 3 行有误".into()],
         };
         let v = serde_json::to_value(&dto).expect("序列化失败");
-        assert_keys(&v, &["packs", "skipped"]);
+        assert_keys(&v, &["loadFailures", "packs", "skipped"]);
+    }
+
+
+    /// 载入失败项的字段也要对上：前端按 file/reason 渲染
+    #[test]
+    fn pack_load_failure_keys_match_frontend() {
+        let dto = PackLoadFailureDto {
+            file: "a.pack".into(),
+            reason: "载入失败".into(),
+        };
+        let v = serde_json::to_value(&dto).expect("序列化失败");
+        assert_keys(&v, &["file", "reason"]);
     }
 
     /// 纳秒时间戳必须以字符串传递：数值会超出 JavaScript 的安全整数范围
@@ -463,21 +494,21 @@ mod tests {
     #[test]
     fn convertible_keys_are_camel_case() {
         // 抽查几个既有 DTO，防止后续改动破坏既有契约
-        let v = serde_json::to_value(SaveOutcome {
+        let save = SaveOutcome {
             path: "/x".into(),
             backup_path: "/b/x".into(),
-        })
-        .unwrap();
+        };
+        let v = serde_json::to_value(&save).unwrap();
         assert_keys(&v, &["backupPath", "path"]);
 
-        let v = serde_json::to_value(VersionOptionDto {
+        let ver = VersionOptionDto {
             index: 0,
             name: "1.20.1".into(),
             data_version: 3465,
             is_overlay: false,
             block_count: 1005,
-        })
-        .unwrap();
+        };
+        let v = serde_json::to_value(&ver).unwrap();
         assert_keys(&v, &["blockCount", "dataVersion", "index", "isOverlay", "name"]);
     }
 }

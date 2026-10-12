@@ -226,6 +226,34 @@ pub fn set_enabled(entries: &mut [PackEntry], file: &str, enabled: bool) -> bool
     }
 }
 
+
+/// 供载入使用的条目：只取已启用的，并标明是否为叠加包。
+///
+/// 与 `PackEntry` 分开是为了让调用方不必自己判断 `kind` 到叠加标记的映射，
+/// 避免各处写法不一致——「是否为叠加包」直接决定合并时如何处理版本。
+pub struct LoadItem {
+    pub file: String,
+    pub name: String,
+    pub is_overlay: bool,
+}
+
+/// 取出应载入的条目，按清单顺序。
+///
+/// **清单顺序即载入顺序**：多个包定义同一方块时，后载入的生效。
+/// 因此这里不做排序，保持用户在清单里的先后。
+pub fn enabled_for_load(entries: &[PackEntry]) -> Vec<LoadItem> {
+    entries
+        .iter()
+        .filter(|e| e.enabled)
+        .map(|e| LoadItem {
+            file: e.file.clone(),
+            name: e.name.clone(),
+            // 只有模组包是叠加层；MC 版本包是独立的基础版本
+            is_overlay: e.kind == PackKind::Mod,
+        })
+        .collect()
+}
+
 /// 已导入包涉及的数据版本（去重、升序）。用于判断「该版本的贴图是否已具备」。
 pub fn imported_data_versions(entries: &[PackEntry]) -> Vec<i32> {
     let mut v: Vec<i32> = entries.iter().map(|e| e.data_version).collect();

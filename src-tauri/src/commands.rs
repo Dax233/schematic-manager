@@ -8,7 +8,7 @@ use crate::error::{AppError, AppResult};
 use crate::dto::{
     AnalysisResult, BackupEntryDto, BlockCount, BlockHitDto, BlockVersionDto,
     ConvertItemDto, ConvertOutcomeDto, ConvertTargetDto, DuplicateGroupDto, DuplicateScanDto,
-    EntityCount, ImportOutcomeDto, PackEntryDto, PackListDto,
+    EntityCount, ImportOutcomeDto, PackEntryDto, PackListDto, PackLoadFailureDto,
     ReplaceOutcomeDto, ReplaceRuleDto, SceneDto, SaveOutcome, ScanResult, SchematicSummary,
     UnreadableFileDto, VersionOptionDto,
 };
@@ -231,29 +231,107 @@ fn db_archive(app: Option<&tauri::AppHandle>) -> AppResult<PathBuf> {
     )))
 }
 
-/// 进程内缓存的内置方块库。
+/// 已载入的方块库，附带资源包加载过程中的失败说明。
+///
+/// 失败原因不放在 `BlockDb` 里：它描述的是「载入过程」而不是方块库内容，
+/// 混进数据模型会让这个结构承担两种职责。
+pub struct LoadedDb {
+    pub db: std::sync::Arc<crate::blockdb::BlockDb>,
+    /// 资源包文件名 -> 加载失败原因
+    pub failures: Vec<(String, String)>,
+}
+
+/// 进程内缓存的方块库。
 ///
 /// 方块库解压后约 5.6 MB、含 4 万余条方块定义，而方块检索是随输入逐键
 /// 触发的；每次重新读取与解析会让输入明显卡顿。方块库是随包分发的
 /// 静态资源，载入一次即可长期复用。
-static BLOCK_DB: std::sync::OnceLock<crate::blockdb::BlockDb> = std::sync::OnceLock::new();
+///
+/// 用 `RwLock<Option<..>>` 而不是 `OnceLock`：用户导入、启用或删除资源包后，
+/// 方块库的内容必须随之变化。`OnceLock` 一旦写入就再也改不了，会让
+/// 「刚导入的包要重启程序才生效」——而用户没有任何理由知道这一点。
+static BLOCK_DB: std::sync::OnceLock<std::sync::RwLock<Option<std::sync::Arc<LoadedDb>>>> =
+    std::sync::OnceLock::new();
 
-/// 取内置方块库，首次调用时载入。
+fn db_cache() -> &'static std::sync::RwLock<Option<std::sync::Arc<LoadedDb>>> {
+    BLOCK_DB.get_or_init(|| std::sync::RwLock::new(None))
+}
+
+/// 让方块库缓存失效。
+///
+/// 任何会改变「哪些资源包被启用」的操作之后都必须调用，否则改动要等
+/// 下次启动才生效。
+fn invalidate_db() {
+    // 锁中毒说明此前有线程在持锁时 panic；缓存只是可重建的派生数据，
+    // 取回内部值继续用即可，不必让整个程序跟着崩
+    let mut g = db_cache().write().unwrap_or_else(|e| e.into_inner());
+    *g = None;
+}
+
+/// 把清单里已启用的资源包并入基础库。
+///
+/// 从 `open_db` 里抽出来是为了可测试：这段逻辑决定「用户导入的包到底
+/// 有没有生效」，而它此前完全没有测试覆盖。抽出来后可以用真实文件与
+/// 内存构造的包直接验证合并结果。
+///
+/// 单个包载入失败不能中断整库：用户可能手工删过文件、或包本身损坏，
+/// 此时其余包与内置库仍应可用。失败原因逐项返回供界面显示，
+/// **不静默跳过**——界面上显示为启用却不生效是最难排查的状态。
+///
+/// `resolve` 给出包文件的完整路径，便于测试注入临时目录。
+fn merge_enabled_packs<F>(
+    base: &mut crate::blockdb::BlockDb,
+    entries: &[crate::pack_registry::PackEntry],
+    resolve: F,
+) -> Vec<(String, String)>
+where
+    F: Fn(&str) -> PathBuf,
+{
+    let mut failures: Vec<(String, String)> = Vec::new();
+    for item in crate::pack_registry::enabled_for_load(entries) {
+        let path = resolve(&item.file);
+        // 是否为叠加包必须由清单里的类型决定：pack 文件本身不存这个信息
+        match crate::blockdb::BlockDb::load(&path.to_string_lossy(), item.is_overlay) {
+            Ok(pack) => {
+                if let Err(e) = base.merge_from(&pack, item.is_overlay) {
+                    failures.push((item.file.clone(), format!("合并失败：{e}")));
+                }
+            }
+            Err(e) => failures.push((item.file.clone(), format!("载入失败：{e}"))),
+        }
+    }
+    failures
+}
+
+/// 取方块库：内置基础库 + 清单里已启用的资源包。
 ///
 /// 必须传入 AppHandle：打包后方块库位于 Tauri 的资源目录，
 /// 只查 exe_dir()/res/ 或编译期的 CARGO_MANIFEST_DIR 在用户机器上都不存在，
 /// 忽略资源目录会让方块检索与替换在发布版整块失效。
-fn open_db(app: Option<&tauri::AppHandle>) -> AppResult<&'static crate::blockdb::BlockDb> {
-    if let Some(db) = BLOCK_DB.get() {
-        return Ok(db);
+fn open_db(app: Option<&tauri::AppHandle>) -> AppResult<std::sync::Arc<LoadedDb>> {
+    {
+        let g = db_cache().read().unwrap_or_else(|e| e.into_inner());
+        if let Some(db) = g.as_ref() {
+            return Ok(std::sync::Arc::clone(db));
+        }
     }
+
     // 内置方块库是基础版本（legacy-cpp 的 kind=0），不是叠加包
-    let loaded = crate::blockdb::BlockDb::load(&db_archive(app)?.to_string_lossy(), false)?;
+    let mut db = crate::blockdb::BlockDb::load(&db_archive(app)?.to_string_lossy(), false)?;
+
+    let (entries, _) = read_manifest()?;
+    let failures = merge_enabled_packs(&mut db, &entries, |f| packs_dir().join(f));
+
+    let loaded = std::sync::Arc::new(LoadedDb { db: std::sync::Arc::new(db), failures });
+    let mut g = db_cache().write().unwrap_or_else(|e| e.into_inner());
     // 并发下可能被别的线程抢先设置，此时沿用已设置的即可
-    let _ = BLOCK_DB.set(loaded);
-    BLOCK_DB
-        .get()
-        .ok_or_else(|| AppError::Parse("方块库缓存初始化失败".into()))
+    if g.is_none() {
+        *g = Some(std::sync::Arc::clone(&loaded));
+    }
+    Ok(match g.as_ref() {
+        Some(existing) => std::sync::Arc::clone(existing),
+        None => loaded,
+    })
 }
 
 /// 跨版本检索方块
@@ -263,7 +341,8 @@ pub fn search_blocks(
     query: String,
     limit: Option<usize>,
 ) -> Result<Vec<BlockHitDto>, String> {
-    let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let db = &loaded.db;
     Ok(crate::block_search::search(db, &query, limit.unwrap_or(200))
         .into_iter()
         .map(|h| BlockHitDto {
@@ -282,7 +361,8 @@ pub fn search_blocks(
 /// 列出方块库中的全部版本
 #[tauri::command]
 pub fn list_block_versions(app: tauri::AppHandle) -> Result<Vec<VersionOptionDto>, String> {
-    let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let db = &loaded.db;
     Ok(crate::block_search::version_options(db)
         .into_iter()
         .map(|v| VersionOptionDto {
@@ -302,7 +382,8 @@ pub fn preview_replace(
     schematic_path: String,
     rule: ReplaceRuleDto,
 ) -> Result<ReplaceOutcomeDto, String> {
-    let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let db = &loaded.db;
     let sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
     let summary = sc.summary();
     let vi = db
@@ -323,7 +404,8 @@ pub fn apply_replace(
     schematic_path: String,
     rule: ReplaceRuleDto,
 ) -> Result<ReplaceOutcomeDto, String> {
-    let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let db = &loaded.db;
     let mut sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
     let summary = sc.summary();
     let vi = db
@@ -359,7 +441,8 @@ pub fn apply_replace(
 /// 列出可作为转换目标的版本
 #[tauri::command]
 pub fn convert_targets(app: tauri::AppHandle, schematic_path: String) -> Result<Vec<ConvertTargetDto>, String> {
-    let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let db = &loaded.db;
     let sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
     let dv = sc.summary().data_version;
     Ok(crate::convert::targets(db, dv)
@@ -375,7 +458,8 @@ pub fn analyze_conversion(
     schematic_path: String,
     target_index: usize,
 ) -> Result<Vec<ConvertItemDto>, String> {
-    let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let db = &loaded.db;
     let sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
     Ok(crate::convert::analyze(&sc, db, target_index)
         .into_iter()
@@ -396,7 +480,8 @@ pub fn apply_conversion(
     target_index: usize,
     items: Vec<ConvertItemDto>,
 ) -> Result<ConvertOutcomeDto, String> {
-    let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let db = &loaded.db;
     let mut sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
 
     let source_idx = db
@@ -564,7 +649,8 @@ pub fn read_operation_log(max_lines: Option<usize>) -> Vec<String> {
 /// 前端不必知道它在哪个目录，也不必关心各平台的资源布局差异。
 #[tauri::command]
 pub fn build_scene(app: tauri::AppHandle, schematic_path: String) -> Result<SceneDto, String> {
-    let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let db = &loaded.db;
     crate::scene::build_with_db(&schematic_path, db)
         .map(SceneDto::from)
         .map_err(|e| e.to_string())
@@ -677,6 +763,287 @@ mod tests {
         assert!(!mc_version_name(3465).is_empty());
         assert_eq!(mc_version_name(-1), "");
     }
+
+    use crate::blockdb::{BlockDb, BlockDef, LangEntry, Model, ModelElement, ModelFace, TextureInfo, Variant, VersionDef};
+    use crate::pack_registry::{PackEntry, PackKind};
+    use std::collections::HashMap;
+
+    /// 造一个可序列化、可读回的最小方块库
+    fn sample_db(pack: &str, dv: i32, block: &str, tex: &str, pixel: u8) -> BlockDb {
+        let strings = vec![pack.to_string(), tex.to_string()];
+        let model = Model {
+            translucent: false,
+            elements: vec![ModelElement {
+                from: [0.0, 0.0, 0.0],
+                to: [16.0, 16.0, 16.0],
+                has_rotation: false,
+                rot_kind: 0,
+                origin: [0.0; 3],
+                axis: 0,
+                angle: 0.0,
+                rescale: false,
+                rot_vec: [0.0; 3],
+                face_mask: 0b1,
+                faces: vec![ModelFace {
+                    texture: 1,
+                    uv: [0.0, 0.0, 16.0, 16.0],
+                    cullface: 0xFF,
+                    tintindex: -1,
+                    rotation: 0,
+                }],
+            }],
+        };
+        let version = VersionDef {
+            name: pack.into(),
+            data_version: dv,
+            lang_idx: 0,
+            texture_by_path: HashMap::from([(tex.to_string(), 0u32)]),
+            blocks: vec![BlockDef {
+                name: block.into(),
+                variants: vec![Variant {
+                    when: String::new(),
+                    model_idx: 0,
+                    rot_x_div90: 0,
+                    rot_y_div90: 0,
+                    uvlock: false,
+                }],
+                multipart: Vec::new(),
+            }],
+            langs: Vec::new(),
+            is_overlay: false,
+        };
+        BlockDb {
+            format_version: 3,
+            strings,
+            langs: vec![vec![LangEntry {
+                block_name: block.into(),
+                en: "EN".into(),
+                zh: "中文名".into(),
+            }]],
+            textures: vec![TextureInfo { w: 1, h: 1, offset: 0, len: 4, has_alpha: false }],
+            models: vec![model],
+            versions: vec![version],
+            pixels: vec![pixel, pixel, pixel, 255],
+        }
+    }
+
+    fn tmp(name: &str) -> std::path::PathBuf {
+        let d = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test_tmp")
+            .join(format!(
+                "cmd_{}_{}",
+                name,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// 把一个库写成 zlib 压缩的 pack 文件
+    fn write_pack(dir: &std::path::Path, file: &str, db: &BlockDb) {
+        let raw = crate::blockdb_write::serialize(db).expect("序列化失败");
+        use std::io::Write;
+        let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(9));
+        e.write_all(&raw).unwrap();
+        let packed = e.finish().unwrap();
+        std::fs::write(dir.join(file), packed).unwrap();
+    }
+
+    fn entry(file: &str, kind: PackKind, enabled: bool) -> PackEntry {
+        PackEntry {
+            file: file.into(),
+            name: file.into(),
+            source: "/j/x.jar".into(),
+            kind,
+            data_version: 3465,
+            enabled,
+        }
+    }
+
+    /// 这是本轮的核心验证：导入的包必须真正参与方块解析。
+    /// 此前 open_db 只加载内置库，导入功能对渲染与检索毫无影响。
+    #[test]
+    fn enabled_pack_is_merged_and_its_block_becomes_findable() {
+        let dir = tmp("merge_enabled");
+        let base = sample_db("base", 3465, "minecraft:stone", "block/stone", 10);
+        let pack = sample_db("mymod", 3465, "mymod:thing", "block/thing", 20);
+        write_pack(&dir, "mymod.pack", &pack);
+
+        let mut merged = base;
+        let entries = vec![entry("mymod.pack", PackKind::Mod, true)];
+        let failures = merge_enabled_packs(&mut merged, &entries, |f| dir.join(f));
+        assert!(failures.is_empty(), "不应有失败：{failures:?}");
+
+        let ov = merged.versions.last().unwrap();
+        assert!(
+            crate::block_model::find_block(&merged, ov, "mymod:thing").is_some(),
+            "启用的包必须真正参与解析，否则导入毫无作用"
+        );
+        assert_eq!(merged.versions.len(), 2);
+    }
+
+    #[test]
+    fn disabled_pack_is_not_merged() {
+        let dir = tmp("merge_disabled");
+        let base = sample_db("base", 3465, "minecraft:stone", "block/stone", 10);
+        let pack = sample_db("mymod", 3465, "mymod:thing", "block/thing", 20);
+        write_pack(&dir, "mymod.pack", &pack);
+
+        let mut merged = base;
+        let entries = vec![entry("mymod.pack", PackKind::Mod, false)];
+        let failures = merge_enabled_packs(&mut merged, &entries, |f| dir.join(f));
+        assert!(failures.is_empty());
+        assert_eq!(merged.versions.len(), 1, "停用的包不应被并入");
+    }
+
+    #[test]
+    fn missing_pack_file_is_reported_not_ignored() {
+        // 文件被手工删掉：必须上报，界面才能提示；静默跳过会让用户
+        // 看着「已启用」却不知道为什么没生效
+        let dir = tmp("merge_missing");
+        let base = sample_db("base", 3465, "minecraft:stone", "block/stone", 10);
+        let mut merged = base;
+        let entries = vec![entry("gone.pack", PackKind::Mod, true)];
+        let failures = merge_enabled_packs(&mut merged, &entries, |f| dir.join(f));
+
+        assert_eq!(failures.len(), 1, "缺失的包必须被记为失败");
+        assert_eq!(failures[0].0, "gone.pack");
+        assert!(failures[0].1.contains("载入失败"), "原因：{}", failures[0].1);
+        assert_eq!(merged.versions.len(), 1, "基础库仍应可用");
+    }
+
+    #[test]
+    fn corrupt_pack_does_not_break_other_packs() {
+        // 一个坏包 + 一个好包：坏包上报，好包仍被并入
+        let dir = tmp("merge_corrupt");
+        let base = sample_db("base", 3465, "minecraft:stone", "block/stone", 10);
+        let good = sample_db("good", 3465, "good:block", "block/good", 30);
+        write_pack(&dir, "good.pack", &good);
+        std::fs::write(dir.join("bad.pack"), b"not a pack file at all").unwrap();
+
+        let mut merged = base;
+        let entries = vec![
+            entry("bad.pack", PackKind::Mod, true),
+            entry("good.pack", PackKind::Mod, true),
+        ];
+        let failures = merge_enabled_packs(&mut merged, &entries, |f| dir.join(f));
+
+        assert_eq!(failures.len(), 1, "只有坏包应失败：{failures:?}");
+        assert_eq!(failures[0].0, "bad.pack");
+        assert_eq!(merged.versions.len(), 2, "好包仍应被并入");
+        let ov = merged.versions.last().unwrap();
+        assert!(crate::block_model::find_block(&merged, ov, "good:block").is_some());
+    }
+
+    #[test]
+    fn version_pack_is_added_as_base_version_and_participates_in_picking() {
+        // kind=1 的版本包不是叠加层，应成为可被选中的基础版本
+        let dir = tmp("merge_version");
+        let base = sample_db("base", 3465, "minecraft:stone", "block/stone", 10);
+        let pack = sample_db("1.21", 3953, "minecraft:deepslate", "block/deepslate", 40);
+        write_pack(&dir, "v121.pack", &pack);
+
+        let mut merged = base;
+        let entries = vec![entry("v121.pack", PackKind::Version, true)];
+        merge_enabled_packs(&mut merged, &entries, |f| dir.join(f));
+
+        assert_eq!(merged.versions.len(), 2);
+        assert!(!merged.versions[1].is_overlay, "版本包不应标记为叠加包");
+        assert_eq!(merged.pick_version(3953), Some(1), "新基础版本应可被选中");
+        assert!(merged.overlays_of(1).is_empty(), "版本包不承载叠加包");
+    }
+
+    #[test]
+    fn pack_texture_is_reachable_after_merge() {
+        // 模组方块引用的贴图只存在于模组包里，合并后必须能取到其像素
+        let dir = tmp("merge_tex");
+        let base = sample_db("base", 3465, "minecraft:stone", "block/stone", 10);
+        let pack = sample_db("mymod", 3465, "mymod:thing", "block/thing", 77);
+        write_pack(&dir, "mymod.pack", &pack);
+
+        let mut merged = base;
+        merge_enabled_packs(
+            &mut merged,
+            &[entry("mymod.pack", PackKind::Mod, true)],
+            |f| dir.join(f),
+        );
+
+        let sidx = merged
+            .strings
+            .iter()
+            .position(|s| s == "block/thing")
+            .expect("字符串表里应有模组贴图路径") as u32;
+        let idx = merged.texture_pool_index(0, sidx);
+        assert_ne!(idx, crate::blockdb::NO_TEXTURE, "应通过叠加包取到贴图");
+        assert_eq!(merged.texture_pixels(idx as usize).unwrap(), &[77, 77, 77, 255]);
+    }
+
+    #[test]
+    fn load_order_follows_manifest_order() {
+        // 两个包定义同名方块：后者（清单里靠后）生效
+        let dir = tmp("merge_order");
+        let base = sample_db("base", 3465, "minecraft:stone", "block/stone", 10);
+        let a = sample_db("A", 3465, "dup:block", "block/a", 1);
+        let b = sample_db("B", 3465, "dup:block", "block/b", 2);
+        write_pack(&dir, "a.pack", &a);
+        write_pack(&dir, "b.pack", &b);
+
+        let mut merged = base;
+        let entries = vec![
+            entry("a.pack", PackKind::Mod, true),
+            entry("b.pack", PackKind::Mod, true),
+        ];
+        merge_enabled_packs(&mut merged, &entries, |f| dir.join(f));
+
+        // 版本按清单顺序追加，因此最后一个是被后载入的 b
+        let last = merged.versions.last().unwrap();
+        assert_eq!(last.name, "B", "清单靠后的包应最后载入");
+    }
+
+    #[test]
+    fn enabled_for_load_maps_kind_to_overlay_flag() {
+        use crate::pack_registry::enabled_for_load;
+        let entries = vec![
+            entry("a.pack", PackKind::Version, true),
+            entry("b.pack", PackKind::Mod, true),
+            entry("c.pack", PackKind::Mod, false),
+        ];
+        let items = enabled_for_load(&entries);
+        assert_eq!(items.len(), 2, "停用的不应出现");
+        assert!(!items[0].is_overlay, "版本包不是叠加包");
+        assert!(items[1].is_overlay, "模组包是叠加包");
+    }
+}
+
+/// 删除某个资源包：同时移除清单记录与磁盘文件。
+///
+/// 顺序是先删文件再改清单：若反过来，删文件失败会留下一条指向不存在
+/// 文件的记录（界面显示缺失）；而先删文件后写清单失败时，残留的是
+/// 一条 `exists=false` 的记录，重新导入即可修复。
+#[tauri::command]
+pub fn delete_pack(file: String) -> Result<(), String> {
+    // 只接受文件名，不接受路径：清单里的 file 由程序生成，
+    // 但如果被手工改成 `../../x`，拼接后就会删到 packs 目录之外
+    if file.contains('/') || file.contains('\\') || file.contains("..") {
+        return Err(format!("资源包文件名不合法：{file}"));
+    }
+    let mut entries = read_manifest_for_write().map_err(|e| e.to_string())?;
+    let target = packs_dir().join(&file);
+    if target.exists() {
+        std::fs::remove_file(&target).map_err(|e| {
+            format!("无法删除资源包文件 {}：{e}", target.display())
+        })?;
+    }
+    if !crate::pack_registry::remove(&mut entries, &file) {
+        return Err(format!("清单里没有资源包 {file}"));
+    }
+    write_manifest(&entries).map_err(|e| e.to_string())?;
+    invalidate_db();
+    Ok(())
 }
 
 // ---------------------------------------------------------------- 资源包
@@ -755,7 +1122,21 @@ pub fn list_packs() -> Result<PackListDto, String> {
             }
         })
         .collect();
-    Ok(PackListDto { packs, skipped })
+    // 取一次方块库：载入失败的原因由它记录。若因内置库缺失而整体失败，
+    // 那不属「资源包载入失败」，不应混进这个列表——list_packs 本身
+    // 仍应能列出清单，否则用户连自己导入过什么都看不到。
+    let load_failures = match open_db(None) {
+        Ok(loaded) => loaded
+            .failures
+            .iter()
+            .map(|(file, reason)| PackLoadFailureDto {
+                file: file.clone(),
+                reason: reason.clone(),
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    Ok(PackListDto { packs, load_failures, skipped })
 }
 
 /// 从 jar 导入资源包。
@@ -822,6 +1203,8 @@ pub fn import_jar(
         },
     );
     write_manifest(&entries).map_err(|e| e.to_string())?;
+    // 新包已登记为启用，方块库必须重建才会包含它
+    invalidate_db();
 
     Ok(ImportOutcomeDto {
         file,
@@ -873,30 +1256,9 @@ pub fn set_pack_enabled(file: String, enabled: bool) -> Result<(), String> {
     if !crate::pack_registry::set_enabled(&mut entries, &file, enabled) {
         return Err(format!("清单里没有资源包 {file}"));
     }
-    write_manifest(&entries).map_err(|e| e.to_string())
+    write_manifest(&entries).map_err(|e| e.to_string())?;
+    // 启用集合变了，方块库必须重建：否则要重启程序才生效
+    invalidate_db();
+    Ok(())
 }
 
-/// 删除某个资源包：同时移除清单记录与磁盘文件。
-///
-/// 顺序是先删文件再改清单：若反过来，删文件失败会留下一条指向不存在
-/// 文件的记录（界面显示缺失）；而先删文件后写清单失败时，残留的是
-/// 一条 `exists=false` 的记录，重新导入即可修复。
-#[tauri::command]
-pub fn delete_pack(file: String) -> Result<(), String> {
-    // 只接受文件名，不接受路径：清单里的 file 由程序生成，
-    // 但如果被手工改成 `../../x`，拼接后就会删到 packs 目录之外
-    if file.contains('/') || file.contains('\\') || file.contains("..") {
-        return Err(format!("资源包文件名不合法：{file}"));
-    }
-    let mut entries = read_manifest_for_write().map_err(|e| e.to_string())?;
-    let target = packs_dir().join(&file);
-    if target.exists() {
-        std::fs::remove_file(&target).map_err(|e| {
-            format!("无法删除资源包文件 {}：{e}", target.display())
-        })?;
-    }
-    if !crate::pack_registry::remove(&mut entries, &file) {
-        return Err(format!("清单里没有资源包 {file}"));
-    }
-    write_manifest(&entries).map_err(|e| e.to_string())
-}

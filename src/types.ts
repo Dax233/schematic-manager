@@ -199,8 +199,16 @@ export interface PackEntry {
 }
 
 /** 资源包列表，含清单里被跳过的行 */
+/** 一个已启用却未能载入的资源包 */
+export interface PackLoadFailure {
+  file: string;
+  reason: string;
+}
+
 export interface PackList {
   packs: PackEntry[];
+  /** 已启用但载入或合并失败的包 */
+  loadFailures: PackLoadFailure[];
   /** 清单里解析失败而被跳过的行说明 */
   skipped: string[];
 }

@@ -2,7 +2,7 @@
 import { computed, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { ImportOutcome, PackEntry } from "./types";
+import type { ImportOutcome, PackEntry, PackLoadFailure } from "./types";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import type { TableColumnData, TableData } from "@arco-design/web-vue";
 import { Message } from "@arco-design/web-vue";
@@ -539,6 +539,13 @@ const packOnOpen = ref(false);
 const packs = ref<PackEntry[]>([]);
 /** 清单里解析失败被跳过的行；必须显示，否则"导入的包不见了"无从解释 */
 const packSkipped = ref<string[]>([]);
+/**
+ * 已启用但载入失败的包。
+ *
+ * 必须显示：这些包在界面上是启用状态，实际却不参与解析，
+ * 用户会困惑于「明明导入了为什么没变化」。
+ */
+const packLoadFailures = ref<PackLoadFailure[]>([]);
 /** 导入类型：1 = MC 版本包，2 = 模组包 */
 const importKind = ref<number>(1);
 /** 模组包叠加到哪个数据版本：0 表示尚未选择 */
@@ -591,6 +598,7 @@ async function refreshPacks() {
     if (seq !== refreshSeq) return;
     packs.value = r.packs;
     packSkipped.value = r.skipped;
+    packLoadFailures.value = r.loadFailures;
     if (r.skipped.length > 0) {
       // 静默丢弃会让用户以为导入的包丢了，必须明确提示
       Message.warning({
@@ -1140,6 +1148,22 @@ const close = () => appWindow.close();
         <code>.minecraft\versions\&lt;版本&gt;\&lt;版本&gt;.jar</code>
         。要选客户端而不是服务端——服务端没有贴图资源。
       </div>
+
+      <a-alert
+        v-if="packLoadFailures.length > 0"
+        type="error"
+        style="margin-bottom: 10px"
+      >
+        <template #title>
+          {{ packLoadFailures.length }} 个已启用的资源包未能载入，它们不会生效
+        </template>
+        <div v-for="f in packLoadFailures" :key="f.file" class="dup-path">
+          {{ f.file }}：{{ f.reason }}
+        </div>
+        <div style="margin-top: 6px">
+          常见原因是文件被手工删除或包本身损坏；重新导入该 jar 即可修复。
+        </div>
+      </a-alert>
 
       <a-alert
         v-if="packSkipped.length > 0"
