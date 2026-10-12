@@ -613,10 +613,15 @@ mod tests {
     #[test]
     fn bits_roundtrip_crossing_long_boundary() {
         // 用不能被 64 整除的位数，强制出现跨 long 的情况
+        const COUNT: usize = 500;
         for bits in [2, 3, 5, 6, 7, 11, 13] {
-            let mut arr = vec![0i64; 64];
+            // 数组必须按实际位数需求分配：COUNT*bits 个比特。
+            // 之前写死 64 个 long，对 11 位这种位数来说只够 372 个值，
+            // 超出部分被 write_bits 的越界保护静默丢弃，read_bits 又返回 0，
+            // 于是断言报出「写进去 1332、读出来 0」。
+            let mut arr = vec![0i64; (COUNT * bits as usize).div_ceil(64)];
             let mask = (1i32 << bits) - 1;
-            let vals: Vec<i32> = (0..500).map(|i: i32| (i.wrapping_mul(2654435761u32 as i32)) & mask).collect();
+            let vals: Vec<i32> = (0..COUNT as i32).map(|i: i32| (i.wrapping_mul(2654435761u32 as i32)) & mask).collect();
             for (i, v) in vals.iter().enumerate() {
                 write_bits(&mut arr, i, bits, *v);
             }
@@ -653,6 +658,26 @@ mod tests {
         for i in 0..20 {
             let want = if i == 7 { 2 } else { 5 };
             assert_eq!(read_bits(&arr, i, bits), want, "i={i}");
+        }
+    }
+
+    #[test]
+    fn write_bits_out_of_range_is_ignored() {
+        // 数组容量不足时不应越界写入，也不应 panic。
+        // 这正是上面那个测试曾经踩到的路径，显式固化下来。
+        let mut arr = vec![0i64; 4];
+        for i in 0..1000 {
+            write_bits(&mut arr, i, 11, 1332);
+        }
+        for i in 0..1000 {
+            let v = read_bits(&arr, i, 11);
+            // 落在数组范围内的位置写成功，范围外的读回 0
+            let in_range = (i + 1) * 11 <= arr.len() * 64;
+            if in_range {
+                assert_eq!(v, 1332, "i={i}");
+            } else {
+                assert_eq!(v, 0, "i={i}");
+            }
         }
     }
 
