@@ -44,8 +44,10 @@ Remove-Item $stub -Force -ErrorAction SilentlyContinue
 if (-not (Test-Path $stub)) { Write-Host "  flate2 桩编译失败"; exit 1 }
 
 Write-Host "2/3 类型检查逻辑模块…"
+$serdeJson = Join-Path $here 'libserde_json.rlib'
 $out = & rustc --edition 2021 --crate-type lib --crate-name check --test --emit=metadata `
-    --extern "flate2=$stub" (Join-Path $here 'check.rs') -o (Join-Path $here 'check.rmeta') 2>&1
+    --extern "flate2=$stub" --extern "serde_json=$serdeJson" `
+    (Join-Path $here 'check.rs') -o (Join-Path $here 'check.rmeta') 2>&1
 $out | Where-Object { $_ -notmatch '^\s*$' }
 $errs = @($out | Select-String -Pattern '^error').Count
 Write-Host ""
@@ -67,7 +69,8 @@ if (-not (Test-Path $py)) { $py = "python" }
 
 foreach ($pair in @(
     @{ name = 'tauri'; src = 'tauri_stub_crate.rs'; out = 'libtauri.rlib' },
-    @{ name = 'serde'; src = 'serde_stub_crate.rs'; out = 'libserde.rlib' }
+    @{ name = 'serde'; src = 'serde_stub_crate.rs'; out = 'libserde.rlib' },
+    @{ name = 'serde_json'; src = 'serde_json_stub_crate.rs'; out = 'libserde_json.rlib' }
 )) {
     $rlib = Join-Path $here $pair.out
     if (-not (Test-Path $rlib)) {
@@ -78,6 +81,7 @@ $cmdsOut = & rustc --edition 2021 --crate-type bin --crate-name cmds `
     --extern "flate2=$stub" `
     --extern "tauri=$(Join-Path $here 'libtauri.rlib')" `
     --extern "serde=$(Join-Path $here 'libserde.rlib')" `
+    --extern "serde_json=$serdeJson" `
     (Join-Path $here 'check_cmds.rs') --emit=metadata -o (Join-Path $here 'cmds.rmeta') 2>&1
 $cmdsErr = @($cmdsOut | Select-String -Pattern '^error').Count
 if ($cmdsErr -gt 0) {
@@ -89,7 +93,7 @@ if ($cmdsErr -gt 0) { exit $cmdsErr }
 Write-Host "4/4 运行单元测试…"
 $exe = Join-Path $here 'check.exe'
 Remove-Item $exe -Force -ErrorAction SilentlyContinue
-& cmd /c "rustc --edition 2021 --crate-type lib --crate-name check --test --extern `"flate2=$stub`" `"$((Join-Path $here 'check.rs'))`" -o `"$exe`" 2>nul"
+& cmd /c "rustc --edition 2021 --crate-type lib --crate-name check --test --extern `"flate2=$stub`" --extern `"serde_json=$serdeJson`" `"$((Join-Path $here 'check.rs'))`" -o `"$exe`" 2>nul"
 if (-not (Test-Path $exe)) { Write-Host "  测试可执行文件编译失败"; exit 1 }
 $testOut = & $exe --test-threads=4 2>&1
 $testOut | Where-Object { $_ -match 'test result|^failures:|^    ' } | Select-Object -First 40

@@ -1,6 +1,7 @@
 mod backup;
 mod block_model;
 mod block_search;
+mod blockstate;
 mod blockdb;
 mod camera;
 mod convert;
