@@ -12,6 +12,8 @@ import type {
   DuplicateScan,
   ReplaceOutcome,
   ReplaceRule,
+  ImportOutcome,
+  PackList,
   SceneData,
   SchematicSummary,
   VersionOption,
@@ -121,4 +123,41 @@ export function readOperationLog(maxLines = 200): Promise<string[]> {
 /** dataVersion 对应的游戏版本名 */
 export function mcVersionName(dataVersion: number): Promise<string> {
   return invoke<string>("mc_version_name", { dataVersion });
+}
+
+// ---------------------------------------------------------------- 资源包
+
+/** 列出已导入的资源包 */
+export function listPacks(): Promise<PackList> {
+  return invoke<PackList>("list_packs");
+}
+
+/**
+ * 从 jar 导入资源包。
+ * kind：1 = MC 客户端版本包（数据版本取自 jar 内 version.json），
+ * 2 = 模组包（叠加到 dataVersion 指定的版本）。
+ * name 为空时取 jar 文件名主干。
+ */
+export function importJar(
+  jarPath: string,
+  kind: number,
+  dataVersion: number,
+  name?: string,
+): Promise<ImportOutcome> {
+  return invoke<ImportOutcome>("import_jar", {
+    jarPath,
+    kind,
+    dataVersion,
+    name: name ?? null,
+  });
+}
+
+/** 启用或停用某个资源包 */
+export function setPackEnabled(file: string, enabled: boolean): Promise<void> {
+  return invoke<void>("set_pack_enabled", { file, enabled });
+}
+
+/** 删除某个资源包：同时移除清单记录与磁盘文件 */
+export function deletePack(file: string): Promise<void> {
+  return invoke<void>("delete_pack", { file });
 }

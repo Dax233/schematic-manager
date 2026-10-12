@@ -178,3 +178,48 @@ export interface AnalysisResult {
   distinctBlockTypes: number;
   distinctStates: number;
 }
+
+/** 一个已导入的资源包 */
+export interface PackEntry {
+  /** 资源包文件名（在 packs 目录内） */
+  file: string;
+  name: string;
+  /** 来源 jar 路径 */
+  source: string;
+  /** 类型：0 内置、1 MC 版本包、2 模组包 */
+  kind: number;
+  /** 类型的中文名 */
+  kindLabel: string;
+  dataVersion: number;
+  mcVersion: string;
+  enabled: boolean;
+  size: number;
+  /** 文件是否实际存在。清单可能与磁盘不一致（用户手工删过文件）。 */
+  exists: boolean;
+}
+
+/** 资源包列表，含清单里被跳过的行 */
+export interface PackList {
+  packs: PackEntry[];
+  /** 清单里解析失败而被跳过的行说明 */
+  skipped: string[];
+}
+
+/** 导入 jar 的结果 */
+export interface ImportOutcome {
+  file: string;
+  name: string;
+  kind: number;
+  kindLabel: string;
+  dataVersion: number;
+  mcVersion: string;
+  blocks: number;
+  models: number;
+  textures: number;
+  /** 解析失败而被跳过的 blockstate 数 */
+  failedBlockstates: number;
+  /** 因无法解析模型而被跳过的方块数 */
+  failedBlocks: number;
+  namespaces: number;
+  size: number;
+}

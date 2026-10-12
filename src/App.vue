@@ -2,6 +2,13 @@
 import { computed, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import {
+  deletePack,
+  importJar,
+  listPacks,
+  setPackEnabled,
+} from "./api";
+import type { ImportOutcome, PackEntry } from "./types";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import type { TableColumnData, TableData } from "@arco-design/web-vue";
 import { Message } from "@arco-design/web-vue";
@@ -525,6 +532,187 @@ async function onDelete(row: BackupEntry) {
   }
 }
 
+// ---------------------------------------------------------------- 资源包管理
+
+const packOpen = ref(false);
+const packBusy = ref(false);
+const packs = ref<PackEntry[]>([]);
+/** 清单里解析失败被跳过的行；必须显示，否则"导入的包不见了"无从解释 */
+const packSkipped = ref<string[]>([]);
+/** 导入类型：1 = MC 版本包，2 = 模组包 */
+const importKind = ref<number>(1);
+/** 模组包叠加到哪个数据版本：0 表示尚未选择 */
+const importDataVersion = ref<number>(0);
+const importBusy = ref(false);
+
+/** 可选的叠加目标版本（取自方块库，由新到旧） */
+const overlayVersions = ref<VersionOption[]>([]);
+
+const packColumns = [
+  { title: "名称", dataIndex: "name", ellipsis: true, tooltip: true },
+  { title: "类型", slotName: "kind", width: 110 },
+  { title: "适用版本", slotName: "version", width: 150 },
+  { title: "大小", slotName: "size", width: 100 },
+  { title: "状态", slotName: "state", width: 90 },
+  { title: "操作", slotName: "actions", width: 140 },
+];
+
+/**
+ * 刷新计次。
+ *
+ * 导入、删除、开关都会触发刷新，而这些操作可能重叠。若不加计次，
+ * 先发出的请求后返回时会把较新的结果覆盖掉，界面显示的清单与实际不符。
+ * 只接受最后一次请求的结果。
+ */
+let refreshSeq = 0;
+
+/** 正在处理的资源包文件，用于避免同一项被重复操作 */
+const packPending = ref<Set<string>>(new Set());
+
+function markPending(file: string, on: boolean) {
+  // Set 就地增删不会触发 Vue 的响应式更新，必须换一个新对象
+  const next = new Set(packPending.value);
+  if (on) next.add(file);
+  else next.delete(file);
+  packPending.value = next;
+}
+
+async function openPacks() {
+  packOpen.value = true;
+  await refreshPacks();
+}
+
+async function refreshPacks() {
+  const seq = ++refreshSeq;
+  packBusy.value = true;
+  try {
+    const r = await listPacks();
+    // 已有更新的请求发出过，丢弃本次结果
+    if (seq !== refreshSeq) return;
+    packs.value = r.packs;
+    packSkipped.value = r.skipped;
+    if (r.skipped.length > 0) {
+      // 静默丢弃会让用户以为导入的包丢了，必须明确提示
+      Message.warning({
+        content: `资源包清单有 ${r.skipped.length} 行无法解析：\n${r.skipped.join("\n")}`,
+        duration: 10000,
+      });
+    }
+  } catch (e) {
+    if (seq === refreshSeq) Message.error(`读取资源包清单失败：${e}`);
+  } finally {
+    // 只有最后一次请求才能解除加载态，否则先返回的会把后面的加载态清掉
+    if (seq === refreshSeq) packBusy.value = false;
+  }
+}
+
+/** 导入 jar：先选文件，再按当前类型与目标版本导入 */
+async function runImportJar() {
+  // 置位必须在打开文件对话框之前：对话框返回后才置位的话，
+  // 连点两次会开出两个对话框并触发两次导入
+  if (importBusy.value) return;
+  importBusy.value = true;
+
+  // 类型与目标版本在打开对话框前定下来，之后不再读取响应式状态，
+  // 保证「校验用的值」与「实际发出的值」是同一个
+  const kind = importKind.value;
+  const dv = importDataVersion.value;
+
+  try {
+    const picked = await open({
+      multiple: false,
+      title: kind === 2 ? "选择模组 jar" : "选择 Minecraft 客户端 jar",
+      filters:
+        kind === 2
+          ? [{ name: "模组 / 资源包", extensions: ["jar", "zip"] }]
+          : [{ name: "Minecraft 客户端", extensions: ["jar"] }],
+    });
+    if (typeof picked !== "string") return;
+
+    // 模组包必须指定叠加到哪个版本：jar 内没有这个信息
+    if (kind === 2 && dv <= 0) {
+      Message.warning("请先选择模组包要叠加到的游戏版本");
+      return;
+    }
+
+    const out: ImportOutcome = await importJar(picked, kind, kind === 2 ? dv : 0);
+    Message.success({
+      content:
+        `已导入 ${out.name}：${out.blocks} 方块 / ${out.models} 模型 / ${out.textures} 贴图` +
+        `（${out.kindLabel}，${out.mcVersion}，${formatSize(out.size)}）`,
+      duration: 6000,
+    });
+    // 跳过的内容必须告知：否则用户以为导入完整
+    const notes: string[] = [];
+    if (out.failedBlockstates > 0) {
+      notes.push(`${out.failedBlockstates} 个 blockstate 解析失败被跳过`);
+    }
+    if (out.failedBlocks > 0) {
+      notes.push(`${out.failedBlocks} 个方块因模型无法解析被跳过`);
+    }
+    if (notes.length > 0) {
+      Message.warning({ content: notes.join("；"), duration: 8000 });
+    }
+    await refreshPacks();
+  } catch (e) {
+    Message.error(`导入失败：${e}`);
+  } finally {
+    importBusy.value = false;
+  }
+}
+
+async function togglePack(rec: PackEntry, enabled: boolean) {
+  // 同一项有操作在执行时不再受理，避免两个请求交错后开关与实际不符
+  if (packPending.value.has(rec.file)) return;
+  markPending(rec.file, true);
+  try {
+    await setPackEnabled(rec.file, enabled);
+    rec.enabled = enabled;
+  } catch (e) {
+    // 失败时把开关状态改回去，避免界面与实际不一致
+    rec.enabled = !enabled;
+    Message.error(`操作失败：${e}`);
+  } finally {
+    markPending(rec.file, false);
+  }
+}
+
+async function removePack(rec: PackEntry) {
+  if (packPending.value.has(rec.file)) return;
+  markPending(rec.file, true);
+  try {
+    await deletePack(rec.file);
+    Message.success(`已删除 ${rec.name}`);
+    await refreshPacks();
+  } catch (e) {
+    Message.error(`删除失败：${e}`);
+  } finally {
+    markPending(rec.file, false);
+  }
+}
+
+/** 打开资源包管理时一并取出可选的叠加版本 */
+async function prepareOverlayVersions() {
+  if (overlayVersions.value.length > 0) return;
+  try {
+    overlayVersions.value = await listBlockVersions();
+    // 默认选最新版本：模组通常针对较新的版本
+    if (importDataVersion.value <= 0 && overlayVersions.value.length > 0) {
+      importDataVersion.value =
+        overlayVersions.value[overlayVersions.value.length - 1].dataVersion;
+    }
+  } catch (e) {
+    // 取不到版本列表时模组包无法指定叠加目标，导入会被拒绝；
+    // 这不是「仅影响默认值」，必须显式告知，否则用户只会看到导入失败
+    Message.error(`读取可用版本失败，模组包暂时无法导入：${e}`);
+  }
+}
+
+async function openPacksPanel() {
+  await prepareOverlayVersions();
+  await openPacks();
+}
+
 async function openBackups() {
   backupOpen.value = true;
   await Promise.all([refreshBackups(), refreshLogs()]);
@@ -607,6 +795,7 @@ const close = () => appWindow.close();
       <a-button size="small" :disabled="!selected" @click="openConvert">版本转换</a-button>
       <a-button size="small" @click="openDuplicates">重复文件筛查</a-button>
       <a-button size="small" @click="openBackups">备份管理</a-button>
+      <a-button size="small" @click="openPacksPanel">资源包管理</a-button>
       <span class="preview__spacer" />
       <span class="hint-dim">
         共 {{ files.length }} 个投影<span v-if="searchText">，匹配 {{ filteredFiles.length }} 个</span>
@@ -868,6 +1057,98 @@ const close = () => appWindow.close();
           </a-table>
         </template>
         <a-empty v-else description="请先选择目标版本并分析差异" />
+      </a-spin>
+    </a-modal>
+
+    <a-modal
+      v-model:visible="packOpen"
+      title="资源包管理"
+      :width="900"
+      :footer="false"
+      unmount-on-close
+    >
+      <div class="hint-dim" style="margin-bottom: 12px">
+        内置基础库已含 1.13.2 ~ 26.3 的贴图，通常无需手动导入。
+        只有在使用模组、或需要更新的正式版贴图时，才需要导入 jar。
+      </div>
+
+      <a-space style="margin-bottom: 12px" wrap>
+        <a-radio-group v-model="importKind" type="button" size="small">
+          <a-radio :value="1">MC 版本包</a-radio>
+          <a-radio :value="2">模组包</a-radio>
+        </a-radio-group>
+        <a-select
+          v-if="importKind === 2"
+          v-model="importDataVersion"
+          size="small"
+          style="width: 190px"
+          placeholder="叠加到哪个版本"
+        >
+          <a-option
+            v-for="v in overlayVersions"
+            :key="v.dataVersion"
+            :value="v.dataVersion"
+          >
+            {{ v.name }}
+          </a-option>
+        </a-select>
+        <a-button size="small" type="primary" :loading="importBusy" @click="runImportJar">
+          导入 jar…
+        </a-button>
+        <a-button size="small" :loading="packBusy" @click="refreshPacks">刷新</a-button>
+      </a-space>
+
+      <div class="hint-dim" style="margin-bottom: 10px">
+        选具体的 .jar 文件而不是文件夹：
+        <code>.minecraft\versions\&lt;版本&gt;\&lt;版本&gt;.jar</code>
+        。要选客户端而不是服务端——服务端没有贴图资源。
+      </div>
+
+      <a-spin :loading="packBusy" style="width: 100%">
+        <a-alert v-if="packs.length === 0" type="normal">
+          尚未导入任何资源包
+        </a-alert>
+        <a-table
+          v-else
+          :columns="packColumns"
+          :data="packs"
+          :pagination="{ pageSize: 8 }"
+          size="small"
+          row-key="file"
+        >
+          <template #kind="{ record }">
+            <a-tag size="small">{{ record.kindLabel }}</a-tag>
+          </template>
+          <template #version="{ record }">
+            <span>{{ record.mcVersion || "-" }}</span>
+          </template>
+          <template #size="{ record }">
+            <span v-if="record.exists">{{ formatSize(record.size) }}</span>
+            <a-tag v-else size="small" color="red">文件缺失</a-tag>
+          </template>
+          <template #state="{ record }">
+            <a-switch
+              size="small"
+              :model-value="record.enabled"
+              :loading="packPending.has(record.file)"
+              @change="(v: any) => togglePack(record, Boolean(v))"
+            />
+          </template>
+          <template #actions="{ record }">
+            <a-popconfirm
+              content="删除后需要重新导入才能恢复，确定删除？"
+              @ok="removePack(record)"
+            >
+              <a-button
+                size="mini"
+                status="danger"
+                :loading="packPending.has(record.file)"
+              >
+                删除
+              </a-button>
+            </a-popconfirm>
+          </template>
+        </a-table>
       </a-spin>
     </a-modal>
 
