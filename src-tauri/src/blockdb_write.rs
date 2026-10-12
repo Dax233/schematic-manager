@@ -199,9 +199,30 @@ pub fn serialize(db: &BlockDb) -> AppResult<Vec<u8>> {
     out.w_u32(version.blocks.len() as u32)?;
     for (i, b) in version.blocks.iter().enumerate() {
         out.w_u32(block_name_idx[i])?;
+        // 变体与 multipart 的条数写成 u16，必须先校验上限。
+        // `as u16` 会静默截断：65536 条会写成 0，而写入端仍照实写 65536 条，
+        // 读取端按 0 条读取后，会把变体的字节当成下一个方块的字段继续消费，
+        // 整个版本段从此错位——不报错，只是数据全错。
+        // 同文件的 write_model 对元素数已有相同的守卫，这里保持一致。
+        if b.variants.len() > u16::MAX as usize {
+            return Err(AppError::Corrupt(format!(
+                "方块 {} 的变体数为 {}，超过上限 {}",
+                b.name,
+                b.variants.len(),
+                u16::MAX
+            )));
+        }
         out.w_u16(b.variants.len() as u16)?;
         for (k, v) in b.variants.iter().enumerate() {
             write_variant(&mut out, v, variant_when_idx[i][k])?;
+        }
+        if b.multipart.len() > u16::MAX as usize {
+            return Err(AppError::Corrupt(format!(
+                "方块 {} 的 multipart 数为 {}，超过上限 {}",
+                b.name,
+                b.multipart.len(),
+                u16::MAX
+            )));
         }
         out.w_u16(b.multipart.len() as u16)?;
         for (k, v) in b.multipart.iter().enumerate() {
@@ -568,6 +589,50 @@ mod tests {
         db.langs.push(extra);
         let e = serialize(&db).unwrap_err().to_string();
         assert!(e.contains("只容纳一个语言表"), "应说明语言表限制：{e}");
+    }
+
+    /// 变体数超过 u16 时必须报错，而不是截断成 0。
+    ///
+    /// 截断的后果不是 panic 而是**级联静默错位**：写入端声明 0 条却照实
+    /// 写 65536 条，读取端按 0 条读取后，把变体的字节当成下一个方块的
+    /// 字段继续消费，整个版本段从此错位，且全程不报错。
+    #[test]
+    fn rejects_variant_count_over_u16() {
+        let mut db = sample_db();
+        let v = db.versions[0].blocks[0].variants[0].clone();
+        db.versions[0].blocks[0].variants = vec![v; u16::MAX as usize + 1];
+        let e = serialize(&db).unwrap_err().to_string();
+        assert!(
+            e.contains("变体数") && e.contains("超过上限"),
+            "应说明变体数超限：{e}"
+        );
+    }
+
+    /// multipart 数同理。
+    #[test]
+    fn rejects_multipart_count_over_u16() {
+        let mut db = sample_db();
+        let v = db.versions[0].blocks[0].multipart[0].clone();
+        db.versions[0].blocks[0].multipart = vec![v; u16::MAX as usize + 1];
+        let e = serialize(&db).unwrap_err().to_string();
+        assert!(
+            e.contains("multipart") && e.contains("超过上限"),
+            "应说明 multipart 数超限：{e}"
+        );
+    }
+
+    /// 恰好等于上限时不应被误判为超限。
+    #[test]
+    fn accepts_variant_count_at_u16_limit() {
+        let mut db = sample_db();
+        let v = db.versions[0].blocks[0].variants[0].clone();
+        db.versions[0].blocks[0].variants = vec![v; u16::MAX as usize];
+        let r = serialize(&db);
+        assert!(
+            r.is_ok(),
+            "恰好 65535 条变体应可写出，实际：{:?}",
+            r.err().map(|e| e.to_string())
+        );
     }
 
     #[test]
