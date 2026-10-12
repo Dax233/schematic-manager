@@ -21,12 +21,17 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
-# 同一个 ref 上只保留最新的一次运行。连续推送时旧运行已被新提交取代，
-# 继续跑只会白占 runner，并可能与新运行争抢同一个 Release 与版本号提交。
-# 正式发布（tag）与快照（main）的 ref 不同，因此两者不会互相取消。
+# 并发控制：**只串行化，不取消**。
+#
+# 需求是「每次推送提交时自动构建并创建 Release」。若开 cancel-in-progress，
+# 连续推送会让前一次运行被取消，那次提交就永远不会产出 Release——实测
+# 因此丢了两次发布（#45、#46 被取消，对应提交没有对应 Release）。
+# 因此这里只保证同一 ref 上的运行按顺序执行，不去打断进行中的构建。
+#
+# 正式发布（tag）与快照（main）的 ref 不同，两者不会互相排队。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   # ---------------------------------------------------------------- 计算版本
