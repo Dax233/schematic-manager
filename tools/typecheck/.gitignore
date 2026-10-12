@@ -5,3 +5,10 @@ generated/
 *.rlib
 libtauri.rlib
 libserde.rlib
+*.pdb
+*.lib
+*.exp
+*.d
+*.dSYM/
+check.exe
+cmds.rmeta

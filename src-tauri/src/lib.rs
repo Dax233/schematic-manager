@@ -16,6 +16,7 @@ mod jar_index;
 mod litematic;
 mod mcver;
 mod mesh;
+mod model_pack;
 mod nbt;
 mod png;
 mod pool;

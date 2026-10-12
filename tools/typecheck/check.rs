@@ -8,6 +8,7 @@
 #[path = "error_stub.rs"] mod error;
 #[path = "../../src-tauri/src/duplicate.rs"] mod duplicate;
 #[path = "../../src-tauri/src/mesh.rs"] mod mesh;
+#[path = "../../src-tauri/src/model_pack.rs"] mod model_pack;
 #[path = "../../src-tauri/src/nbt.rs"] mod nbt;
 #[path = "../../src-tauri/src/png.rs"] mod png;
 #[path = "../../src-tauri/src/pool.rs"] mod pool;
