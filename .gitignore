@@ -1,0 +1,42 @@
+﻿# ---- Node / 前端 ----
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+*.tsbuildinfo
+
+# ---- Rust / Tauri ----
+target/
+src-tauri/target/
+src-tauri/gen/
+
+# ---- 构建产物 ----
+build/
+out/
+*.exe
+*.msi
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+*.snap
+
+# ---- 大体积数据（不进仓库）----
+cache/
+data/versions/
+*.jar
+*.zip
+
+# ---- 编辑器 / 系统 ----
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# ---- 运行期数据 ----
+packs/
+backups/
+diag.log
