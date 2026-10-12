@@ -22,7 +22,15 @@ const root = shallowRef<THREE.Group | null>(null);
 let threeScene: THREE.Scene | null = null;
 let camera: THREE.PerspectiveCamera | null = null;
 let controls: OrbitControls | null = null;
+// 按需渲染：只在场景或相机变化时重绘。持续跑 requestAnimationFrame
+// 会让笔记本常态占用 GPU，而这是静态预览，不操作时画面不会变。
 let raf = 0;
+let needsRender = true;
+
+/** 请求在下一帧重绘 */
+function requestRender() {
+  needsRender = true;
+}
 const disposables: Array<{ dispose: () => void }> = [];
 
 const PRESETS: Record<string, [number, number]> = {
@@ -92,6 +100,9 @@ function buildMeshes(data: SceneData) {
       transparent: true,
       alphaTest: 0.5,
     });
+    // 立即套用当前亮度：切换投影会重建材质，若不在创建时设置，
+    // 画面会回到 100% 而滑杆仍显示原值，两者不一致
+    mat.color.setScalar(props.brightness);
 
     const mesh = new THREE.Mesh(geo, mat);
     root.value.add(mesh);
@@ -134,13 +145,25 @@ function applyPreset(name: string) {
   controls.target.copy(center);
   camera.position.copy(center).addScaledVector(dir, -dist);
   controls.update();
-  render();
+  renderSoon();
 }
 
+/**
+ * 立即绘制一帧。
+ *
+ * 供导出预览图等「必须马上拿到画面」的场景使用；
+ * 常规刷新走 requestRender，由渲染循环按需重绘。
+ */
 function render() {
   if (renderer.value && threeScene && camera) {
+    needsRender = false;
     renderer.value.render(threeScene, camera);
   }
+}
+
+/** 相机或场景变化后请求重绘 */
+function renderSoon() {
+  requestRender();
 }
 
 function onResize() {
@@ -152,14 +175,20 @@ function onResize() {
   renderer.value.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  render();
+  renderSoon();
 }
 
 onMounted(() => {
   const el = host.value;
   if (!el) return;
   try {
-    const r = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    const r = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true,
+      // 导出预览图要在 render() 之后异步读取画布，
+      // 不保留绘制缓冲会读到空白图
+      preserveDrawingBuffer: true,
+    });
     r.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     r.setClearColor(0x000000, 0);
     el.appendChild(r.domElement);
@@ -168,8 +197,8 @@ onMounted(() => {
     const scene = new THREE.Scene();
     threeScene = scene;
 
-    // 补光：几何自带明暗（顶点颜色），这里只需保证不会被判为全黑
-    scene.add(new THREE.AmbientLight(0xffffff, 1));
+    // 不加光源：材质是 MeshBasicMaterial，本就不参与光照计算，
+    // 立体感完全来自逐顶点的明暗系数（写入 color 属性）。
 
     const group = new THREE.Group();
     scene.add(group);
@@ -183,9 +212,13 @@ onMounted(() => {
 
     const loop = () => {
       raf = requestAnimationFrame(loop);
-      controls?.update();
-      if (renderer.value && camera) {
-        renderer.value.render(scene, camera);
+      const damping = controls?.update() ?? false;
+      // 阻尼未停时必须每帧重绘，否则拖动动画会卡住
+      if (needsRender || damping) {
+        needsRender = false;
+        if (renderer.value && camera) {
+          renderer.value.render(scene, camera);
+        }
       }
     };
     loop();
