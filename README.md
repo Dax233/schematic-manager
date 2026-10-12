@@ -1,4 +1,5 @@
 ﻿# 投影文件管理器 / Schematic Manager
+<img width="1560" height="980" alt="2026-10-12_010941" src="https://github.com/user-attachments/assets/d7855b1d-78b4-4957-9537-6c146bfee77f" />
 
 跨平台的 Minecraft 投影（`.litematic`）文件管理与预览工具。
 
