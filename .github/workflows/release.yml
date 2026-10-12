@@ -106,8 +106,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
+          # 不启用 cache: pnpm —— 仓库尚未提交 pnpm-lock.yaml，
+          # 开启缓存会让 setup-node 直接报错。等锁文件入库后再打开。
           node-version: 20
-          cache: pnpm
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
