@@ -2,7 +2,7 @@
 import { computed, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { TableColumnData } from "@arco-design/web-vue";
+import type { TableColumnData, TableData } from "@arco-design/web-vue";
 import { Message } from "@arco-design/web-vue";
 import { analyzeSchematic, saveMetadata, scanLitematics } from "./api";
 import type { AnalysisResult, SchematicSummary } from "./types";
@@ -113,7 +113,10 @@ async function saveDraft() {
   }
 }
 
-async function onRowClick(record: SchematicSummary) {
+// Arco 的 row-click 回调给出的是通用的 TableData，
+// 这里收窄回业务类型；行数据本就来自 files，字段是一致的。
+async function onRowClick(raw: TableData) {
+  const record = raw as unknown as SchematicSummary;
   selected.value = record;
   analysis.value = null;
   resetDraft(record);
