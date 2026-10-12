@@ -1,4 +1,4 @@
-﻿# ---- Node / 前端 ----
+# ---- Node / 前端 ----
 node_modules/
 dist/
 dist-ssr/
@@ -21,6 +21,15 @@ out/
 *.deb
 *.rpm
 *.snap
+
+# ---- 发布流程的中间产物（由 .github/workflows/release.yml 生成）----
+# 本地演练这两个脚本时会在仓库根目录留下它们，误入库后
+# 会与工作流自己生成的文件冲突
+assets.json
+release-notes.md
+release-assets/
+artifacts/
+dist-artifacts/
 
 # ---- 大体积数据（不进仓库）----
 cache/
