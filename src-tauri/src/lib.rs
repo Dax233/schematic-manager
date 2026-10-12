@@ -5,6 +5,7 @@ mod blockdb;
 mod camera;
 mod commands;
 mod dto;
+mod duplicate;
 mod error;
 mod geometry;
 mod litematic;

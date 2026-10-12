@@ -17,14 +17,33 @@ if (Test-Path $cargo) { $env:Path = "$cargo;$env:Path" }
 $env:CARGO_MANIFEST_DIR = (Resolve-Path "$here\..\..\src-tauri").Path
 
 $stub = Join-Path $here 'libflate2.rlib'
-Write-Host "1/2 编译 flate2 桩…"
+# 新增模块却忘记登记到 check.rs，会导致该模块的测试静默不执行——
+# 表面上「测试通过」，实际一次都没跑。这里做一次交叉核对。
+$srcDir = Join-Path $here '..\..\src-tauri\src'
+$checkText = Get-Content (Join-Path $here 'check.rs') -Raw
+# 这些模块依赖 tauri / serde，无法用桩替代，明确排除
+$excluded = @('lib.rs', 'main.rs', 'commands.rs', 'dto.rs', 'error.rs')
+$missing = @()
+Get-ChildItem $srcDir -Filter '*.rs' -File | ForEach-Object {
+    if ($excluded -contains $_.Name) { return }
+    $mod = [System.IO.Path]::GetFileNameWithoutExtension($_.Name)
+    if ($checkText -notmatch "mod $mod;") { $missing += $_.Name }
+}
+if ($missing.Count -gt 0) {
+    Write-Host "以下模块未登记到 check.rs，其测试不会被执行："
+    $missing | ForEach-Object { Write-Host "  $_" }
+    Write-Host "请加入 check.rs 的 mod 列表；确实无法检查时加入本文件的 excluded 列表。"
+    exit 1
+}
+
+Write-Host "1/3 核对模块登记并编译 flate2 桩…"
 Remove-Item $stub -Force -ErrorAction SilentlyContinue
 # 必须产出真正的 rlib（--emit=link），否则 --extern 会报 archive 无法解析。
 # 用 cmd 重定向，避免 PowerShell 把 rustc 的 stderr 警告当成致命错误。
 & cmd /c "rustc --edition 2021 --crate-type lib --crate-name flate2 --emit=link -o `"$stub`" `"$(Join-Path $here 'flate2.rs')`" 2>nul"
 if (-not (Test-Path $stub)) { Write-Host "  flate2 桩编译失败"; exit 1 }
 
-Write-Host "2/2 类型检查逻辑模块…"
+Write-Host "2/3 类型检查逻辑模块…"
 $out = & rustc --edition 2021 --crate-type lib --crate-name check --test --emit=metadata `
     --extern "flate2=$stub" (Join-Path $here 'check.rs') -o (Join-Path $here 'check.rmeta') 2>&1
 $out | Where-Object { $_ -notmatch '^\s*$' }
