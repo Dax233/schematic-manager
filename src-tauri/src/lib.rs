@@ -1,4 +1,5 @@
 mod backup;
+mod blockdb;
 mod commands;
 mod dto;
 mod error;
