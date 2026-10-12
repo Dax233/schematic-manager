@@ -9,6 +9,7 @@ mod geometry;
 mod litematic;
 mod mcver;
 mod nbt;
+mod transform;
 mod visibility;
 
 /// 应用入口。以库形式导出，便于将来接入移动端入口。
