@@ -42,6 +42,20 @@ const saving = ref(false);
 // 元数据编辑草稿。选中文件时用文件中的值填充
 const draft = ref({ name: "", author: "", description: "" });
 const dirty = ref(false);
+const searchText = ref("");
+
+/// 按名称、作者、文件名、路径过滤；同时匹配中英文输入不做转换，
+/// 保持与输入一致即可——投影命名本身就是混合的。
+const filteredFiles = computed(() => {
+  const q = searchText.value.trim().toLowerCase();
+  if (!q) return files.value;
+  return files.value.filter((f) => {
+    const hay = [f.fileName, f.path, f.name ?? "", f.author ?? ""]
+      .join("\n")
+      .toLowerCase();
+    return hay.includes(q);
+  });
+});
 const activeBlock = ref<{ name: string } | null>(null);
 
 // 3D 预览
@@ -451,14 +465,26 @@ const close = () => appWindow.close();
 
     <div class="toolbar">
       <a-button size="small" type="primary" @click="pickDirectory">添加目录</a-button>
-      <a-input-search size="small" placeholder="搜索名称/作者/文件名…" style="width: 240px" />
+      <a-input-search
+        v-model="searchText"
+        size="small"
+        placeholder="搜索名称/作者/文件名…"
+        style="width: 240px"
+        allow-clear
+      />
+      <a-button size="small" :disabled="!selected" @click="openReplace">方块替换</a-button>
+      <a-button size="small" @click="openBackups">备份管理</a-button>
+      <span class="preview__spacer" />
+      <span class="hint-dim">
+        共 {{ files.length }} 个投影<span v-if="searchText">，匹配 {{ filteredFiles.length }} 个</span>
+      </span>
     </div>
 
     <div class="workbench">
       <div class="sidebar">
         <a-table
           :columns="columns"
-          :data="files"
+          :data="filteredFiles"
           :pagination="false"
           row-key="path"
           size="small"

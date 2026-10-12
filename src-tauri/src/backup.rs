@@ -157,6 +157,29 @@ pub fn matches_target(backup: &Path, target: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// 路径是否位于指定根目录之内。
+///
+/// 删除与还原的参数来自前端，必须限定在备份目录内，否则命令层就成了
+/// 一个可以删除任意文件的入口。
+///
+/// 比较前先规范化：否则 `backups/../other` 之类的路径会绕过检查。
+pub fn is_inside(root: &Path, path: &Path) -> bool {
+    let norm = |p: &Path| -> PathBuf {
+        let mut out = PathBuf::new();
+        for seg in p.components() {
+            match seg {
+                std::path::Component::ParentDir => {
+                    out.pop();
+                }
+                std::path::Component::CurDir => {}
+                other => out.push(other.as_os_str()),
+            }
+        }
+        out
+    };
+    norm(path).starts_with(norm(root))
+}
+
 /// 操作日志文件位置
 pub fn log_path(root: &Path) -> PathBuf {
     root.join("operations.log")
@@ -360,4 +383,17 @@ mod tests {
         assert!(read_log(&base.join("nope"), 10).is_empty());
         let _ = std::fs::remove_dir_all(&base);
     }
+
+    #[test]
+    fn is_inside_rejects_paths_outside_root() {
+        let root = PathBuf::from("/data/backups");
+        assert!(is_inside(&root, &root.join("demo").join("a.litematic")));
+        assert!(is_inside(&root, &root));
+        // 同级或完全无关的路径必须拒绝
+        assert!(!is_inside(&root, &PathBuf::from("/data/other/a.litematic")));
+        assert!(!is_inside(&root, &PathBuf::from("/etc/passwd")));
+        // 用 .. 逃逸的路径不能绕过检查
+        assert!(!is_inside(&root, &root.join("..").join("other").join("a.litematic")));
+    }
+
 }

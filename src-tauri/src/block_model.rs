@@ -137,7 +137,23 @@ pub fn block_prop_domain(
     // 因此它列出的取值最接近游戏内的默认状态。
     let mut defaults: Vec<(String, String)> = Vec::new();
 
-    for (i, v) in bd.variants.iter().chain(bd.multipart.iter()).enumerate() {
+    // 默认值只看 variants[0]：legacy-cpp 要求 !variants.empty() &&
+    // !variants[0].when.empty()（blockdb.cpp:552）。若把 multipart 也算进
+    // 「第一个变体」，variants 为空的方块会拿 multipart[0] 当默认值。
+    let first_variant_when = bd
+        .variants
+        .first()
+        .map(|v| v.when.as_str())
+        .unwrap_or("");
+    if !first_variant_when.is_empty() {
+        for alt in first_variant_when.split('|') {
+            for (k, val) in parse_conds(alt) {
+                defaults.push((k, val));
+            }
+        }
+    }
+
+    for v in bd.variants.iter().chain(bd.multipart.iter()) {
         if v.when.is_empty() {
             continue;
         }
@@ -147,23 +163,22 @@ pub fn block_prop_domain(
                 if !slot.contains(&val) {
                     slot.push(val.clone());
                 }
-                // 只有第一个变体参与默认值
-                if i == 0 && !defaults.iter().any(|(dk, _)| dk == &k) {
-                    defaults.push((k, val));
-                }
             }
         }
     }
-    for vals in domain.values_mut() {
-        vals.sort();
-    }
-    // 第一个变体没覆盖到的属性，用其取值域中的第一个值兜底
+    // 兜底必须在排序**之前**取「首次出现」的值：legacy-cpp 的
+    // DefaultProps 用的是 bd.props 的首次出现顺序（blockdb.cpp:556-557），
+    // 而排序后取首值会拿到字典序最小的那个，两者对「首变体未提及该属性」
+    // 的方块会给出不同的默认状态（实测 46469 个组合中有 1264 个不同）。
     for (k, vals) in &domain {
         if !defaults.iter().any(|(dk, _)| dk == k) {
             if let Some(v) = vals.first() {
                 defaults.push((k.clone(), v.clone()));
             }
         }
+    }
+    for vals in domain.values_mut() {
+        vals.sort();
     }
     Some((domain, defaults))
 }
@@ -236,6 +251,31 @@ mod tests {
         }
     }
 
+
+    /// 默认值必须取「首次出现」的值，而不是字典序最小的值。
+    ///
+    /// 这里刻意让两者不同：facing 的取值域排序后以 east 开头，
+    /// 但首次出现（即首变体）是 north。若按字典序取，会得到 east。
+    /// legacy-cpp 的 DefaultProps 用的是 bd.props 的首次出现顺序。
+    #[test]
+    fn defaults_use_first_occurrence_not_alphabetical() {
+        let bd = BlockDef {
+            name: "minecraft:oak_stairs".into(),
+            variants: vec![
+                var("facing=north", 0),
+                var("facing=east|facing=south|facing=west", 0),
+            ],
+            multipart: Vec::new(),
+        };
+        let db = db_with(bd, "1.20.1", 3465);
+        let info = DbBlockInfo { db: &db, version: &db.versions[0] };
+        let d = info.default_props("minecraft:oak_stairs");
+        assert_eq!(
+            d.iter().find(|(k, _)| k == "facing").map(|(_, v)| v.as_str()),
+            Some("north"),
+            "默认值应为首次出现的 north，而不是字典序最小的 east；实际 {d:?}"
+        );
+    }
     #[test]
     fn parse_conds_splits_on_comma_and_first_equals() {
         let c = parse_conds("facing=east,half=bottom");

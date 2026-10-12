@@ -230,14 +230,22 @@ fn db_archive(app: Option<&tauri::AppHandle>) -> AppResult<PathBuf> {
 }
 
 /// 载入内置方块库。load 会自行处理 zlib 解压。
-fn open_db() -> AppResult<crate::blockdb::BlockDb> {
-    crate::blockdb::BlockDb::load(&db_archive(None)?.to_string_lossy())
+///
+/// 必须传入 AppHandle：打包后方块库位于 Tauri 的资源目录，
+/// 只查 exe_dir()/res/ 或编译期的 CARGO_MANIFEST_DIR 在用户机器上都不存在，
+/// 忽略资源目录会让方块检索与替换在发布版整块失效。
+fn open_db(app: Option<&tauri::AppHandle>) -> AppResult<crate::blockdb::BlockDb> {
+    crate::blockdb::BlockDb::load(&db_archive(app)?.to_string_lossy())
 }
 
 /// 跨版本检索方块
 #[tauri::command]
-pub fn search_blocks(query: String, limit: Option<usize>) -> Result<Vec<BlockHitDto>, String> {
-    let db = open_db().map_err(|e| e.to_string())?;
+pub fn search_blocks(
+    app: tauri::AppHandle,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<BlockHitDto>, String> {
+    let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
     Ok(crate::block_search::search(&db, &query, limit.unwrap_or(200))
         .into_iter()
         .map(|h| BlockHitDto {
@@ -255,8 +263,8 @@ pub fn search_blocks(query: String, limit: Option<usize>) -> Result<Vec<BlockHit
 
 /// 列出方块库中的全部版本
 #[tauri::command]
-pub fn list_block_versions() -> Result<Vec<VersionOptionDto>, String> {
-    let db = open_db().map_err(|e| e.to_string())?;
+pub fn list_block_versions(app: tauri::AppHandle) -> Result<Vec<VersionOptionDto>, String> {
+    let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
     Ok(crate::block_search::version_options(&db)
         .into_iter()
         .map(|v| VersionOptionDto {
@@ -271,8 +279,12 @@ pub fn list_block_versions() -> Result<Vec<VersionOptionDto>, String> {
 
 /// 预计会被替换的方块数量，不写入文件
 #[tauri::command]
-pub fn preview_replace(schematic_path: String, rule: ReplaceRuleDto) -> Result<ReplaceOutcomeDto, String> {
-    let db = open_db().map_err(|e| e.to_string())?;
+pub fn preview_replace(
+    app: tauri::AppHandle,
+    schematic_path: String,
+    rule: ReplaceRuleDto,
+) -> Result<ReplaceOutcomeDto, String> {
+    let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
     let sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
     let summary = sc.summary();
     let vi = db
@@ -288,8 +300,12 @@ pub fn preview_replace(schematic_path: String, rule: ReplaceRuleDto) -> Result<R
 
 /// 执行方块替换并写回文件。写前先备份。
 #[tauri::command]
-pub fn apply_replace(schematic_path: String, rule: ReplaceRuleDto) -> Result<ReplaceOutcomeDto, String> {
-    let db = open_db().map_err(|e| e.to_string())?;
+pub fn apply_replace(
+    app: tauri::AppHandle,
+    schematic_path: String,
+    rule: ReplaceRuleDto,
+) -> Result<ReplaceOutcomeDto, String> {
+    let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
     let mut sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
     let summary = sc.summary();
     let vi = db
@@ -304,12 +320,11 @@ pub fn apply_replace(schematic_path: String, rule: ReplaceRuleDto) -> Result<Rep
         return Ok(out.into());
     }
 
-    // 改动前先备份：替换是批量改写，出错时这是唯一的回退途径
-    let base = Path::new(&schematic_path)
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
-    backup::create(&base, Path::new(&schematic_path), "replace").map_err(|e| e.to_string())?;
+    // 改动前先备份：替换是批量改写，出错时这是唯一的回退途径。
+    // 备份根目录必须与 list_backups / save_metadata 一致（都是 exe_dir），
+    // 否则替换产生的备份在「备份管理」里永远看不到，也无法还原。
+    backup::create(&exe_dir(), Path::new(&schematic_path), "replace")
+        .map_err(|e| e.to_string())?;
     sc.save_to(&schematic_path).map_err(|e| e.to_string())?;
 
     let name = Path::new(&schematic_path)
@@ -353,6 +368,11 @@ pub fn restore_backup(backup_path: String, target_path: String) -> Result<(), St
             t.file_name().map(|v| v.to_string_lossy().into_owned()).unwrap_or_default()
         ));
     }
+    // 还原是覆盖写：先把当前内容备份一份，否则一旦还原错了，
+    // 目标文件的现有内容就只剩更早的备份可寻。
+    if t.is_file() {
+        backup::create(&exe_dir(), &t, "restore-before").map_err(|e| e.to_string())?;
+    }
     backup::restore(&b, &t).map_err(|e| e.to_string())?;
     let name = t.file_name().map(|v| v.to_string_lossy().into_owned()).unwrap_or_default();
     let _ = backup::append_log(&backup::backup_root(&exe_dir()), &format!("还原 {name} <- {backup_path}"));
@@ -363,6 +383,12 @@ pub fn restore_backup(backup_path: String, target_path: String) -> Result<(), St
 #[tauri::command]
 pub fn delete_backup(backup_path: String) -> Result<(), String> {
     let p = PathBuf::from(&backup_path);
+    // 参数来自前端，必须限定在备份根目录内：删除是不可逆操作，
+    // 不能允许任意路径被删掉。
+    let root = backup::backup_root(&exe_dir());
+    if !backup::is_inside(&root, &p) {
+        return Err(format!("拒绝删除备份目录之外的路径：{}", p.display()));
+    }
     backup::delete(&p).map_err(|e| e.to_string())?;
     let name = p.file_name().map(|v| v.to_string_lossy().into_owned()).unwrap_or_default();
     let _ = backup::append_log(&backup::backup_root(&exe_dir()), &format!("删除备份 {name}"));

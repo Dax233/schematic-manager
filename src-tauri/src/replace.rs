@@ -145,6 +145,12 @@ pub fn replace_blocks(
     info: &dyn BlockInfo,
     limit: u64,
 ) -> ReplaceOutcome {
+    // 空名会让方块被改成无名状态，写出损坏数据。
+    // legacy-cpp 在 ReplaceBlocks 开头即做同样检查（litematic.cpp:457）。
+    if rule.from_name.is_empty() || rule.to_name.is_empty() {
+        return ReplaceOutcome::default();
+    }
+
     let mut outcome = ReplaceOutcome::default();
 
     for r in sc.regions.iter_mut() {
