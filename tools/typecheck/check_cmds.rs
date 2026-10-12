@@ -28,6 +28,7 @@
 #[path = "../../src-tauri/src/convert.rs"] mod convert;
 #[path = "../../src-tauri/src/duplicate.rs"] mod duplicate;
 #[path = "../../src-tauri/src/geometry.rs"] mod geometry;
+#[path = "../../src-tauri/src/jar_file.rs"] mod jar_file;
 #[path = "../../src-tauri/src/jar_index.rs"] mod jar_index;
 #[path = "../../src-tauri/src/litematic.rs"] mod litematic;
 #[path = "../../src-tauri/src/mcver.rs"] mod mcver;

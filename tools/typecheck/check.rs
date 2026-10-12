@@ -13,6 +13,7 @@
 #[path = "../../src-tauri/src/png.rs"] mod png;
 #[path = "../../src-tauri/src/pool.rs"] mod pool;
 #[path = "../../src-tauri/src/mcver.rs"] mod mcver;
+#[path = "../../src-tauri/src/jar_file.rs"] mod jar_file;
 #[path = "../../src-tauri/src/jar_index.rs"] mod jar_index;
 #[path = "../../src-tauri/src/litematic.rs"] mod litematic;
 #[path = "../../src-tauri/src/blockdb.rs"] mod blockdb;
