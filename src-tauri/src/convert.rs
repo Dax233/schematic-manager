@@ -4,7 +4,7 @@
 //! 目标版本里已不存在的方块必须逐条指定替代品，否则转换后这些方块
 //! 会变成无法识别的状态。为避免破坏原文件，转换结果另存为新文件。
 
-use crate::blockdb::{BlockDb, VersionDef};
+use crate::blockdb::BlockDb;
 use crate::litematic::Schematic;
 
 /// 转换中需要处理的一项：投影用到、但目标版本没有的方块
@@ -215,6 +215,7 @@ pub fn targets(db: &BlockDb, source_data_version: i32) -> Vec<ConvertTarget> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blockdb::VersionDef;
     use crate::blockdb::{BlockDef, Variant};
     use crate::litematic::{BlockState, Region};
     use std::collections::HashMap;

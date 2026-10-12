@@ -4,7 +4,7 @@
 //! BufferGeometry 与 DataTexture 的形状：按贴图分批的顶点数据，
 //! 外加每个批次要用到的贴图像素。
 
-use crate::blockdb::{BlockDb, TextureInfo, NO_TEXTURE};
+use crate::blockdb::{BlockDb, TextureInfo};
 use crate::error::{AppError, AppResult};
 use crate::litematic::Schematic;
 use crate::mesh;
@@ -160,6 +160,7 @@ pub fn build(schematic_path: &str, db_path: &str) -> AppResult<SceneData> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blockdb::NO_TEXTURE;
     use crate::blockdb::{BlockDef, Model, ModelElement, ModelFace, Variant, VersionDef};
     use crate::litematic::{BlockState, Region};
     use std::collections::HashMap;

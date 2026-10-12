@@ -49,3 +49,6 @@ Thumbs.db
 packs/
 backups/
 diag.log
+
+# 本地构建日志（演练 tauri build 时产生）
+build_out.log
