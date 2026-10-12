@@ -16,6 +16,7 @@
 #[path = "../../src-tauri/src/block_search.rs"] mod block_search;
 #[path = "../../src-tauri/src/geometry.rs"] mod geometry;
 #[path = "../../src-tauri/src/camera.rs"] mod camera;
+#[path = "../../src-tauri/src/convert.rs"] mod convert;
 #[path = "../../src-tauri/src/replace.rs"] mod replace;
 #[path = "../../src-tauri/src/scene.rs"] mod scene;
 #[path = "../../src-tauri/src/transform.rs"] mod transform;

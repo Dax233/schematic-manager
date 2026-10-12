@@ -3,6 +3,7 @@ mod block_model;
 mod block_search;
 mod blockdb;
 mod camera;
+mod convert;
 mod commands;
 mod dto;
 mod duplicate;
