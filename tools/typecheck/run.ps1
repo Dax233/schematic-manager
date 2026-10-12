@@ -11,7 +11,6 @@
 #
 # 用途：在没有网络、没有 cargo 依赖的情况下，快速发现真实编译错误。
 # 注意：这不是完整构建，也不能替代 CI —— 它只做类型检查，不链接、不运行。
-$ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $cargo = "$env:USERPROFILE\.cargo\bin"
 if (Test-Path $cargo) { $env:Path = "$cargo;$env:Path" }
@@ -19,8 +18,11 @@ $env:CARGO_MANIFEST_DIR = (Resolve-Path "$here\..\..\src-tauri").Path
 
 $stub = Join-Path $here 'libflate2.rlib'
 Write-Host "1/2 编译 flate2 桩…"
-& rustc --edition 2021 --crate-type lib --crate-name flate2 --emit=metadata,link `
-    -o $stub (Join-Path $here 'flate2.rs') 2>$null
+Remove-Item $stub -Force -ErrorAction SilentlyContinue
+# 必须产出真正的 rlib（--emit=link），否则 --extern 会报 archive 无法解析。
+# 用 cmd 重定向，避免 PowerShell 把 rustc 的 stderr 警告当成致命错误。
+& cmd /c "rustc --edition 2021 --crate-type lib --crate-name flate2 --emit=link -o `"$stub`" `"$(Join-Path $here 'flate2.rs')`" 2>nul"
+if (-not (Test-Path $stub)) { Write-Host "  flate2 桩编译失败"; exit 1 }
 
 Write-Host "2/2 类型检查逻辑模块…"
 $out = & rustc --edition 2021 --crate-type lib --crate-name check --test --emit=metadata `
