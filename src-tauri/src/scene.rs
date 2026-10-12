@@ -77,18 +77,21 @@ pub fn build_from(sc: &Schematic, db: &BlockDb) -> AppResult<SceneData> {
     let quads = visibility::collect_quads(sc, db, version_idx);
     let m = mesh::build(&quads);
 
-    // 统计方块库中查不到定义的方块种类，供界面提示
-    let mut unresolved = 0usize;
+    // 统计方块库中查不到定义的方块**种类**，供界面提示。
+    // 用集合去重：同一方块会出现在多个区域的调色板中，
+    // 逐项累加得到的是「(区域, 方块) 组合数」而不是种类数。
+    let mut unresolved: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for r in &sc.regions {
         for b in &r.palette {
             if b.is_air() {
                 continue;
             }
             if crate::block_model::find_block(db, version, &b.name).is_none() {
-                unresolved += 1;
+                unresolved.insert(b.name.as_str());
             }
         }
     }
+    let unresolved = unresolved.len();
 
     let mut batches = Vec::with_capacity(m.batches.len());
     for b in m.batches {
@@ -136,14 +139,22 @@ pub fn build_from(sc: &Schematic, db: &BlockDb) -> AppResult<SceneData> {
     })
 }
 
-/// 从文件载入并组装场景。
-pub fn build(schematic_path: &str, db_path: &str) -> AppResult<SceneData> {
-    let db = BlockDb::load(db_path)?;
+/// 从文件载入投影并组装场景，方块库由调用方提供。
+///
+/// 拆成独立入口是为了让调用方复用已载入的方块库：
+/// 它解压后约 5.6 MB、含 4 万余条方块定义，每次预览都重新解析会明显变慢。
+pub fn build_with_db(schematic_path: &str, db: &BlockDb) -> AppResult<SceneData> {
     if db.versions.is_empty() {
         return Err(AppError::Parse("方块库为空".into()));
     }
     let sc = Schematic::load(schematic_path)?;
-    build_from(&sc, &db)
+    build_from(&sc, db)
+}
+
+/// 从文件载入并组装场景。
+pub fn build(schematic_path: &str, db_path: &str) -> AppResult<SceneData> {
+    let db = BlockDb::load(db_path)?;
+    build_with_db(schematic_path, &db)
 }
 
 #[cfg(test)]

@@ -229,13 +229,28 @@ fn db_archive(app: Option<&tauri::AppHandle>) -> AppResult<PathBuf> {
     )))
 }
 
-/// 载入内置方块库。load 会自行处理 zlib 解压。
+/// 进程内缓存的内置方块库。
+///
+/// 方块库解压后约 5.6 MB、含 4 万余条方块定义，而方块检索是随输入逐键
+/// 触发的；每次重新读取与解析会让输入明显卡顿。方块库是随包分发的
+/// 静态资源，载入一次即可长期复用。
+static BLOCK_DB: std::sync::OnceLock<crate::blockdb::BlockDb> = std::sync::OnceLock::new();
+
+/// 取内置方块库，首次调用时载入。
 ///
 /// 必须传入 AppHandle：打包后方块库位于 Tauri 的资源目录，
 /// 只查 exe_dir()/res/ 或编译期的 CARGO_MANIFEST_DIR 在用户机器上都不存在，
 /// 忽略资源目录会让方块检索与替换在发布版整块失效。
-fn open_db(app: Option<&tauri::AppHandle>) -> AppResult<crate::blockdb::BlockDb> {
-    crate::blockdb::BlockDb::load(&db_archive(app)?.to_string_lossy())
+fn open_db(app: Option<&tauri::AppHandle>) -> AppResult<&'static crate::blockdb::BlockDb> {
+    if let Some(db) = BLOCK_DB.get() {
+        return Ok(db);
+    }
+    let loaded = crate::blockdb::BlockDb::load(&db_archive(app)?.to_string_lossy())?;
+    // 并发下可能被别的线程抢先设置，此时沿用已设置的即可
+    let _ = BLOCK_DB.set(loaded);
+    BLOCK_DB
+        .get()
+        .ok_or_else(|| AppError::Parse("方块库缓存初始化失败".into()))
 }
 
 /// 跨版本检索方块
@@ -246,7 +261,7 @@ pub fn search_blocks(
     limit: Option<usize>,
 ) -> Result<Vec<BlockHitDto>, String> {
     let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
-    Ok(crate::block_search::search(&db, &query, limit.unwrap_or(200))
+    Ok(crate::block_search::search(db, &query, limit.unwrap_or(200))
         .into_iter()
         .map(|h| BlockHitDto {
             name: h.name,
@@ -265,7 +280,7 @@ pub fn search_blocks(
 #[tauri::command]
 pub fn list_block_versions(app: tauri::AppHandle) -> Result<Vec<VersionOptionDto>, String> {
     let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
-    Ok(crate::block_search::version_options(&db)
+    Ok(crate::block_search::version_options(db)
         .into_iter()
         .map(|v| VersionOptionDto {
             index: v.index,
@@ -290,7 +305,7 @@ pub fn preview_replace(
     let vi = db
         .pick_version(summary.data_version)
         .ok_or_else(|| "方块库中没有可用版本".to_string())?;
-    let info = crate::block_model::DbBlockInfo { db: &db, version: &db.versions[vi] };
+    let info = crate::block_model::DbBlockInfo { db, version: &db.versions[vi] };
     let rule: crate::replace::ReplaceRule = rule.into();
     Ok(ReplaceOutcomeDto {
         replaced: crate::replace::count_matches(&sc, &rule, &info),
@@ -311,7 +326,7 @@ pub fn apply_replace(
     let vi = db
         .pick_version(summary.data_version)
         .ok_or_else(|| "方块库中没有可用版本".to_string())?;
-    let info = crate::block_model::DbBlockInfo { db: &db, version: &db.versions[vi] };
+    let info = crate::block_model::DbBlockInfo { db, version: &db.versions[vi] };
     let rule: crate::replace::ReplaceRule = rule.into();
 
     let out = crate::replace::replace_blocks(&mut sc, &rule, &info, 0);
@@ -407,8 +422,8 @@ pub fn read_operation_log(max_lines: Option<usize>) -> Vec<String> {
 /// 前端不必知道它在哪个目录，也不必关心各平台的资源布局差异。
 #[tauri::command]
 pub fn build_scene(app: tauri::AppHandle, schematic_path: String) -> Result<SceneDto, String> {
-    let db = db_archive(Some(&app)).map_err(|e| e.to_string())?;
-    crate::scene::build(&schematic_path, &db.to_string_lossy())
+    let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    crate::scene::build_with_db(&schematic_path, db)
         .map(SceneDto::from)
         .map_err(|e| e.to_string())
 }

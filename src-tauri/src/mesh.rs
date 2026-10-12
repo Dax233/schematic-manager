@@ -45,14 +45,18 @@ pub struct MeshData {
 /// 由前端除以 16 归一化——这样 Rust 侧不必关心贴图分辨率。
 pub fn build(quads: &[Quad]) -> MeshData {
     let mut batches: Vec<TextureBatch> = Vec::new();
+    // 贴图下标 -> 批次下标。四边形可达上百万而批次可达上千，
+    // 逐个四边形线性扫批次会退化成平方复杂度。
+    let mut by_texture: std::collections::HashMap<u32, usize> =
+        std::collections::HashMap::new();
 
     for q in quads {
         // 贴图为哨兵值时跳过：没有可用的贴图，画出来也只是占位色块
         if q.texture == crate::blockdb::NO_TEXTURE {
             continue;
         }
-        let batch = match batches.iter_mut().find(|b| b.texture == q.texture) {
-            Some(b) => b,
+        let idx = match by_texture.get(&q.texture) {
+            Some(i) => *i,
             None => {
                 batches.push(TextureBatch {
                     texture: q.texture,
@@ -61,9 +65,12 @@ pub fn build(quads: &[Quad]) -> MeshData {
                     shades: Vec::new(),
                     indices: Vec::new(),
                 });
-                batches.last_mut().expect("刚插入")
+                let i = batches.len() - 1;
+                by_texture.insert(q.texture, i);
+                i
             }
         };
+        let batch = &mut batches[idx];
 
         let base = batch.vertex_count() as u32;
         for k in 0..4 {
