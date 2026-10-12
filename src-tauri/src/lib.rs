@@ -9,6 +9,7 @@ mod geometry;
 mod litematic;
 mod mcver;
 mod nbt;
+mod raster;
 mod transform;
 mod visibility;
 

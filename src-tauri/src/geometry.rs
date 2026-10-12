@@ -137,15 +137,28 @@ mod tests {
 
     #[test]
     fn corners_span_the_element_bounds() {
-        // 角点应恰好覆盖元素在另外两个轴上的范围，不多不少
-        for f in [Face::Down, Face::Up, Face::North, Face::South, Face::West, Face::East] {
+        // 角点应恰好覆盖元素范围。注意：面自身所在的那个轴是「平的」，
+        // 四个角点取同一值（即该面），不会跨 FROM..TO；只有另外两个轴
+        // 才跨越整个元素范围。
+        for (f, plane_axis) in [
+            (Face::Down, 1usize),
+            (Face::Up, 1),
+            (Face::North, 2),
+            (Face::South, 2),
+            (Face::West, 0),
+            (Face::East, 0),
+        ] {
             let c = corners(f);
             for axis in 0..3 {
                 let vals: Vec<f32> = c.pos.iter().map(|p| p[axis]).collect();
                 let lo = vals.iter().cloned().fold(f32::INFINITY, f32::min);
                 let hi = vals.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-                assert!((lo - FROM[axis]).abs() < 1e-5, "{f:?} 轴 {axis} 下界");
-                assert!((hi - TO[axis]).abs() < 1e-5, "{f:?} 轴 {axis} 上界");
+                if axis == plane_axis {
+                    assert!((hi - lo).abs() < 1e-5, "{f:?} 轴 {axis} 应为平面（四角同值）");
+                } else {
+                    assert!((lo - FROM[axis]).abs() < 1e-5, "{f:?} 轴 {axis} 下界");
+                    assert!((hi - TO[axis]).abs() < 1e-5, "{f:?} 轴 {axis} 上界");
+                }
             }
         }
     }

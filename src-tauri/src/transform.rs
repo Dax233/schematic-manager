@@ -246,12 +246,16 @@ mod tests {
     fn cull_offset_rotates_with_variant() {
         // 无旋转时原样返回
         assert_eq!(rotate_cull_offset([1, 0, 0], 0, 0), [1, 0, 0]);
-        // 绕 Y 90 度：+X 方向应变为 -Z 方向
-        assert_eq!(rotate_cull_offset([1, 0, 0], 0, 1), [0, 0, -1]);
+        // 绕 Y 90 度：+X 方向应变为 +Z 方向
+        // （对照 C++ RotateBlock：Y90 为 (16-z, y, x)，
+        //   方向向量按中心偏移换算后得 (0,0,1)）
+        assert_eq!(rotate_cull_offset([1, 0, 0], 0, 1), [0, 0, 1]);
         // 绕 X 90 度：+Y 方向应变为 +Z 方向
         assert_eq!(rotate_cull_offset([0, 1, 0], 1, 0), [0, 0, 1]);
         // 绕 Y 180 度：+X 变为 -X
         assert_eq!(rotate_cull_offset([1, 0, 0], 0, 2), [-1, 0, 0]);
+        // 绕 Y 90 度：+Z 方向应变为 -X 方向
+        assert_eq!(rotate_cull_offset([0, 0, 1], 0, 1), [-1, 0, 0]);
         // 结果始终是单位偏移（不出现 0 以外的分量组合错误）
         for rx in 0u8..4 {
             for ry in 0u8..4 {

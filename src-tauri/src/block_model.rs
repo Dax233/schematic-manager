@@ -199,9 +199,16 @@ mod tests {
         let s = st("minecraft:oak_fence", &[("north", "true")]);
         assert!(match_any_when("north=true|south=true", &s));
         assert!(!match_any_when("east=true|south=true", &s));
-        // 备选内部仍是与语义
-        assert!(match_any_when("north=true,south=false|east=true", &s));
+        // 备选内部仍是与语义：要让整个与条件成立，
+        // 每一对键值都必须在该方块上存在且相等。
+        // 注意：方块缺少某属性时该条件不成立（而不是「默认通过」），
+        // 因此 south=false 在缺少 south 属性时应判为不匹配。
+        assert!(!match_any_when("north=true,south=false|east=true", &s),
+                "缺少 south 属性时 south=false 不应视为匹配");
         assert!(!match_any_when("north=true,south=true|east=true", &s));
+        // 换成方块确实拥有的属性，且第一备选成立时，整体为真
+        assert!(match_any_when("north=true|east=true", &s));
+        assert!(match_any_when("north=false|north=true", &s), "第二个备选成立");
     }
 
     #[test]

@@ -13,6 +13,7 @@
 #[path = "../../src-tauri/src/block_model.rs"] mod block_model;
 #[path = "../../src-tauri/src/geometry.rs"] mod geometry;
 #[path = "../../src-tauri/src/camera.rs"] mod camera;
+#[path = "../../src-tauri/src/raster.rs"] mod raster;
 #[path = "../../src-tauri/src/transform.rs"] mod transform;
 #[path = "../../src-tauri/src/visibility.rs"] mod visibility;
 #[path = "../../src-tauri/src/backup.rs"] mod backup;
