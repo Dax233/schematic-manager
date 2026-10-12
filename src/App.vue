@@ -39,14 +39,18 @@ onMounted(() => {
     </div>
 
     <!-- 工具栏 -->
-    <a-space style="padding: 6px 8px; border-bottom: 1px solid #e5e6eb" :size="6">
+    <div class="toolbar">
       <a-button size="small" type="primary">添加目录</a-button>
       <a-button size="small">重新扫描</a-button>
       <a-button size="small">重复文件查找</a-button>
       <a-button size="small">贴图资源</a-button>
       <a-button size="small">帮助</a-button>
-      <a-input-search size="small" placeholder="搜索名称/作者/文件名…" style="width: 240px; margin-left: 12px" />
-    </a-space>
+      <a-input-search
+        size="small"
+        placeholder="搜索名称/作者/文件名…"
+        style="width: 240px; margin-left: 12px"
+      />
+    </div>
 
     <div class="workbench">
       <!-- 左侧文件列表 -->
@@ -81,7 +85,7 @@ onMounted(() => {
 
     <div class="statusbar">
       <span>{{ status }}</span>
-      <span style="flex: 1" />
+      <span class="statusbar__spacer" />
       <span>共 {{ files.length }} 个投影文件</span>
     </div>
   </div>

@@ -1,0 +1,13 @@
+// 主题相关变量。
+//
+// 这里只声明「Arco 没有提供、又必须区分深浅色」的量。
+// 其余颜色请在组件样式里直接使用 Arco 变量，不要复制到这里。
+
+:root,
+body:not([arco-theme="dark"]) {
+  --sm-shell-border: #8a8a8a;
+}
+
+body[arco-theme="dark"] {
+  --sm-shell-border: #5a5a5a;
+}

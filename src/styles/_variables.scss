@@ -1,13 +1,18 @@
-// 全局设计变量（与 Arco 主题变量保持一致的浅色扁平风格）
-$border-color: #8a8a8a;
-$border-width: 2px;
-$accent-color: #2f6fed;
-$header-bg: #f7f8fa;
-$panel-bg: #ffffff;
-$window-bg: #f0f2f5;
+// 设计变量。
+//
+// 颜色一律不在此处写死：优先使用 Arco Design 的 CSS 变量
+// （--color-bg-*、--color-text-*、--color-border-*、--primary-*），
+// 这样切换深浅色主题时无需改动样式代码。
+// 本文件只保存尺寸，以及需要在深浅两套主题下分别取值的少量自定义量。
 
 $titlebar-h: 32px;
 $toolbar-h: 44px;
 $statusbar-h: 26px;
-$list-header-h: 30px;
 $row-h: 28px;
+
+// 主窗口外框宽度（沿用旧版 2px 扁平边框的观感）
+$shell-border-w: 2px;
+
+// 外框颜色需要区分主题：Arco 的 border 变量偏浅，
+// 达不到旧版那种明确的分隔感，因此单独定义并在下方给出两套取值。
+$shell-border: var(--sm-shell-border);
