@@ -23,6 +23,27 @@ pub struct FaceCorners {
 ///   Down  u:+x v:-z     Up    u:+x v:+z
 ///   North u:-x v:-y     South u:+x v:-y
 ///   West  u:+z v:-y     East  u:-z v:-y
+/// 按面的 rotation 字段旋转 UV。
+///
+/// 角度以顺时针 90 度为单位，取值 0 / 90 / 180 / 270。
+/// 与 legacy-cpp/render.cpp 的贴图旋转一致：先把 UV 归一化到 0..1，
+/// 旋转后再还原，因此这里输入输出都保持 0..16 的原始尺度。
+pub fn rotate_uv(uv: [f32; 4], rotation: u16) -> [f32; 4] {
+    let [u1, v1, u2, v2] = uv;
+    // 归一化到 0..1
+    let mut p = [[u1 / 16.0, v1 / 16.0], [u2 / 16.0, v2 / 16.0]];
+    for q in p.iter_mut() {
+        let (fu, fv) = (q[0], q[1]);
+        *q = match rotation {
+            90 => [fv, 1.0 - fu],
+            180 => [1.0 - fu, 1.0 - fv],
+            270 => [1.0 - fv, fu],
+            _ => [fu, fv],
+        };
+    }
+    [p[0][0] * 16.0, p[0][1] * 16.0, p[1][0] * 16.0, p[1][1] * 16.0]
+}
+
 pub fn build_face_corners(face: Face, from: [f32; 3], to: [f32; 3], uv: [f32; 4]) -> FaceCorners {
     let [x1, y1, z1] = from;
     let [x2, y2, z2] = to;
@@ -92,7 +113,7 @@ pub fn cull_neighbor_offset(face: Face) -> [i32; 3] {
 /// 用于在无光照计算的情况下表现立体感；UP 最亮、DOWN 最暗。
 pub const FACE_SHADE: [f32; 6] = [
     0.55, // Down
-    0.85, // Up
+    1.00, // Up
     0.82, // North
     0.72, // South
     0.88, // West

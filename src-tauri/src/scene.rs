@@ -74,7 +74,7 @@ pub fn build_from(sc: &Schematic, db: &BlockDb) -> AppResult<SceneData> {
         .ok_or_else(|| AppError::Parse("方块库中没有任何可用版本".into()))?;
     let version = &db.versions[version_idx];
 
-    let quads = visibility::collect_quads(sc, db, version);
+    let quads = visibility::collect_quads(sc, db, version_idx);
     let m = mesh::build(&quads);
 
     // 统计方块库中查不到定义的方块种类，供界面提示
@@ -159,6 +159,10 @@ mod tests {
         // 填 0xFF 表示不参与剔除，那样相邻方块之间不会互相隐藏面。
         let faces: Vec<ModelFace> = (0..6u8)
             .map(|i| ModelFace {
+                // 0 是字符串表下标而非贴图池下标：
+                // 文件里该字段指向贴图路径，必须经版本映射才能得到池下标。
+                // 测试库故意让两者不同（strings[0] 对应池下标 1），
+                // 否则"当成池下标直接用"这个缺陷在测试中不会暴露。
                 texture: 0,
                 uv: [0.0, 0.0, 16.0, 16.0],
                 cullface: i,
@@ -186,7 +190,7 @@ mod tests {
             name: "1.20.1".into(),
             data_version: 3465,
             lang_idx: 0,
-            texture_by_path: HashMap::new(),
+            texture_by_path: HashMap::from([("block/test".to_string(), 1u32)]),
             blocks: vec![BlockDef {
                 name: "minecraft:stone".into(),
                 variants: vec![Variant {
@@ -203,9 +207,14 @@ mod tests {
         };
         BlockDb {
             format_version: 3,
-            strings: Vec::new(),
+            strings: vec!["block/test".to_string()],
             langs: Vec::new(),
-            textures: vec![TextureInfo { w: 2, h: 2, offset: 0, len: 16, has_alpha: false }],
+            // 池下标 1 才是该方块要用的贴图；池下标 0 是干扰项，
+            // 若把字符串下标当池下标用就会取到它
+            textures: vec![
+                TextureInfo { w: 2, h: 2, offset: 0, len: 16, has_alpha: false },
+                TextureInfo { w: 2, h: 2, offset: 0, len: 16, has_alpha: false },
+            ],
             models: vec![model],
             versions: vec![version],
             pixels: (0..16).collect(),
@@ -256,7 +265,10 @@ mod tests {
         assert!(!scene.is_empty(), "应产出至少一个批次");
         assert_eq!(scene.batches.len(), 1);
         let b = &scene.batches[0];
-        assert_eq!(b.texture, 0);
+        // 面的贴图字段是字符串表下标 0，经版本映射后应得到贴图池下标 1。
+        // 若直接把字符串下标当池下标用，这里会得到 0 并失败——
+        // 这正是要防的缺陷：取到的是完全无关的贴图。
+        assert_eq!(b.texture, 1, "字符串表下标必须解析成贴图池下标");
         assert_eq!(b.texture_width, 2);
         assert_eq!(b.texture_height, 2);
         assert_eq!(b.texture_rgba.len(), 2 * 2 * 4, "贴图像素长度应为 宽*高*4");

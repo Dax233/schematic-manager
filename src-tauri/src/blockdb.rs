@@ -37,6 +37,14 @@ pub enum Face {
 /// 模型中的一个面
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelFace {
+    /// 贴图**字符串表下标**，不是贴图池下标。
+    ///
+    /// 两者数值空间完全无关：实测随包的方块库中字符串表 6263 项、贴图池仅
+    /// 1685 项，48% 的面的取值超出贴图池长度。若误把字符串下标当池下标用，
+    /// 多数面会取不到贴图（渲染空白），少数会取到完全无关的贴图。
+    ///
+    /// 这里不能直接存池下标：模型跨版本共享，而路径到池下标的映射按版本
+    /// 不同，只能在按版本查用时解析（见 BlockDb::texture_pool_index）。
     pub texture: u32,
     pub uv: [f32; 4],
     /// 0xFF 表示无剔除面
@@ -431,7 +439,11 @@ impl BlockDb {
                 for _ in 0..mp_count {
                     multipart.push(read_variant(&mut r, &strings)?);
                 }
-                blocks.push(BlockDef { name: block_name, variants, multipart });
+                blocks.push(BlockDef {
+                    name: block_name,
+                    variants,
+                    multipart,
+                });
             }
             let langs_for_version = langs.get(lang_idx as usize).cloned().unwrap_or_default();
             versions.push(VersionDef {
@@ -470,6 +482,24 @@ impl BlockDb {
         Self::load_from_bytes(&raw)
     }
 
+    /// 把模型的贴图字符串表下标解析成指定版本的贴图池下标。
+    ///
+    /// 模型跨版本共享，而路径到池下标的映射按版本不同，解析必须发生在
+    /// 知道版本之后。找不到对应贴图时返回 NO_TEXTURE，下游据此跳过该面，
+    /// 而不是拿一个错误的索引去取完全无关的贴图。
+    pub fn texture_pool_index(&self, version_idx: usize, tex_str_idx: u32) -> u32 {
+        if tex_str_idx == NO_TEXTURE {
+            return NO_TEXTURE;
+        }
+        let Some(path) = self.strings.get(tex_str_idx as usize) else {
+            return NO_TEXTURE;
+        };
+        self.versions
+            .get(version_idx)
+            .and_then(|v| v.texture_by_path.get(path).copied())
+            .unwrap_or(NO_TEXTURE)
+    }
+
     /// 取某个贴图的像素切片
     pub fn texture_pixels(&self, idx: usize) -> Option<&[u8]> {
         let t = self.textures.get(idx)?;
@@ -487,6 +517,7 @@ impl BlockDb {
             .map(|(i, _)| i)
     }
 }
+
 
 fn read_variant(r: &mut BinReader<'_>, strings: &[String]) -> AppResult<Variant> {
     Ok(Variant {

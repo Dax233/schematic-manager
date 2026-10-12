@@ -196,6 +196,36 @@ pub fn bits_for_palette(palette_size: usize) -> i32 {
 }
 
 /// 把索引数组编码成跨 long 打包的数组
+/// 把调色板编码成 NBT 列表。
+///
+/// 每项为 Compound：Name 必填；Properties 为 属性名 -> 属性值，
+/// 无属性时不写该字段——与 legacy-cpp 的写法一致，
+/// 多写一个空 Compound 虽不影响读取，但会让文件与原版有差异。
+pub fn encode_palette(palette: &[BlockState]) -> Value {
+    Value::List(
+        palette
+            .iter()
+            .map(|bs| {
+                let mut fields = vec![("Name".to_string(), Value::String(bs.name.clone()))];
+                if !bs.props.is_empty() {
+                    fields.push((
+                        "Properties".to_string(),
+                        Value::Compound(
+                            bs.props
+                                .iter()
+                                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+                                .collect(),
+                        ),
+                    ));
+                }
+                // 元素类型必须是 Compound，读取端依赖它
+                Value::Compound(fields)
+            })
+            .collect(),
+        10, // TAG_Compound
+    )
+}
+
 pub fn encode_indices(indices: &[i32], bits: i32) -> Vec<i64> {
     if bits <= 0 || indices.is_empty() {
         return Vec::new();
@@ -572,7 +602,7 @@ impl Schematic {
             }
         };
         for name in region_names {
-            let Some(r) = self.regions.iter().find(|r| r.name == name).cloned() else {
+            let Some(mut r) = self.regions.iter().find(|r| r.name == name).cloned() else {
                 continue;
             };
             if r.volume == 0 {
@@ -581,7 +611,27 @@ impl Schematic {
             let slot = regs.iter_mut().find(|(n, _)| n == &name).ok_or_else(|| {
                 AppError::Parse(format!("NBT 中找不到区域 {name}，无法写回方块数据"))
             })?;
-            slot.1.set("BlockStates", Value::LongArray(encode_indices(&r.indices, r.bits)));
+
+            // 调色板必须一并写回：替换会向 palette 追加新状态，
+            // 只写索引的话，盘上的调色板仍是旧长度，新索引越界，
+            // 游戏与 Litematica 会读到错误方块或直接判为损坏。
+            //
+            // 键名沿用文件原有的那个：v6 用 BlockStatePalette、v7 用 Palette。
+            // 一律写 BlockStatePalette 会让 v7 文件多出一个字段而原字段仍是旧值。
+            let pal_key = if slot.1.get("Palette").is_some() {
+                "Palette"
+            } else {
+                "BlockStatePalette"
+            };
+            slot.1.set(pal_key, encode_palette(&r.palette));
+
+            // 位宽也要按新的调色板长度重算：调色板增长后仍用旧位宽，
+            // write_bits 会按掩码静默截断索引，写出的就是错数据。
+            r.bits = bits_for_palette(r.palette.len());
+            slot.1.set(
+                "BlockStates",
+                Value::LongArray(encode_indices(&r.indices, r.bits)),
+            );
         }
         self.root.set("Regions", Value::Compound(regs));
         Ok(())
@@ -591,6 +641,105 @@ impl Schematic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    /// 方块改动后写回，调色板与位宽都必须同步更新。
+    ///
+    /// 防的是：替换向调色板追加了新状态，写回时却只写 BlockStates。
+    /// 那样盘上的调色板仍是旧长度，新索引越界；调色板增长后位宽不变，
+    /// write_bits 还会按掩码静默截断索引。产出的文件游戏读不出。
+    ///
+    /// 这里直接检查写回的 NBT，不经过文件与压缩，因此不受测试桩限制。
+    #[test]
+    fn sync_writes_palette_and_recomputes_bits() {
+        // 初始调色板 1 项、位宽 2；改动后扩到 4 项，位宽应升到 3
+        let region_nbt = Value::Compound(vec![
+            (
+                "BlockStatePalette".into(),
+                encode_palette(&[BlockState::new("minecraft:stone")]),
+            ),
+            ("BlockStates".into(), Value::LongArray(vec![0i64])),
+            ("Size".into(), Value::Compound(vec![
+                ("x".into(), Value::Int(4)),
+                ("y".into(), Value::Int(1)),
+                ("z".into(), Value::Int(1)),
+            ])),
+            ("Position".into(), Value::Compound(vec![
+                ("x".into(), Value::Int(0)),
+                ("y".into(), Value::Int(0)),
+                ("z".into(), Value::Int(0)),
+            ])),
+        ]);
+        let mut sc = Schematic {
+            root: Value::Compound(vec![(
+                "Regions".into(),
+                Value::Compound(vec![("r".into(), region_nbt)]),
+            )]),
+            regions: vec![Region {
+                name: "r".into(),
+                pos: [0, 0, 0],
+                size: [4, 1, 1],
+                volume: 4,
+                bits: 2,
+                palette: vec![BlockState::new("minecraft:stone")],
+                indices: vec![0, 0, 0, 0],
+                ..Default::default()
+            }],
+            path: String::new(),
+            loaded: true,
+            meta_modified: false,
+            blocks_modified: false,
+        };
+
+        // 模拟替换：调色板扩到 4 项，最后两个方块改用第 4 项（下标 3）
+        sc.regions[0].palette.push(BlockState::new("minecraft:gold_block"));
+        sc.regions[0].palette.push(BlockState::new("minecraft:dirt"));
+        sc.regions[0].palette.push(BlockState::new("minecraft:oak_planks"));
+        sc.regions[0].indices = vec![0, 3, 1, 3];
+        sc.blocks_modified = true;
+
+        sc.sync_to_nbt().expect("写回失败");
+
+        let regs = match sc.root.get("Regions") {
+            Some(Value::Compound(v)) => v.clone(),
+            _ => panic!("Regions 缺失"),
+        };
+        let rv = regs.iter().find(|(n, _)| n == "r").map(|(_, v)| v).expect("区域 r 缺失");
+
+        // 调色板必须写回，且长度与内存一致
+        let pal = match rv.get("BlockStatePalette") {
+            Some(Value::List(items, elem)) => {
+                assert_eq!(*elem, 10, "元素类型应为 Compound");
+                items.clone()
+            }
+            other => panic!("应写回 BlockStatePalette，实际 {other:?}"),
+        };
+        assert_eq!(pal.len(), 4, "调色板应写回全部 4 项");
+        let name_of = |v: &Value| match v {
+            Value::Compound(f) => match f.iter().find(|(k, _)| k == "Name").map(|(_, v)| v) {
+                Some(Value::String(s)) => s.clone(),
+                _ => String::new(),
+            },
+            _ => String::new(),
+        };
+        assert_eq!(name_of(&pal[0]), "minecraft:stone");
+        assert_eq!(name_of(&pal[3]), "minecraft:oak_planks", "新增项应写回");
+
+        // 位宽必须按新的调色板长度重算：4 项需要 2 位，5 项才需要 3 位，
+        // 但这里重要的是「重新计算过」而不是沿用旧值
+        let expect_bits = bits_for_palette(4);
+        let arr = match rv.get("BlockStates") {
+            Some(Value::LongArray(a)) => a.clone(),
+            _ => panic!("BlockStates 缺失"),
+        };
+        assert_eq!(
+            read_bits(&arr, 1, expect_bits),
+            3,
+            "索引应能按新位宽正确读回（旧位宽会截断）"
+        );
+        assert_eq!(read_bits(&arr, 0, expect_bits), 0);
+        assert_eq!(read_bits(&arr, 3, expect_bits), 3);
+    }
 
     #[test]
     fn bits_for_palette_matches_litematica() {
