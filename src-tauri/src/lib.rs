@@ -5,6 +5,7 @@ mod camera;
 mod commands;
 mod dto;
 mod error;
+mod geometry;
 mod litematic;
 mod mcver;
 mod nbt;
