@@ -4,9 +4,11 @@
 //! 不在这里承载业务规则，便于解析层独立测试。
 
 use crate::backup;
+use crate::error::{AppError, AppResult};
 use crate::dto::{
-    AnalysisResult, BackupEntryDto, BlockCount, EntityCount, SceneDto, SaveOutcome,
-    ScanResult, SchematicSummary,
+    AnalysisResult, BackupEntryDto, BlockCount, BlockHitDto, BlockVersionDto, EntityCount,
+    ReplaceOutcomeDto, ReplaceRuleDto, SceneDto, SaveOutcome, ScanResult, SchematicSummary,
+    VersionOptionDto,
 };
 use crate::litematic::{self, Summary};
 use std::path::{Path, PathBuf};
@@ -190,6 +192,137 @@ pub fn analyze_schematic(path: String) -> Result<AnalysisResult, String> {
     })
 }
 
+/// 内置方块库压缩包的位置。
+///
+/// 依次尝试：可执行文件同级的 res/（旧版布局）、随包分发的资源目录、
+/// 以及开发时的源码树。三者都不存在时给出明确错误，而不是让载入在
+/// 更深处报出难以理解的解析失败。
+fn db_archive(app: Option<&tauri::AppHandle>) -> AppResult<PathBuf> {
+    let mut tried: Vec<PathBuf> = Vec::new();
+    if let Some(a) = app {
+        if let Ok(p) = a.path().resolve("resources/blocks.dat.z", BaseDirectory::Resource) {
+            if p.is_file() {
+                return Ok(p);
+            }
+            tried.push(p);
+        }
+    }
+    let beside = exe_dir().join("res").join("blocks.dat.z");
+    if beside.is_file() {
+        return Ok(beside);
+    }
+    tried.push(beside);
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join("blocks.dat.z");
+    if dev.is_file() {
+        return Ok(dev);
+    }
+    tried.push(dev);
+    Err(AppError::Parse(format!(
+        "找不到方块库 blocks.dat.z，已尝试：{}",
+        tried
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join("、")
+    )))
+}
+
+/// 载入内置方块库。load 会自行处理 zlib 解压。
+fn open_db() -> AppResult<crate::blockdb::BlockDb> {
+    crate::blockdb::BlockDb::load(&db_archive(None)?.to_string_lossy())
+}
+
+/// 跨版本检索方块
+#[tauri::command]
+pub fn search_blocks(query: String, limit: Option<usize>) -> Result<Vec<BlockHitDto>, String> {
+    let db = open_db().map_err(|e| e.to_string())?;
+    Ok(crate::block_search::search(&db, &query, limit.unwrap_or(200))
+        .into_iter()
+        .map(|h| BlockHitDto {
+            name: h.name,
+            zh: h.zh,
+            en: h.en,
+            versions: h
+                .versions
+                .into_iter()
+                .map(|v| BlockVersionDto { index: v.index, data_version: v.data_version })
+                .collect(),
+        })
+        .collect())
+}
+
+/// 列出方块库中的全部版本
+#[tauri::command]
+pub fn list_block_versions() -> Result<Vec<VersionOptionDto>, String> {
+    let db = open_db().map_err(|e| e.to_string())?;
+    Ok(crate::block_search::version_options(&db)
+        .into_iter()
+        .map(|v| VersionOptionDto {
+            index: v.index,
+            name: v.name,
+            data_version: v.data_version,
+            is_overlay: v.is_overlay,
+            block_count: v.block_count,
+        })
+        .collect())
+}
+
+/// 预计会被替换的方块数量，不写入文件
+#[tauri::command]
+pub fn preview_replace(schematic_path: String, rule: ReplaceRuleDto) -> Result<ReplaceOutcomeDto, String> {
+    let db = open_db().map_err(|e| e.to_string())?;
+    let sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
+    let summary = sc.summary();
+    let vi = db
+        .pick_version(summary.data_version)
+        .ok_or_else(|| "方块库中没有可用版本".to_string())?;
+    let info = crate::block_model::DbBlockInfo { db: &db, version: &db.versions[vi] };
+    let rule: crate::replace::ReplaceRule = rule.into();
+    Ok(ReplaceOutcomeDto {
+        replaced: crate::replace::count_matches(&sc, &rule, &info),
+        palette_changed: 0,
+    })
+}
+
+/// 执行方块替换并写回文件。写前先备份。
+#[tauri::command]
+pub fn apply_replace(schematic_path: String, rule: ReplaceRuleDto) -> Result<ReplaceOutcomeDto, String> {
+    let db = open_db().map_err(|e| e.to_string())?;
+    let mut sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
+    let summary = sc.summary();
+    let vi = db
+        .pick_version(summary.data_version)
+        .ok_or_else(|| "方块库中没有可用版本".to_string())?;
+    let info = crate::block_model::DbBlockInfo { db: &db, version: &db.versions[vi] };
+    let rule: crate::replace::ReplaceRule = rule.into();
+
+    let out = crate::replace::replace_blocks(&mut sc, &rule, &info, 0);
+    if out.replaced == 0 {
+        // 没有任何改动就不写文件，避免无谓地产生一次备份
+        return Ok(out.into());
+    }
+
+    // 改动前先备份：替换是批量改写，出错时这是唯一的回退途径
+    let base = Path::new(&schematic_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    backup::create(&base, Path::new(&schematic_path), "replace").map_err(|e| e.to_string())?;
+    sc.save_to(&schematic_path).map_err(|e| e.to_string())?;
+
+    let name = Path::new(&schematic_path)
+        .file_name()
+        .map(|v| v.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let _ = backup::append_log(
+        &backup::backup_root(&exe_dir()),
+        &format!("替换 {name}：{} -> {}，共 {} 个", rule.from_name, rule.to_name, out.replaced),
+    );
+    Ok(out.into())
+}
+
 /// 列出备份。stem 非空时只返回该文件的备份。
 #[tauri::command]
 pub fn list_backups(stem: Option<String>) -> Vec<BackupEntryDto> {
@@ -248,13 +381,7 @@ pub fn read_operation_log(max_lines: Option<usize>) -> Vec<String> {
 /// 前端不必知道它在哪个目录，也不必关心各平台的资源布局差异。
 #[tauri::command]
 pub fn build_scene(app: tauri::AppHandle, schematic_path: String) -> Result<SceneDto, String> {
-    let db = app
-        .path()
-        .resolve("resources/blocks.dat.z", BaseDirectory::Resource)
-        .map_err(|e| format!("找不到内置方块库：{e}"))?;
-    if !db.is_file() {
-        return Err(format!("内置方块库不存在：{}", db.display()));
-    }
+    let db = db_archive(Some(&app)).map_err(|e| e.to_string())?;
     crate::scene::build(&schematic_path, &db.to_string_lossy())
         .map(SceneDto::from)
         .map_err(|e| e.to_string())

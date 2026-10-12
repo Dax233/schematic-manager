@@ -101,6 +101,41 @@ fn replacement(
     }
 }
 
+/// 统计会被改写的方块实例数，不修改投影。
+///
+/// 供界面上「预计替换数量」使用。逐调色板项判断即可：
+/// 同一调色板项的方块要么全被改写、要么全不改，因此只需知道每个
+/// 调色板项对应多少个实例，而不必逐方块判断。
+pub fn count_matches(sc: &Schematic, rule: &ReplaceRule, info: &dyn BlockInfo) -> u64 {
+    let mut total = 0u64;
+    for r in &sc.regions {
+        // 调色板项 -> 命中与否及实例数
+        let hits: Vec<bool> = r
+            .palette
+            .iter()
+            .map(|st| {
+                matches(st, rule)
+                    && replacement(st, rule, info).is_some()
+            })
+            .collect();
+        if !hits.iter().any(|h| *h) {
+            continue;
+        }
+        let mut per: Vec<u64> = vec![0; r.palette.len()];
+        for idx in &r.indices {
+            if let Some(slot) = per.get_mut(*idx as usize) {
+                *slot += 1;
+            }
+        }
+        for (i, hit) in hits.iter().enumerate() {
+            if *hit {
+                total += per[i];
+            }
+        }
+    }
+    total
+}
+
 /// 对整个投影执行替换。
 ///
 /// `limit` 大于 0 时最多替换那么多个方块实例。
@@ -319,6 +354,41 @@ mod tests {
         let out = replace_blocks(&mut sc, &rule("minecraft:stone", "minecraft:stone"), &info(), 0);
         assert_eq!(out.replaced, 0);
         assert!(!sc.blocks_modified, "无实际变化时不应置改动标志");
+    }
+
+    #[test]
+    fn count_matches_agrees_with_actual_replacement() {
+        let mut sc = schematic_with(
+            vec![BlockState::new("minecraft:stone"), BlockState::new("minecraft:dirt")],
+            vec![0, 1, 0, 1, 0],
+        );
+        let r = rule("minecraft:stone", "minecraft:gold_block");
+        let predicted = count_matches(&sc, &r, &info());
+        assert_eq!(predicted, 3);
+
+        // 预测值必须与实际替换数一致，否则界面上的预览会误导用户
+        let out = replace_blocks(&mut sc, &r, &info(), 0);
+        assert_eq!(out.replaced, predicted);
+    }
+
+    #[test]
+    fn count_matches_is_zero_when_nothing_changes() {
+        let mut sc = schematic_with(vec![BlockState::new("minecraft:stone")], vec![0, 0, 0]);
+        // 替换成同一状态：命中但无实际变化，应计为 0
+        assert_eq!(count_matches(&sc, &rule("minecraft:stone", "minecraft:stone"), &info()), 0);
+
+        let out = replace_blocks(&mut sc, &rule("minecraft:stone", "minecraft:stone"), &info(), 0);
+        assert_eq!(out.replaced, 0, "预测与实际应一致");
+    }
+
+    #[test]
+    fn count_matches_handles_multiple_regions() {
+        let mut sc = schematic_with(vec![BlockState::new("minecraft:stone")], vec![0, 0]);
+        let mut second = sc.regions[0].clone();
+        second.name = "r2".into();
+        second.indices = vec![0, 0, 0];
+        sc.regions.push(second);
+        assert_eq!(count_matches(&sc, &rule("minecraft:stone", "minecraft:gold_block"), &info()), 5);
     }
 
     #[test]

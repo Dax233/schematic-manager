@@ -34,6 +34,10 @@ pub fn run() {
             commands::restore_backup,
             commands::delete_backup,
             commands::read_operation_log,
+            commands::search_blocks,
+            commands::list_block_versions,
+            commands::preview_replace,
+            commands::apply_replace,
             commands::save_metadata,
         ])
         .run(tauri::generate_context!())

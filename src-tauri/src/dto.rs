@@ -68,6 +68,82 @@ pub struct ScanResult {
     pub skipped_paths: Vec<String>,
 }
 
+/// 方块替换规则
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaceRuleDto {
+    pub from_name: String,
+    #[serde(default)]
+    pub from_props: Vec<(String, String)>,
+    pub to_name: String,
+    #[serde(default)]
+    pub to_props: Vec<(String, String)>,
+    #[serde(default = "default_true")]
+    pub inherit_props: bool,
+    #[serde(default)]
+    pub keep_unknown_props: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl From<ReplaceRuleDto> for crate::replace::ReplaceRule {
+    fn from(d: ReplaceRuleDto) -> Self {
+        Self {
+            from_name: d.from_name,
+            from_props: d.from_props,
+            to_name: d.to_name,
+            to_props: d.to_props,
+            inherit_props: d.inherit_props,
+            keep_unknown_props: d.keep_unknown_props,
+        }
+    }
+}
+
+/// 方块替换结果
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaceOutcomeDto {
+    pub replaced: u64,
+    pub palette_changed: usize,
+}
+
+impl From<crate::replace::ReplaceOutcome> for ReplaceOutcomeDto {
+    fn from(o: crate::replace::ReplaceOutcome) -> Self {
+        Self { replaced: o.replaced, palette_changed: o.palette_changed }
+    }
+}
+
+/// 方块检索结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockHitDto {
+    pub name: String,
+    pub zh: String,
+    pub en: String,
+    pub versions: Vec<BlockVersionDto>,
+}
+
+/// 方块所在的版本
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockVersionDto {
+    pub index: usize,
+    pub data_version: i32,
+}
+
+/// 版本选项
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionOptionDto {
+    pub index: usize,
+    pub name: String,
+    pub data_version: i32,
+    pub is_overlay: bool,
+    pub block_count: usize,
+}
+
 /// 一条备份记录
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
