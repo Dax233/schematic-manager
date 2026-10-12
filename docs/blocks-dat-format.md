@@ -188,11 +188,67 @@ sectionCount × {
 }
 ```
 
-## 仍待确认的细节
+## 字段级完整布局（已全部确认）
 
-1. 模型元素边界的字段类型与顺序（浮点还是定点）
-2. 元素旋转的角度与原点表达
-3. 每个面的 UV 字段数量与类型
-4. `faceMask` 自低位起置位的顺序对应哪六个面
-5. `versionId` 是 dataVersion 还是字符串表下标
-6. 模组叠加包与基础版的合并规则（`isOverlay` 在读取实现中如何判定）
+### 模型元素
+
+```
+u8  translucment            // 模型整体是否为半透明
+u16 elementCount
+elementCount × {
+    f32[3]  from                    // 元素起点
+    f32[3]  to                      // 元素终点
+    u8      hasRot
+    if hasRot {
+        u8      rotKind
+        f32[3]  origin
+        u8      axis
+        f32     angle
+        u8      rescale
+        f32[3]  rx, ry, rz
+    }
+    u8      faceMask                // 自低位起，位 0~5 依次对应六个面
+    popcount(faceMask) × {
+        u32   texIdx                // 贴图池下标，0xFFFFFFFF 表示缺失
+        f32[4] uv
+        u8    cullface              // 0xFF 表示无
+        i16   tintindex             // 有符号
+        u16   rotation              // 归一化到 0~359
+    }
+}
+```
+
+面的遍历顺序为「按位从低到高」，即先写最低置位的面。
+
+### 版本段
+
+```
+u32 sectionCount            // 段内重复计数，= 1
+sectionCount × {
+    u32  versionNameStrIdx  // 版本名字符串表下标
+    i32  dataVersion        // 有符号
+    u32  langTableIdx
+    u32  texPathCount
+    texPathCount × { u32 texPathStrIdx, u32 texturePoolIdx }
+    u32  blockCount
+    blockCount × {
+        u32 blockNameStrIdx
+        u16 variantCount
+        variantCount × { u32 whenStrIdx, u32 modelIdx, u8 rotXDiv90, u8 rotYDiv90, u8 uvlock }
+        u16 multipartCount
+        multipartCount × { u32 whenStrIdx, u32 modelIdx, u8 rotXDiv90, u8 rotYDiv90, u8 uvlock }
+    }
+}
+```
+
+## 实现时需要注意的点
+
+- **所有整数小端序**，浮点为 IEEE754 单精度小端。
+- 字符串为 NUL 结尾；解析时应同时做长度保护，避免损坏文件导致无界扫描。
+- `dataVersion` 是 **i32 有符号**。叠加包是否以负值标记，需在实现时
+  对照读取实现中的 `isOverlay` 判定逻辑确认，不可想当然。
+- `texIdx` 的 `0xFFFFFFFF` 是「缺失贴图」的哨兵值，不是有效下标。
+- 各段前的重复计数与文件头计数应当一致；不一致说明文件损坏，
+  应显式报错而不是以文件头为准继续解析。
+- 读取实现中另设了数量上限（版本 10 万、贴图 200 万、模型 500 万、
+  语言表 10 万、字符串 2000 万），用于拒绝异常文件。Rust 侧应保留同类保护。
