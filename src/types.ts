@@ -84,6 +84,29 @@ export interface VersionOption {
   blockCount: number;
 }
 
+/** 转换中需要处理的一项 */
+export interface ConvertItem {
+  name: string;
+  count: number;
+  suggested: string;
+  chosen: string;
+}
+
+/** 可作为转换目标的版本 */
+export interface ConvertTarget {
+  index: number;
+  name: string;
+  dataVersion: number;
+}
+
+/** 转换结果 */
+export interface ConvertOutcome {
+  replacedKinds: number;
+  replacedBlocks: number;
+  skippedKinds: number;
+  outputPath: string;
+}
+
 /** 一组内容相同的投影文件 */
 export interface DuplicateGroup {
   size: number;

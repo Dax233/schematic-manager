@@ -41,6 +41,9 @@ pub fn run() {
             commands::preview_replace,
             commands::apply_replace,
             commands::scan_duplicates,
+            commands::convert_targets,
+            commands::analyze_conversion,
+            commands::apply_conversion,
             commands::save_metadata,
         ])
         .run(tauri::generate_context!())

@@ -6,6 +6,9 @@ import type {
   BlockHit,
   SaveOutcome,
   ScanResult,
+  ConvertItem,
+  ConvertOutcome,
+  ConvertTarget,
   DuplicateScan,
   ReplaceOutcome,
   ReplaceRule,
@@ -66,6 +69,28 @@ export function previewReplace(schematicPath: string, rule: ReplaceRule): Promis
 /** 执行替换并写回文件；后端会先备份 */
 export function applyReplace(schematicPath: string, rule: ReplaceRule): Promise<ReplaceOutcome> {
   return invoke<ReplaceOutcome>("apply_replace", { schematicPath, rule });
+}
+
+/** 列出可作为转换目标的版本 */
+export function convertTargets(schematicPath: string): Promise<ConvertTarget[]> {
+  return invoke<ConvertTarget[]>("convert_targets", { schematicPath });
+}
+
+/** 分析投影中用到但目标版本没有的方块 */
+export function analyzeConversion(
+  schematicPath: string,
+  targetIndex: number,
+): Promise<ConvertItem[]> {
+  return invoke<ConvertItem[]>("analyze_conversion", { schematicPath, targetIndex });
+}
+
+/** 执行转换，结果另存为新文件，原文件不动 */
+export function applyConversion(
+  schematicPath: string,
+  targetIndex: number,
+  items: ConvertItem[],
+): Promise<ConvertOutcome> {
+  return invoke<ConvertOutcome>("apply_conversion", { schematicPath, targetIndex, items });
 }
 
 /** 在一个目录下筛查内容重复的投影文件（只探测该目录，不递归） */

@@ -141,6 +141,36 @@ pub struct VersionOptionDto {
     pub block_count: usize,
 }
 
+/// 转换中需要处理的一项
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConvertItemDto {
+    pub name: String,
+    pub count: u64,
+    pub suggested: String,
+    pub chosen: String,
+}
+
+/// 可作为转换目标的版本
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConvertTargetDto {
+    pub index: usize,
+    pub name: String,
+    pub data_version: i32,
+}
+
+/// 转换结果
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConvertOutcomeDto {
+    pub replaced_kinds: usize,
+    pub replaced_blocks: u64,
+    pub skipped_kinds: usize,
+    /// 新文件的路径
+    pub output_path: String,
+}
+
 /// 一组内容相同的投影文件
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

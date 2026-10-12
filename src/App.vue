@@ -13,6 +13,9 @@ import {
   buildScene,
   deleteBackup,
   listBackups,
+  analyzeConversion,
+  applyConversion,
+  convertTargets,
   readOperationLog,
   scanDuplicates,
   restoreBackup,
@@ -26,6 +29,8 @@ import type {
   BackupEntry,
   BlockCount,
   BlockHit,
+  ConvertItem,
+  ConvertTarget,
   DuplicateGroup,
   DuplicateScan,
   ReplaceRule,
@@ -46,6 +51,79 @@ const saving = ref(false);
 const draft = ref({ name: "", author: "", description: "" });
 const dirty = ref(false);
 const searchText = ref("");
+
+// 版本转换
+const convOpen = ref(false);
+const convBusy = ref(false);
+const convTargets = ref<ConvertTarget[]>([]);
+const convTargetIdx = ref<number | undefined>(undefined);
+const convItems = ref<ConvertItem[]>([]);
+const convAnalyzed = ref(false);
+
+const convColumns = [
+  { title: "原方块", dataIndex: "name", ellipsis: true, tooltip: true },
+  { title: "数量", dataIndex: "count", width: 90 },
+  { title: "替代为", slotName: "repl" },
+];
+
+async function openConvert() {
+  convOpen.value = true;
+  convItems.value = [];
+  convAnalyzed.value = false;
+  convTargetIdx.value = undefined;
+  if (!selected.value) return;
+  try {
+    convTargets.value = await convertTargets(selected.value.path);
+  } catch (e) {
+    Message.error(`读取可转换版本失败：${e}`);
+    convTargets.value = [];
+  }
+}
+
+async function runConvertAnalyze() {
+  const cur = selected.value;
+  if (!cur || convTargetIdx.value === undefined) {
+    Message.warning("请先选择目标版本");
+    return;
+  }
+  convBusy.value = true;
+  try {
+    convItems.value = await analyzeConversion(cur.path, convTargetIdx.value);
+    convAnalyzed.value = true;
+    const missing = convItems.value.filter((i) => !i.chosen && !i.suggested).length;
+    if (convItems.value.length === 0) {
+      Message.success("该投影用到的方块在目标版本中都存在，可以直接转换");
+    } else {
+      Message.info(`目标版本缺少 ${convItems.value.length} 种方块，其中 ${missing} 种没有自动推荐`);
+    }
+  } catch (e) {
+    Message.error(`分析失败：${e}`);
+    convItems.value = [];
+  } finally {
+    convBusy.value = false;
+  }
+}
+
+async function doConvert() {
+  const cur = selected.value;
+  if (!cur || convTargetIdx.value === undefined) return;
+  convBusy.value = true;
+  try {
+    const r = await applyConversion(cur.path, convTargetIdx.value, convItems.value);
+    Message.success(
+      `已转换：替换 ${r.replacedKinds} 种（${r.replacedBlocks} 个）方块` +
+        (r.skippedKinds > 0 ? `，${r.skippedKinds} 种未指定已保持原样` : "") +
+        `。新文件：${r.outputPath}`,
+    );
+    convOpen.value = false;
+    const res = await scanLitematics(cur.dirName, 1);
+    files.value = res.items.length > 0 ? res.items : files.value;
+  } catch (e) {
+    Message.error(`转换失败：${e}`);
+  } finally {
+    convBusy.value = false;
+  }
+}
 
 // 重复文件筛查
 const dupOpen = ref(false);
@@ -526,6 +604,7 @@ const close = () => appWindow.close();
         allow-clear
       />
       <a-button size="small" :disabled="!selected" @click="openReplace">方块替换</a-button>
+      <a-button size="small" :disabled="!selected" @click="openConvert">版本转换</a-button>
       <a-button size="small" @click="openDuplicates">重复文件筛查</a-button>
       <a-button size="small" @click="openBackups">备份管理</a-button>
       <span class="preview__spacer" />
@@ -731,6 +810,66 @@ const close = () => appWindow.close();
         </a-tabs>
       </div>
     </div>
+
+    <a-modal
+      v-model:visible="convOpen"
+      title="转换游戏版本"
+      :width="760"
+      :ok-loading="convBusy"
+      ok-text="开始转换"
+      :ok-button-props="{ disabled: convTargetIdx === undefined || !selected }"
+      @ok="doConvert"
+    >
+      <a-alert v-if="!selected" type="warning" style="margin-bottom: 12px">
+        请先在左侧选择一个投影文件
+      </a-alert>
+
+      <a-space style="margin-bottom: 10px">
+        <span>目标版本</span>
+        <a-select
+          v-model="convTargetIdx"
+          placeholder="选择要转换到的版本"
+          allow-search
+          style="width: 260px"
+        >
+          <a-option v-for="t in convTargets" :key="t.index" :value="t.index">
+            {{ t.name }}（dataVersion {{ t.dataVersion }}）
+          </a-option>
+        </a-select>
+        <a-button size="small" :loading="convBusy" @click="runConvertAnalyze">分析差异</a-button>
+      </a-space>
+
+      <div class="hint-dim" style="margin-bottom: 10px">
+        转换结果另存为新文件，原文件不会被改动。目标版本里已不存在的方块需要
+        在这里指定替代品；「替代为」留空的方块在转换后会保持原样。
+      </div>
+
+      <a-spin :loading="convBusy" style="width: 100%">
+        <template v-if="convAnalyzed">
+          <a-alert v-if="convItems.length === 0" type="success">
+            该投影用到的方块在目标版本中都存在，可以直接转换
+          </a-alert>
+          <a-table
+            v-else
+            :columns="convColumns"
+            :data="convItems"
+            :pagination="{ pageSize: 10 }"
+            row-key="name"
+            size="small"
+          >
+            <template #repl="{ record }">
+              <a-input
+                v-model="record.chosen"
+                :placeholder="record.suggested || '未找到推荐，请手动填写方块 ID'"
+                size="small"
+                allow-clear
+              />
+            </template>
+          </a-table>
+        </template>
+        <a-empty v-else description="请先选择目标版本并分析差异" />
+      </a-spin>
+    </a-modal>
 
     <a-modal
       v-model:visible="dupOpen"

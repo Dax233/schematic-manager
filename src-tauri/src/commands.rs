@@ -7,7 +7,8 @@ use crate::backup;
 use crate::error::{AppError, AppResult};
 use crate::dto::{
     AnalysisResult, BackupEntryDto, BlockCount, BlockHitDto, BlockVersionDto,
-    DuplicateGroupDto, DuplicateScanDto, EntityCount,
+    ConvertItemDto, ConvertOutcomeDto, ConvertTargetDto, DuplicateGroupDto, DuplicateScanDto,
+    EntityCount,
     ReplaceOutcomeDto, ReplaceRuleDto, SceneDto, SaveOutcome, ScanResult, SchematicSummary,
     UnreadableFileDto, VersionOptionDto,
 };
@@ -352,6 +353,98 @@ pub fn apply_replace(
         &format!("替换 {name}：{} -> {}，共 {} 个", rule.from_name, rule.to_name, out.replaced),
     );
     Ok(out.into())
+}
+
+/// 列出可作为转换目标的版本
+#[tauri::command]
+pub fn convert_targets(app: tauri::AppHandle, schematic_path: String) -> Result<Vec<ConvertTargetDto>, String> {
+    let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
+    let dv = sc.summary().data_version;
+    Ok(crate::convert::targets(db, dv)
+        .into_iter()
+        .map(|t| ConvertTargetDto { index: t.index, name: t.name, data_version: t.data_version })
+        .collect())
+}
+
+/// 分析：投影中用到但目标版本没有的方块
+#[tauri::command]
+pub fn analyze_conversion(
+    app: tauri::AppHandle,
+    schematic_path: String,
+    target_index: usize,
+) -> Result<Vec<ConvertItemDto>, String> {
+    let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
+    Ok(crate::convert::analyze(&sc, db, target_index)
+        .into_iter()
+        .map(|i| ConvertItemDto {
+            name: i.name,
+            count: i.count,
+            suggested: i.suggested,
+            chosen: i.chosen,
+        })
+        .collect())
+}
+
+/// 执行转换，结果另存为新文件，原文件不动。
+#[tauri::command]
+pub fn apply_conversion(
+    app: tauri::AppHandle,
+    schematic_path: String,
+    target_index: usize,
+    items: Vec<ConvertItemDto>,
+) -> Result<ConvertOutcomeDto, String> {
+    let db = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let mut sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
+
+    let source_idx = db
+        .pick_version(sc.summary().data_version)
+        .ok_or_else(|| "方块库中找不到与投影匹配的版本".to_string())?;
+    let target = db
+        .versions
+        .get(target_index)
+        .ok_or_else(|| "目标版本不存在".to_string())?;
+
+    // 另存为新文件：转换会大量改写方块，直接覆盖原文件风险太大
+    let src = Path::new(&schematic_path);
+    let dir = src.parent().unwrap_or_else(|| Path::new("."));
+    let stem = src
+        .file_stem()
+        .map(|v| v.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "projection".into());
+    let out_path = dir.join(format!("{stem}_{}.litematic", target.name));
+
+    let items: Vec<crate::convert::ConvertItem> = items
+        .into_iter()
+        .map(|i| crate::convert::ConvertItem {
+            name: i.name,
+            count: i.count,
+            suggested: i.suggested,
+            chosen: i.chosen,
+        })
+        .collect();
+
+    let out = crate::convert::convert(&mut sc, db, source_idx, target_index, &items);
+    // 转换后按新版本写回：块数据与调色板都会变
+    sc.blocks_modified = true;
+    sc.save_to(&out_path.to_string_lossy()).map_err(|e| e.to_string())?;
+
+    let name = out_path
+        .file_name()
+        .map(|v| v.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let _ = backup::append_log(
+        &backup::backup_root(&exe_dir()),
+        &format!("转换 {name}：替换 {} 种方块，{} 种未指定", out.replaced_kinds, out.skipped_kinds),
+    );
+
+    Ok(ConvertOutcomeDto {
+        replaced_kinds: out.replaced_kinds,
+        replaced_blocks: out.replaced_blocks,
+        skipped_kinds: out.skipped_kinds,
+        output_path: out_path.to_string_lossy().into_owned(),
+    })
 }
 
 /// 在一个目录下筛查内容重复的投影文件。
