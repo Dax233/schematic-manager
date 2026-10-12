@@ -739,4 +739,120 @@ mod tests {
         assert!(!b.is_air());
         assert!(BlockState::new("minecraft:cave_air").is_air());
     }
+
+    // ---- 真实样本的往返与一致性验证 ----
+    //
+    // 这些测试读取 tests/data 下的真实 .litematic。样本是仓库的一部分，
+    // 因此缺失时直接失败，不做静默跳过。
+
+    fn sample_path() -> String {
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/data/28速单区块简单熔炉.litematic"
+        )
+        .to_string()
+    }
+
+    #[test]
+    fn real_sample_nbt_roundtrips_without_field_loss() {
+        let bytes = std::fs::read(sample_path())
+            .unwrap_or_else(|e| panic!("缺少测试样本 {}: {e}", sample_path()));
+
+        let root = crate::nbt::parse_maybe_gzip(&bytes).expect("解析失败");
+        let out = crate::nbt::serialize_gzip(&root, "", 6).expect("序列化失败");
+        let back = crate::nbt::parse_maybe_gzip(&out).expect("再解析失败");
+
+        // 写入路径必须零信息损失：任何字段的丢失或顺序改变都会在这里暴露
+        assert_eq!(root, back, "NBT 树在往返后必须完全一致");
+    }
+
+    #[test]
+    fn real_sample_loads_and_regions_are_wellformed() {
+        let sc = Schematic::load(&sample_path()).expect("载入失败");
+        assert!(!sc.regions.is_empty(), "应解析出至少一个区域");
+
+        for r in &sc.regions {
+            assert!(
+                r.size.iter().all(|&v| v > 0),
+                "归一化后尺寸必须全为正，实际 {:?}",
+                r.size
+            );
+            assert_eq!(
+                r.indices.len(),
+                r.volume,
+                "索引数量必须等于区域体积"
+            );
+            assert!(!r.palette.is_empty(), "调色板不应为空");
+            assert!(
+                r.indices.iter().all(|i| (*i as usize) < r.palette.len()),
+                "索引必须落在调色板范围内"
+            );
+        }
+    }
+
+    #[test]
+    fn decoded_block_count_matches_declared_total() {
+        // 用文件自身声明的 TotalBlocks 校验位打包是否正确。
+        // 这比断言一个魔数更有意义：它检验的是解码结果与文件元数据的自洽性。
+        let sc = Schematic::load(&sample_path()).expect("载入失败");
+        let declared = sc
+            .root
+            .get("Metadata")
+            .and_then(|m| m.get("TotalBlocks"))
+            .and_then(|v| v.as_i64())
+            .expect("样本应含 Metadata.TotalBlocks");
+        assert!(declared > 0, "TotalBlocks 应大于 0");
+
+        let decoded = sc.analyze().non_air_total as i64;
+        assert_eq!(
+            decoded, declared,
+            "解码出的非空气方块数应与元数据 TotalBlocks 一致"
+        );
+    }
+
+    #[test]
+    fn metadata_edit_roundtrips_through_disk() {
+        // 完整走一遍写入路径：载入 -> 改描述 -> 落盘 -> 重新载入。
+        // 同时确认方块数据与其它元数据未被牵连改动。
+        let dir = std::env::temp_dir().join(format!(
+            "sm_meta_roundtrip_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dst = dir.join("copy.litematic");
+        std::fs::copy(sample_path(), &dst).unwrap();
+        let dst_s = dst.to_string_lossy().into_owned();
+
+        let before = Schematic::load(&dst_s).unwrap();
+        let blocks_before = before.analyze().non_air_total;
+
+        let mut sc = Schematic::load(&dst_s).unwrap();
+        assert!(sc.set_meta_description("往返测试写入的描述"));
+        sc.save_to(&dst_s).expect("保存失败");
+
+        let after = Schematic::load(&dst_s).unwrap();
+        let md = after.root.get("Metadata").expect("元数据应仍然存在");
+        assert_eq!(
+            md.get("Description").and_then(|v| v.as_str()),
+            Some("往返测试写入的描述"),
+            "描述应被正确写入"
+        );
+        // 方块数据不能因为改元数据而受影响
+        assert_eq!(
+            after.analyze().non_air_total,
+            blocks_before,
+            "改元数据不应影响方块数据"
+        );
+        // 其余元数据字段应原样保留
+        assert_eq!(
+            before.root.get("Metadata").and_then(|m| m.get("Name")).and_then(|v| v.as_str()),
+            after.root.get("Metadata").and_then(|m| m.get("Name")).and_then(|v| v.as_str()),
+            "未修改的元数据字段应保持不变"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
