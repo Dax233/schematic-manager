@@ -1,0 +1,290 @@
+[
+ {
+  "id": "1.14",
+  "dataVersion": 1952,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.14-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.14.1",
+  "dataVersion": 1957,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.14.1-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.14.2",
+  "dataVersion": 1963,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.14.2-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.14.3",
+  "dataVersion": 1968,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.14.3-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.14.4",
+  "dataVersion": 1976,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.14.4-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.15",
+  "dataVersion": 2225,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.15-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.15.1",
+  "dataVersion": 2227,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.15.1-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.15.2",
+  "dataVersion": 2230,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.15.2-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.16",
+  "dataVersion": 2566,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.16-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.16.1",
+  "dataVersion": 2567,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.16.1-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.16.2",
+  "dataVersion": 2578,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.16.2-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.16.3",
+  "dataVersion": 2580,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.16.3-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.16.4",
+  "dataVersion": 2584,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.16.4-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.16.5",
+  "dataVersion": 2586,
+  "jar": "E:\\游戏\\白白\\1.16.5forge突变生物凋灵风暴枪车\\.minecraft\\versions\\1.16.5\\1.16.5.jar",
+  "source": "local"
+ },
+ {
+  "id": "1.17",
+  "dataVersion": 2724,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.17-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.17.1",
+  "dataVersion": 2730,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.17.1-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.18",
+  "dataVersion": 2860,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.18-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.18.1",
+  "dataVersion": 2865,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.18.1-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.18.2",
+  "dataVersion": 2975,
+  "jar": "E:\\游戏\\白白\\小白白暮色机械动力\\.minecraft\\versions\\1.18.2fab\\1.18.2fab.jar",
+  "source": "local"
+ },
+ {
+  "id": "1.19",
+  "dataVersion": 3105,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.19-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.19.1",
+  "dataVersion": 3117,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.19.1-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.19.2",
+  "dataVersion": 3120,
+  "jar": "E:\\游戏\\MC硬件测试\\.minecraft\\versions\\1.19.2\\1.19.2.jar",
+  "source": "local"
+ },
+ {
+  "id": "1.19.3",
+  "dataVersion": 3218,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.19.3-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.19.4",
+  "dataVersion": 3337,
+  "jar": "E:\\游戏\\白白\\小白白暮色机械动力\\.minecraft\\versions\\1.19.4\\1.19.4.jar",
+  "source": "local"
+ },
+ {
+  "id": "1.20",
+  "dataVersion": 3463,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.20-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.20.1",
+  "dataVersion": 3465,
+  "jar": "E:\\游戏\\白白\\1.20.1forge机甲\\.minecraft\\versions\\1.20.1-Forge\\1.20.1-Forge.jar",
+  "source": "local"
+ },
+ {
+  "id": "1.20.2",
+  "dataVersion": 3578,
+  "jar": "E:\\游戏\\白白\\1.20.2宝可梦\\.minecraft\\versions\\1.20.2\\1.20.2.jar",
+  "source": "local"
+ },
+ {
+  "id": "1.20.3",
+  "dataVersion": 3698,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.20.3-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.20.4",
+  "dataVersion": 3700,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.20.4-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.20.5",
+  "dataVersion": 3837,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.20.5-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.20.6",
+  "dataVersion": 3839,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.20.6-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.21",
+  "dataVersion": 3953,
+  "jar": "E:\\游戏\\白白\\1.21\\.minecraft\\versions\\1.21\\1.21.jar",
+  "source": "local"
+ },
+ {
+  "id": "1.21.1",
+  "dataVersion": 3955,
+  "jar": "E:\\游戏\\@1.21.1\\.minecraft\\versions\\1.21.1-NeoForge\\1.21.1-NeoForge.jar",
+  "source": "local"
+ },
+ {
+  "id": "1.21.2",
+  "dataVersion": 4080,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.21.2-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.21.3",
+  "dataVersion": 4082,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.21.3-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.21.4",
+  "dataVersion": 4189,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.21.4-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.21.5",
+  "dataVersion": 4325,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.21.5-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.21.6",
+  "dataVersion": 4435,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.21.6-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.21.7",
+  "dataVersion": 4438,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.21.7-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.21.8",
+  "dataVersion": 4440,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.21.8-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.21.9",
+  "dataVersion": 4554,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.21.9-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.21.10",
+  "dataVersion": 4556,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.21.10-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "1.21.11",
+  "dataVersion": 4671,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\1.21.11-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "26.1",
+  "dataVersion": 4786,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\26.1-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "26.1.1",
+  "dataVersion": 4788,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\26.1.1-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "26.1.2",
+  "dataVersion": 4790,
+  "jar": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\cache\\mcjars\\26.1.2-client.jar",
+  "source": "download"
+ },
+ {
+  "id": "26.2",
+  "dataVersion": 4903,
+  "jar": "E:\\游戏\\@\\26.2F\\.minecraft\\versions\\26.2-Fabric\\26.2-Fabric.jar",
+  "source": "local"
+ },
+ {
+  "id": "26.3",
+  "dataVersion": 5023,
+  "jar": "E:\\游戏\\@\\26.3\\.minecraft\\versions\\26.3-Fabric\\26.3-Fabric.jar",
+  "source": "local"
+ }
+]

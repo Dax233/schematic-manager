@@ -1,0 +1,940 @@
+{
+ "formatVersion": 3,
+ "sections": {
+  "stringsOff": 28,
+  "langsOff": 145225,
+  "texturesOff": 427841,
+  "modelsOff": 736700,
+  "versionsOff": 1777581
+ },
+ "strings": {
+  "count": 6263,
+  "bytes": 145193
+ },
+ "langs": {
+  "count": 24
+ },
+ "textures": {
+  "unique": 1685,
+  "refs": 41647,
+  "rawSize": 1879040,
+  "compressedSize": 286942,
+  "hasAlpha": 775,
+  "bytesBySize": {
+   "16x16": 1639,
+   "32x32": 45,
+   "64x64": 1
+  }
+ },
+ "models": {
+  "unique": 2927,
+  "refs": 287907
+ },
+ "versions": [
+  {
+   "id": "1.13.2",
+   "dataVersion": 1631,
+   "langTableIdx": 0,
+   "textures": 505,
+   "distinctTextures": 489,
+   "newTextures": 489,
+   "blocks": 599,
+   "modelRefs": 2962,
+   "distinctModels": 890,
+   "newModels": 890
+  },
+  {
+   "id": "1.14",
+   "dataVersion": 1952,
+   "langTableIdx": 1,
+   "textures": 571,
+   "distinctTextures": 567,
+   "newTextures": 388,
+   "blocks": 677,
+   "modelRefs": 3772,
+   "distinctModels": 1043,
+   "newModels": 260
+  },
+  {
+   "id": "1.14.1",
+   "dataVersion": 1957,
+   "langTableIdx": 1,
+   "textures": 571,
+   "distinctTextures": 567,
+   "newTextures": 3,
+   "blocks": 677,
+   "modelRefs": 3772,
+   "distinctModels": 1043,
+   "newModels": 0
+  },
+  {
+   "id": "1.14.2",
+   "dataVersion": 1963,
+   "langTableIdx": 1,
+   "textures": 571,
+   "distinctTextures": 567,
+   "newTextures": 0,
+   "blocks": 677,
+   "modelRefs": 3772,
+   "distinctModels": 1043,
+   "newModels": 0
+  },
+  {
+   "id": "1.14.3",
+   "dataVersion": 1968,
+   "langTableIdx": 1,
+   "textures": 571,
+   "distinctTextures": 567,
+   "newTextures": 0,
+   "blocks": 677,
+   "modelRefs": 3772,
+   "distinctModels": 1043,
+   "newModels": 0
+  },
+  {
+   "id": "1.14.4",
+   "dataVersion": 1976,
+   "langTableIdx": 1,
+   "textures": 571,
+   "distinctTextures": 567,
+   "newTextures": 0,
+   "blocks": 677,
+   "modelRefs": 3772,
+   "distinctModels": 1043,
+   "newModels": 0
+  },
+  {
+   "id": "1.15",
+   "dataVersion": 2225,
+   "langTableIdx": 2,
+   "textures": 584,
+   "distinctTextures": 580,
+   "newTextures": 13,
+   "blocks": 681,
+   "modelRefs": 3822,
+   "distinctModels": 1049,
+   "newModels": 6
+  },
+  {
+   "id": "1.15.1",
+   "dataVersion": 2227,
+   "langTableIdx": 2,
+   "textures": 584,
+   "distinctTextures": 580,
+   "newTextures": 0,
+   "blocks": 681,
+   "modelRefs": 3822,
+   "distinctModels": 1049,
+   "newModels": 0
+  },
+  {
+   "id": "1.15.2",
+   "dataVersion": 2230,
+   "langTableIdx": 2,
+   "textures": 584,
+   "distinctTextures": 580,
+   "newTextures": 0,
+   "blocks": 681,
+   "modelRefs": 3822,
+   "distinctModels": 1049,
+   "newModels": 0
+  },
+  {
+   "id": "1.16",
+   "dataVersion": 2566,
+   "langTableIdx": 3,
+   "textures": 657,
+   "distinctTextures": 652,
+   "newTextures": 75,
+   "blocks": 764,
+   "modelRefs": 4449,
+   "distinctModels": 1212,
+   "newModels": 198
+  },
+  {
+   "id": "1.16.1",
+   "dataVersion": 2567,
+   "langTableIdx": 3,
+   "textures": 657,
+   "distinctTextures": 652,
+   "newTextures": 0,
+   "blocks": 764,
+   "modelRefs": 4449,
+   "distinctModels": 1212,
+   "newModels": 0
+  },
+  {
+   "id": "1.16.2",
+   "dataVersion": 2578,
+   "langTableIdx": 3,
+   "textures": 657,
+   "distinctTextures": 652,
+   "newTextures": 0,
+   "blocks": 764,
+   "modelRefs": 4451,
+   "distinctModels": 1212,
+   "newModels": 1
+  },
+  {
+   "id": "1.16.3",
+   "dataVersion": 2580,
+   "langTableIdx": 3,
+   "textures": 657,
+   "distinctTextures": 652,
+   "newTextures": 0,
+   "blocks": 764,
+   "modelRefs": 4451,
+   "distinctModels": 1212,
+   "newModels": 0
+  },
+  {
+   "id": "1.16.4",
+   "dataVersion": 2584,
+   "langTableIdx": 3,
+   "textures": 657,
+   "distinctTextures": 652,
+   "newTextures": 0,
+   "blocks": 764,
+   "modelRefs": 4451,
+   "distinctModels": 1212,
+   "newModels": 0
+  },
+  {
+   "id": "1.16.5",
+   "dataVersion": 2586,
+   "langTableIdx": 4,
+   "textures": 657,
+   "distinctTextures": 652,
+   "newTextures": 0,
+   "blocks": 764,
+   "modelRefs": 4451,
+   "distinctModels": 1212,
+   "newModels": 0
+  },
+  {
+   "id": "1.17",
+   "dataVersion": 2724,
+   "langTableIdx": 5,
+   "textures": 781,
+   "distinctTextures": 776,
+   "newTextures": 138,
+   "blocks": 900,
+   "modelRefs": 5332,
+   "distinctModels": 1507,
+   "newModels": 354
+  },
+  {
+   "id": "1.17.1",
+   "dataVersion": 2730,
+   "langTableIdx": 5,
+   "textures": 781,
+   "distinctTextures": 776,
+   "newTextures": 0,
+   "blocks": 900,
+   "modelRefs": 5332,
+   "distinctModels": 1507,
+   "newModels": 0
+  },
+  {
+   "id": "1.18",
+   "dataVersion": 2860,
+   "langTableIdx": 5,
+   "textures": 781,
+   "distinctTextures": 776,
+   "newTextures": 23,
+   "blocks": 900,
+   "modelRefs": 5347,
+   "distinctModels": 1507,
+   "newModels": 55
+  },
+  {
+   "id": "1.18.1",
+   "dataVersion": 2865,
+   "langTableIdx": 5,
+   "textures": 781,
+   "distinctTextures": 776,
+   "newTextures": 0,
+   "blocks": 900,
+   "modelRefs": 5347,
+   "distinctModels": 1507,
+   "newModels": 0
+  },
+  {
+   "id": "1.18.2",
+   "dataVersion": 2975,
+   "langTableIdx": 6,
+   "textures": 781,
+   "distinctTextures": 776,
+   "newTextures": 0,
+   "blocks": 900,
+   "modelRefs": 5347,
+   "distinctModels": 1507,
+   "newModels": 0
+  },
+  {
+   "id": "1.19",
+   "dataVersion": 3105,
+   "langTableIdx": 7,
+   "textures": 821,
+   "distinctTextures": 814,
+   "newTextures": 48,
+   "blocks": 935,
+   "modelRefs": 5602,
+   "distinctModels": 1613,
+   "newModels": 110
+  },
+  {
+   "id": "1.19.1",
+   "dataVersion": 3117,
+   "langTableIdx": 7,
+   "textures": 821,
+   "distinctTextures": 814,
+   "newTextures": 0,
+   "blocks": 935,
+   "modelRefs": 5602,
+   "distinctModels": 1613,
+   "newModels": 0
+  },
+  {
+   "id": "1.19.2",
+   "dataVersion": 3120,
+   "langTableIdx": 8,
+   "textures": 821,
+   "distinctTextures": 814,
+   "newTextures": 0,
+   "blocks": 935,
+   "modelRefs": 5602,
+   "distinctModels": 1613,
+   "newModels": 0
+  },
+  {
+   "id": "1.19.3",
+   "dataVersion": 3218,
+   "langTableIdx": 9,
+   "textures": 836,
+   "distinctTextures": 829,
+   "newTextures": 18,
+   "blocks": 974,
+   "modelRefs": 5867,
+   "distinctModels": 1668,
+   "newModels": 55
+  },
+  {
+   "id": "1.19.4",
+   "dataVersion": 3337,
+   "langTableIdx": 10,
+   "textures": 856,
+   "distinctTextures": 848,
+   "newTextures": 19,
+   "blocks": 1000,
+   "modelRefs": 6051,
+   "distinctModels": 1719,
+   "newModels": 51
+  },
+  {
+   "id": "1.20",
+   "dataVersion": 3463,
+   "langTableIdx": 11,
+   "textures": 890,
+   "distinctTextures": 883,
+   "newTextures": 36,
+   "blocks": 1005,
+   "modelRefs": 6081,
+   "distinctModels": 1736,
+   "newModels": 66
+  },
+  {
+   "id": "1.20.1",
+   "dataVersion": 3465,
+   "langTableIdx": 12,
+   "textures": 890,
+   "distinctTextures": 883,
+   "newTextures": 0,
+   "blocks": 1005,
+   "modelRefs": 6081,
+   "distinctModels": 1736,
+   "newModels": 0
+  },
+  {
+   "id": "1.20.2",
+   "dataVersion": 3578,
+   "langTableIdx": 12,
+   "textures": 890,
+   "distinctTextures": 883,
+   "newTextures": 1,
+   "blocks": 1005,
+   "modelRefs": 6081,
+   "distinctModels": 1736,
+   "newModels": 5
+  },
+  {
+   "id": "1.20.3",
+   "dataVersion": 3698,
+   "langTableIdx": 13,
+   "textures": 952,
+   "distinctTextures": 945,
+   "newTextures": 62,
+   "blocks": 1060,
+   "modelRefs": 6727,
+   "distinctModels": 1838,
+   "newModels": 104
+  },
+  {
+   "id": "1.20.4",
+   "dataVersion": 3700,
+   "langTableIdx": 13,
+   "textures": 952,
+   "distinctTextures": 945,
+   "newTextures": 0,
+   "blocks": 1060,
+   "modelRefs": 6727,
+   "distinctModels": 1838,
+   "newModels": 0
+  },
+  {
+   "id": "1.20.5",
+   "dataVersion": 3837,
+   "langTableIdx": 14,
+   "textures": 974,
+   "distinctTextures": 965,
+   "newTextures": 25,
+   "blocks": 1062,
+   "modelRefs": 6766,
+   "distinctModels": 1850,
+   "newModels": 15
+  },
+  {
+   "id": "1.20.6",
+   "dataVersion": 3839,
+   "langTableIdx": 14,
+   "textures": 974,
+   "distinctTextures": 965,
+   "newTextures": 0,
+   "blocks": 1062,
+   "modelRefs": 6766,
+   "distinctModels": 1850,
+   "newModels": 0
+  },
+  {
+   "id": "1.21",
+   "dataVersion": 3953,
+   "langTableIdx": 15,
+   "textures": 974,
+   "distinctTextures": 965,
+   "newTextures": 8,
+   "blocks": 1062,
+   "modelRefs": 6766,
+   "distinctModels": 1850,
+   "newModels": 0
+  },
+  {
+   "id": "1.21.1",
+   "dataVersion": 3955,
+   "langTableIdx": 15,
+   "textures": 974,
+   "distinctTextures": 965,
+   "newTextures": 0,
+   "blocks": 1062,
+   "modelRefs": 6766,
+   "distinctModels": 1850,
+   "newModels": 0
+  },
+  {
+   "id": "1.21.2",
+   "dataVersion": 4080,
+   "langTableIdx": 16,
+   "textures": 994,
+   "distinctTextures": 984,
+   "newTextures": 20,
+   "blocks": 1086,
+   "modelRefs": 6950,
+   "distinctModels": 1896,
+   "newModels": 86
+  },
+  {
+   "id": "1.21.3",
+   "dataVersion": 4082,
+   "langTableIdx": 16,
+   "textures": 994,
+   "distinctTextures": 984,
+   "newTextures": 0,
+   "blocks": 1086,
+   "modelRefs": 6950,
+   "distinctModels": 1896,
+   "newModels": 0
+  },
+  {
+   "id": "1.21.4",
+   "dataVersion": 4189,
+   "langTableIdx": 17,
+   "textures": 1001,
+   "distinctTextures": 991,
+   "newTextures": 13,
+   "blocks": 1097,
+   "modelRefs": 7018,
+   "distinctModels": 1912,
+   "newModels": 17
+  },
+  {
+   "id": "1.21.5",
+   "dataVersion": 4325,
+   "langTableIdx": 18,
+   "textures": 1017,
+   "distinctTextures": 1006,
+   "newTextures": 15,
+   "blocks": 1106,
+   "modelRefs": 7063,
+   "distinctModels": 1932,
+   "newModels": 22
+  },
+  {
+   "id": "1.21.6",
+   "dataVersion": 4435,
+   "langTableIdx": 19,
+   "textures": 1045,
+   "distinctTextures": 1034,
+   "newTextures": 80,
+   "blocks": 1107,
+   "modelRefs": 7079,
+   "distinctModels": 1936,
+   "newModels": 4
+  },
+  {
+   "id": "1.21.7",
+   "dataVersion": 4438,
+   "langTableIdx": 19,
+   "textures": 1045,
+   "distinctTextures": 1034,
+   "newTextures": 0,
+   "blocks": 1107,
+   "modelRefs": 7079,
+   "distinctModels": 1936,
+   "newModels": 0
+  },
+  {
+   "id": "1.21.8",
+   "dataVersion": 4440,
+   "langTableIdx": 19,
+   "textures": 1045,
+   "distinctTextures": 1034,
+   "newTextures": 0,
+   "blocks": 1107,
+   "modelRefs": 7079,
+   "distinctModels": 1936,
+   "newModels": 0
+  },
+  {
+   "id": "1.21.9",
+   "dataVersion": 4554,
+   "langTableIdx": 20,
+   "textures": 1073,
+   "distinctTextures": 1062,
+   "newTextures": 28,
+   "blocks": 1168,
+   "modelRefs": 7592,
+   "distinctModels": 2049,
+   "newModels": 115
+  },
+  {
+   "id": "1.21.10",
+   "dataVersion": 4556,
+   "langTableIdx": 20,
+   "textures": 1073,
+   "distinctTextures": 1062,
+   "newTextures": 0,
+   "blocks": 1168,
+   "modelRefs": 7592,
+   "distinctModels": 2049,
+   "newModels": 0
+  },
+  {
+   "id": "1.21.11",
+   "dataVersion": 4671,
+   "langTableIdx": 20,
+   "textures": 1073,
+   "distinctTextures": 1062,
+   "newTextures": 0,
+   "blocks": 1168,
+   "modelRefs": 7592,
+   "distinctModels": 2049,
+   "newModels": 0
+  },
+  {
+   "id": "26.1",
+   "dataVersion": 4786,
+   "langTableIdx": 21,
+   "textures": 1074,
+   "distinctTextures": 1063,
+   "newTextures": 5,
+   "blocks": 1170,
+   "modelRefs": 7594,
+   "distinctModels": 2051,
+   "newModels": 18
+  },
+  {
+   "id": "26.1.1",
+   "dataVersion": 4788,
+   "langTableIdx": 21,
+   "textures": 1074,
+   "distinctTextures": 1063,
+   "newTextures": 0,
+   "blocks": 1170,
+   "modelRefs": 7594,
+   "distinctModels": 2051,
+   "newModels": 0
+  },
+  {
+   "id": "26.1.2",
+   "dataVersion": 4790,
+   "langTableIdx": 21,
+   "textures": 1074,
+   "distinctTextures": 1063,
+   "newTextures": 0,
+   "blocks": 1170,
+   "modelRefs": 7594,
+   "distinctModels": 2051,
+   "newModels": 0
+  },
+  {
+   "id": "26.2",
+   "dataVersion": 4903,
+   "langTableIdx": 22,
+   "textures": 1231,
+   "distinctTextures": 1220,
+   "newTextures": 157,
+   "blocks": 1198,
+   "modelRefs": 8661,
+   "distinctModels": 2318,
+   "newModels": 271
+  },
+  {
+   "id": "26.3",
+   "dataVersion": 5023,
+   "langTableIdx": 23,
+   "textures": 1250,
+   "distinctTextures": 1239,
+   "newTextures": 21,
+   "blocks": 1288,
+   "modelRefs": 10290,
+   "distinctModels": 2541,
+   "newModels": 224
+  }
+ ],
+ "warnings": [],
+ "dedup": {
+  "texturePoolUnique": 1685,
+  "textureRefs": 41647,
+  "textureDedupPct": 4.05,
+  "modelPoolUnique": 2927,
+  "modelRefs": 287907,
+  "modelDedupPct": 1.02,
+  "langUnique": 24,
+  "versionCount": 49,
+  "stringUnique": 6263
+ },
+ "files": {
+  "blocks.dat": 5650470,
+  "blocks.dat.z": 1715175,
+  "blocks.dat.MB": 5.389,
+  "blocks.dat.z.MB": 1.636,
+  "ratio": 0.3035
+ },
+ "inputs": [
+  {
+   "id": "1.13.2",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.13.2",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.14",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.14",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.14.1",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.14.1",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.14.2",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.14.2",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.14.3",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.14.3",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.14.4",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.14.4",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.15",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.15",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.15.1",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.15.1",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.15.2",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.15.2",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.16",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.16",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.16.1",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.16.1",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.16.2",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.16.2",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.16.3",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.16.3",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.16.4",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.16.4",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.16.5",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.16.5",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.17",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.17",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.17.1",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.17.1",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.18",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.18",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.18.1",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.18.1",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.18.2",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.18.2",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.19",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.19",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.19.1",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.19.1",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.19.2",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.19.2",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.19.3",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.19.3",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.19.4",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.19.4",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.20",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.20",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.20.1",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.20.1",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.20.2",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.20.2",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.20.3",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.20.3",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.20.4",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.20.4",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.20.5",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.20.5",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.20.6",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.20.6",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.21",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.21",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.21.1",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.21.1",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.21.2",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.21.2",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.21.3",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.21.3",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.21.4",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.21.4",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.21.5",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.21.5",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.21.6",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.21.6",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.21.7",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.21.7",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.21.8",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.21.8",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.21.9",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.21.9",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.21.10",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.21.10",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "1.21.11",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\1.21.11",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "26.1",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\26.1",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "26.1.1",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\26.1.1",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "26.1.2",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\26.1.2",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "26.2",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\26.2",
+   "source": "versions-dir",
+   "standaloneDir": null
+  },
+  {
+   "id": "26.3",
+   "dir": "C:\\Users\\hsds\\Documents\\deepseek-harness\\default-workspace\\data\\versions\\26.3",
+   "source": "versions-dir",
+   "standaloneDir": null
+  }
+ ],
+ "skippedManifestIds": [],
+ "format": "=== blocks.dat 二进制格式 (v3, 全部小端序) ===\n\n[Header] 28 字节\n  char magic[8]      = \"PMBLKDB\\0\"  (50 4D 42 4C 4B 44 42 00)\n  u32  formatVersion = 3\n  u32  versionCount\n  u32  textureCount        // 贴图池条目数 = TEXTURES.count\n  u32  modelCount          // 模型池条目数 = MODELS.count\n  u32  langTableCount      // 语言表数量 = LANGS.count\n\n[Section STRINGS]  紧跟 Header\n  u32  count\n  count 个 NUL 结尾的 UTF-8 字符串，直接首尾拼接。\n  第 i 个字符串 = 从字节流开头按 NUL 切分后的第 i 段（不含 NUL）。\n  索引 0xFFFFFFFF (NO_STR) 保留为\"无效/缺失\"哨兵，不会指向真实字符串。\n\n[Section LANGS]\n  u32  count                          // == Header.langTableCount\n  count 次:\n    u32 entryCount\n    entryCount 次:\n      u32 blockStrIdx                 // \"minecraft:xxx\"\n      u32 enStrIdx\n      u32 zhStrIdx\n\n[Section TEXTURES]\n  u32  count                          // == Header.textureCount\n  count 次:  (每条 13 字节, 非对齐!)\n    u16 w\n    u16 h\n    u32 dataOffset                    // 在解压后的 raw 缓冲区中的字节偏移\n    u32 dataLen                       // == w*h*4\n    u8  hasAlpha                      // 1 = 该贴图存在 alpha < 255 的像素\n  u32  rawSize                        // 所有贴图像素按池索引顺序拼接后的总字节数\n  u32  compressedSize\n  u8   blob[compressedSize]           // zlib(RFC1950) 压缩的 rawSize 字节\n  贴图 i 的像素 = inflate(blob)[dataOffset .. dataOffset+dataLen)，RGBA8888\n\n[Section MODELS]\n  u32  count                          // == Header.modelCount\n  count 次:\n    u8  flags                         // bit0 = translucent\n    u16 elementCount\n    elementCount 次:\n      f32 from[3]\n      f32 to[3]\n      u8  hasRot                      // 0 / 1\n      if hasRot:\n        u8  rotKind                   // 0 = axis/angle, 1 = 多轴 rx/ry/rz\n        f32 rotOrigin[3]\n        u8  axis                      // 0=x 1=y 2=z (rotKind==0 有效)\n        f32 angle                     // 度\n        u8  rescale\n        f32 rx, ry, rz                // rotKind==1 有效, 否则为 0\n      u8  faceMask                    // bit0=down bit1=up bit2=north bit3=south bit4=west bit5=east\n      按 faceMask 从低位到高位，每个置位的面依次:\n        u32 texStrIdx                 // 贴图路径的字符串索引; 0xFFFFFFFF = JSON 中无 texture 字段\n        f32 uv[4]                     // 原样保留 JSON 的 0..16 值\n        u8  cullface                  // 0xFF = 无; 0=down 1=up 2=north 3=south 4=west 5=east\n        i16 tintindex                 // -1 = 无\n        u16 rotation                  // 0/90/180/270\n\n[Section VERSIONS]\n  u32  count                          // == Header.versionCount\n  count 次:\n    u32 idStrIdx\n    i32 dataVersion\n    u32 langTableIdx\n    u32 textureMapCount\n    textureMapCount 次:\n      u32 pathStrIdx                  // 形如 \"block/stone\"（无 minecraft: 前缀）\n      u32 textureIdx                  // 贴图池索引\n    u32 blockCount\n    blockCount 次:\n      u32 nameStrIdx                  // 形如 \"minecraft:stone\"\n      u16 variantCount\n      variantCount 次:\n        u32 whenStrIdx\n        u32 modelIdx\n        u8  rotX, u8 rotY, u8 uvlock\n      u16 multipartCount\n      multipartCount 次:\n        u32 whenStrIdx\n        u32 modelIdx\n        u8  rotX, u8 rotY, u8 uvlock\n\n  *** rotX / rotY 是 \"90 度的倍数\" 0..3，不是度数 ***\n  原始 blockstate 的 x/y 取值是 0/90/180/270，270 装不进 u8，所以这里存的是\n  角度/90（0=0° 1=90° 2=180° 3=270°）。C++ 侧请用 rotX*90 / rotY*90 还原角度。\n  如果你更想直接存度数，把这两个字段从 u8 改成 u16 并告诉我，我重跑脚本即可。\n\n=== 对齐注意 ===\n除 Header 外全部字段都是**紧凑无填充**的：TEXTURES 每条 13 字节、MODELS 内部含 u8 后接\nf32，都没有 4 字节对齐。C++ 侧请用 memcpy 逐字段读取，或用 #pragma pack(push,1) 的结构体，\n**不要**直接把指针 reinterpret_cast 成未打包的结构体。\n\n=== when 字符串规范化 ===\n  variants[].when (dict)  -> \"a=1,b=2\"，属性名按字典序排序；{} -> \"\"\n  multipart[].when (list) -> OR 方案之间用 '|'，方案内 AND 用 ','；条件名排序\n                              [] -> \"\"；含空方案(无条件) -> 整体 \"\"\n  解析: 先按 '|' 切成 OR 方案，每个方案再按 ',' 切，每项再按第一个 '=' 切成 属性/值。\n        空串 = 无条件匹配。\n\n=== 解压 ===\n  blocks.dat.z        = zlib.compress(blocks.dat, 9)   // RFC1950: 2 字节头 + adler32 尾\n  TEXTURES 的 blob    = zlib.compress(rawPixels, 9)    // 同上\n  C++ 直接用 zlib 的 uncompress()/inflateInit() 即可（不要用 -15 raw window）。"
+}

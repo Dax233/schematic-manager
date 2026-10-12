@@ -1,0 +1,39 @@
+#include <windows.h>
+
+/* 应用图标（资源 ID 1） */
+1 ICON "app.ico"
+
+/* 内置方块数据库（deflate 压缩后的 blocks.dat），由 build.ps1 先拷贝到 res\ */
+101 RCDATA "blocks.dat.z"
+
+/* 应用程序清单：Win7+ 兼容 + DPI 感知 */
+1 24 "app.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName",      "bilibili HeiShanDaShu"
+            VALUE "FileDescription",  "Schematic Manager"
+            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "InternalName",     "SchematicManager"
+            VALUE "OriginalFilename", "SchematicManager.exe"
+            VALUE "ProductName",      "Schematic Manager"
+            VALUE "ProductVersion",   "1.0.0.0"
+            VALUE "LegalCopyright",   "Copyright (C) 2026"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END
