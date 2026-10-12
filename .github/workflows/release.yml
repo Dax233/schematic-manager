@@ -148,7 +148,35 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       - name: 构建（Tauri 打包）
-        run: pnpm tauri build --target ${{ matrix.target }}
+        id: tauri
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm tauri build --target ${{ matrix.target }} --verbose 2>&1 | tee build.log
+
+      # 构建失败时把关键输出登记为 Issue。
+      # 原因：GitHub 的作业日志要等整个运行结束才能下载，而并行矩阵中
+      # 其它平台可能长时间占用 runner；写入 Issue 后即可随时读取，
+      # 便于快速定位失败原因。
+      - name: 失败时上报诊断
+        if: failure()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          title="CI 构建失败：${{ matrix.platform }}-${{ matrix.arch }}"
+          {
+            echo "运行: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "目标: ${{ matrix.target }}  提交: ${{ github.sha }}"
+            echo ""
+            echo '```'
+            tail -c 40000 build.log 2>/dev/null || echo "(未生成 build.log)"
+            echo '```'
+          } > report.md
+          gh issue create --title "$title" --body-file report.md \
+            --label "ci" 2>/dev/null || \
+          gh issue create --title "$title" --body-file report.md || true
 
       - name: 收集并规范化产物
         run: node scripts/collect-artifacts.mjs --version ${{ needs.prepare.outputs.version }} --platform ${{ matrix.platform }} --arch ${{ matrix.arch }}
