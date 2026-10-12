@@ -124,10 +124,13 @@ pub fn collect_quads(sc: &Schematic, db: &BlockDb, version: &VersionDef) -> Vec<
                                     let idx = *npi as usize;
                                     if idx < opaque_cache.len() {
                                         if opaque_cache[idx] < 0 {
-                                            let v = r.palette.get(idx).map_or(0, |s| {
-                                                i8::from(is_opaque(db, version, s))
-                                            });
-                                            opaque_cache[idx] = v;
+                                            // 注意：Rust 只为 u8 实现了 From<bool>，
+                                            // i8::from(bool) 不存在，必须显式取值
+                                            let opaque = r
+                                                .palette
+                                                .get(idx)
+                                                .map_or(false, |s| is_opaque(db, version, s));
+                                            opaque_cache[idx] = if opaque { 1 } else { 0 };
                                         }
                                         if opaque_cache[idx] == 1 {
                                             continue; // 被完全遮挡
