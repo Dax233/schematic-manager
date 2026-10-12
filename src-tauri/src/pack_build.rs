@@ -72,11 +72,6 @@ impl StringPool {
     }
 }
 
-/// 贴图加载器：把路径解析成已解码的图像
-///
-/// 由调用方提供，便于测试时用内存数据替代真实 PNG。
-pub type TextureLoader<'a> = dyn FnMut(&str) -> Option<(u16, u16, Vec<u8>)> + 'a;
-
 /// 从 jar 构建资源包。
 ///
 /// `data_version` 为 0 时尝试从 version.json 读取；模组包应显式给出，

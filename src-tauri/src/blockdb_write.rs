@@ -322,11 +322,6 @@ fn compress_zlib(data: &[u8]) -> AppResult<Vec<u8>> {
     Ok(e.finish()?)
 }
 
-/// 构造一个空的贴图记录，供调用方占位（贴图池由导入流程填充）
-pub fn empty_texture() -> TextureInfo {
-    TextureInfo { w: 0, h: 0, offset: 0, len: 0, has_alpha: false }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

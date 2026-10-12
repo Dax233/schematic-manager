@@ -263,11 +263,9 @@ pub fn decode_indices(arr: &[i64], count: usize, bits: i32) -> Vec<i32> {
 /// 只读元数据（用于列表快速扫描，不解码方块）
 #[derive(Debug, Clone, Default)]
 pub struct Summary {
-    pub valid: bool,
     pub error: String,
     pub path: String,
     pub format_version: i32,
-    pub format_sub_version: i32,
     pub data_version: i32,
     pub mc_version_name: String,
     pub name: String,
@@ -283,11 +281,7 @@ pub struct Summary {
     pub tile_entity_count: i64,
     pub pending_ticks: i64,
     pub has_preview: bool,
-    pub preview_pixels: i64,
     pub file_size: u64,
-    pub fully_analyzed: bool,
-    pub distinct_block_types: usize,
-    pub distinct_states: usize,
 }
 
 /// 完整分析结果
@@ -305,9 +299,8 @@ pub struct Analysis {
 
 /// 从 NBT 根节点构造 Summary（不解析方块数据）
 pub fn summary_from_nbt(root: &Value) -> Summary {
-    let mut s = Summary { valid: true, ..Default::default() };
+    let mut s = Summary::default();
     s.format_version = root.get("Version").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-    s.format_sub_version = root.get("SubVersion").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
     s.data_version = root
         .get("MinecraftDataVersion")
         .and_then(|v| v.as_i64())
@@ -333,12 +326,8 @@ pub fn summary_from_nbt(root: &Value) -> Summary {
                 s.enclosing = xyz;
             }
         }
-        if let Some(pv) = md.get("PreviewImageData") {
+        if md.get("PreviewImageData").is_some() {
             s.has_preview = true;
-            s.preview_pixels = match pv {
-                Value::IntArray(a) => a.len() as i64,
-                _ => 0,
-            };
         }
     }
 
@@ -511,7 +500,6 @@ impl Schematic {
                         let mut inner = summary_from_nbt(&root);
                         inner.path = path.to_string();
                         inner.file_size = s.file_size;
-                        inner.valid = true;
                         return inner;
                     }
                     Err(e) => {
@@ -540,18 +528,6 @@ impl Schematic {
     pub fn summary(&self) -> Summary {
         let mut s = summary_from_nbt(&self.root);
         s.path = self.path.clone();
-        s.valid = true;
-        s.fully_analyzed = true;
-        let mut types = std::collections::BTreeSet::new();
-        let mut states = std::collections::BTreeSet::new();
-        for r in &self.regions {
-            for b in &r.palette {
-                types.insert(b.name.clone());
-                states.insert(b.key());
-            }
-        }
-        s.distinct_block_types = types.len();
-        s.distinct_states = states.len();
         s
     }
 

@@ -300,6 +300,12 @@ mod tests {
             self.raw_entry(name, 0, content, content.len() as u32, crc32(content));
         }
 
+        /// 加入一个 deflate 压缩的条目（真实 jar 里的常见形式）
+        fn deflated(&mut self, name: &str, content: &[u8]) {
+            let raw = deflate(content);
+            self.raw_entry(name, 8, &raw, content.len() as u32, crc32(content));
+        }
+
         fn finish(mut self) -> Vec<u8> {
             let cd_off = self.data.len() as u32;
             for (name, crc, comp, uncomp, off, method) in &self.entries {
@@ -342,6 +348,68 @@ mod tests {
         let mut e = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
         e.write_all(src).unwrap();
         e.finish().unwrap()
+    }
+
+    /// Deflate 条目的读取路径必须真的被覆盖。
+    ///
+    /// 此前所有测试用的都是 stored（method 0）条目，deflate 分支
+    /// （zip.rs 的 Method::Deflate 解压）从未被执行过——而真实 jar 里的
+    /// 条目几乎全是 deflate，这是导入资源包时最主要的一条路径。
+    #[test]
+    fn reads_deflate_compressed_entry() {
+        let mut b = ZipBuilder::new();
+        // 内容取长一些并含重复片段，确保压缩后与原文长度不同，
+        // 从而能区分「解压成功」与「原样返回压缩字节」
+        let content = b"minecraft:block/stone\n".repeat(200);
+        b.deflated("assets/stone.json", &content);
+        let zip = b.finish();
+
+        let a = open(&zip).expect("解析失败");
+        let e = a.find("assets/stone.json").expect("应找到该条目");
+        assert_eq!(e.method, Method::Deflate, "该条目应是 deflate 方式");
+        assert_eq!(e.uncompressed_size as usize, content.len());
+
+        let got = read(&zip, e).expect("应能解压读取");
+        assert_eq!(got, content, "解压结果必须与原文一致");
+    }
+
+    /// 声明的原始长度与实际不符时必须报错，而不是给出截断/多余的内容。
+    #[test]
+    fn deflate_length_mismatch_is_rejected() {
+        let content = b"hello deflate world";
+        let raw = deflate(content);
+        let mut b = ZipBuilder::new();
+        // 故意把记录的原始长度写错
+        b.raw_entry("bad.txt", 8, &raw, content.len() as u32 + 5, crc32(content));
+        let zip = b.finish();
+
+        let a = open(&zip).expect("解析失败");
+        let e = a.find("bad.txt").expect("应找到该条目");
+        let err = read(&zip, e).expect_err("长度不符应报错");
+        assert!(
+            err.to_string().contains("不符"),
+            "错误信息应说明长度不符，实际：{err}"
+        );
+    }
+
+    /// CRC 不符时必须报错：数据在传输或存储中损坏了。
+    #[test]
+    fn deflate_crc_mismatch_is_rejected() {
+        let content = b"hello deflate world";
+        let raw = deflate(content);
+        let mut b = ZipBuilder::new();
+        b.raw_entry("bad.txt", 8, &raw, content.len() as u32, crc32(content) ^ 0xFF);
+        let zip = b.finish();
+
+        let a = open(&zip).expect("解析失败");
+        // 先确认条目本身能被找到，避免把「找不到」误当成「CRC 校验生效」
+        assert!(a.find("bad.txt").is_some());
+        let e = a.find("bad.txt").expect("应找到该条目");
+        let err = read(&zip, e).expect_err("CRC 不符应报错");
+        assert!(
+            err.to_string().contains("CRC") || err.to_string().contains("校验"),
+            "错误信息应说明校验失败，实际：{err}"
+        );
     }
 
     #[test]

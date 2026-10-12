@@ -89,14 +89,6 @@ impl Value {
         }
     }
 
-    pub fn as_f64(&self) -> Option<f64> {
-        match self {
-            Value::Float(v) => Some(*v as f64),
-            Value::Double(v) => Some(*v),
-            _ => self.as_i64().map(|v| v as f64),
-        }
-    }
-
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::String(s) => Some(s),

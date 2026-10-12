@@ -49,14 +49,6 @@ pub fn default_uv(face: u8, from: [f32; 3], to: [f32; 3]) -> [f32; 4] {
     }
 }
 
-/// 模型转换所需的外部信息
-pub struct ModelContext<'a> {
-    /// 贴图路径（已规范成 `ns:path`）到贴图池下标的映射
-    pub texture_pool: &'a HashMap<String, u32>,
-    /// 字符串池：贴图路径写入模型面时使用其下标
-    pub string_pool: &'a HashMap<String, u32>,
-}
-
 /// 转换结果
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConvertedModel {
