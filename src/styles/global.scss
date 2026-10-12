@@ -1,0 +1,96 @@
+@use "./variables" as v;
+
+* { box-sizing: border-box; }
+
+html, body, #app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  font-size: 13px;
+  color: #1d2129;
+  background: v.$window-bg;
+  // 桌面应用：禁用文本选择与拖拽，避免"网页感"
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+// 主窗口外框：与旧版一致的 2px 灰色扁平边框
+.app-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border: v.$border-width solid v.$border-color;
+  background: v.$panel-bg;
+  overflow: hidden;
+}
+
+.titlebar {
+  height: v.$titlebar-h;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  background: v.$header-bg;
+  border-bottom: 1px solid #e5e6eb;
+
+  .titlebar__logo {
+    width: 18px; height: 18px; border-radius: 4px;
+    background: v.$accent-color;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 11px;
+  }
+  .titlebar__title { font-weight: 600; }
+  .titlebar__spacer { flex: 1 1 auto; }
+  // 自绘窗口按钮：Tauri 无边框窗口下由前端绘制
+  .titlebar__btn {
+    width: 42px; height: v.$titlebar-h;
+    display: flex; align-items: center; justify-content: center;
+    cursor: default;
+    &:hover { background: #e8eaed; }
+    &.is-close:hover { background: #e81123; color: #fff; }
+  }
+}
+
+.workbench {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+
+.sidebar {
+  width: 560px;
+  min-width: 360px;
+  border-right: 1px solid #e5e6eb;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.detail {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: v.$panel-bg;
+}
+
+.statusbar {
+  height: v.$statusbar-h;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px;
+  background: v.$header-bg;
+  border-top: 1px solid #e5e6eb;
+  color: #4e5969;
+  font-size: 12px;
+}
+
+// 数据表格行高压缩，接近桌面端密度
+.arco-table-cell { padding: 4px 8px !important; }
+.arco-table-th  { background: v.$header-bg !important; }
