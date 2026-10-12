@@ -1,4 +1,5 @@
 mod backup;
+mod block_model;
 mod blockdb;
 mod camera;
 mod commands;
