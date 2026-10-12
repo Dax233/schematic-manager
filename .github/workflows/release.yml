@@ -1,0 +1,230 @@
+name: 构建与发布
+
+# 触发规则：
+#   1. push 到 main           -> 自动快照发布（pre-release），tag 形如 v0.1.0+snapshot.<构建次数>
+#   2. push 形如 v1.2.3 的 tag -> 正式发布，并以该版本号构建；随后把仓库内版本号递增到下一 PATCH
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+# 创建 Release、上传资产、回推版本号提交都需要写权限
+permissions:
+  contents: write
+
+concurrency:
+  # 同一 tag/分支的重复触发只保留最新一次
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------- 计算版本
+  prepare:
+    name: 计算版本号与标签
+    runs-on: ubuntu-latest
+    outputs:
+      version:    ${{ steps.calc.outputs.version }}
+      tag:        ${{ steps.calc.outputs.tag }}
+      prerelease: ${{ steps.calc.outputs.prerelease }}
+      skip:       ${{ steps.calc.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: 计算
+        id: calc
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="${GITHUB_REF}"
+
+          if [[ "$ref" == refs/tags/v* ]]; then
+            tag="${ref#refs/tags/}"
+
+            # 快照 tag 由工作流自己创建，若被匹配到则直接跳过，避免自触发循环
+            if [[ "$tag" == *"+snapshot."* ]]; then
+              echo "检测到快照 tag（$tag），跳过本次构建"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            # 正式版：tag 去掉前缀 v 即为程序版本号
+            ver="${tag#v}"
+            echo "正式发布：version=$ver"
+            {
+              echo "skip=false"
+              echo "version=$ver"
+              echo "tag=$tag"
+              echo "prerelease=false"
+            } >> "$GITHUB_OUTPUT"
+          else
+            # 快照：版本号基数取自 package.json，构建次数用 run_number（仓库内单调递增）
+            base="$(node -p "require('./package.json').version")"
+            tag="v${base}+snapshot.${GITHUB_RUN_NUMBER}"
+            echo "快照构建：version=$base  tag=$tag"
+            {
+              echo "skip=false"
+              echo "version=$base"
+              echo "tag=$tag"
+              echo "prerelease=true"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 校验版本号格式
+        if: steps.calc.outputs.skip != 'true'
+        shell: bash
+        run: |
+          v="${{ steps.calc.outputs.version }}"
+          if [[ ! "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::版本号必须是 <MAJOR>.<MINOR>.<PATCH> 形式，实际为 $v"
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------- 多平台构建
+  build:
+    name: 构建 ${{ matrix.platform }}-${{ matrix.arch }}
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: windows-latest,  target: x86_64-pc-windows-msvc,   platform: windows, arch: x86_64 }
+          - { runner: windows-11-arm,  target: aarch64-pc-windows-msvc,  platform: windows, arch: arm64  }
+          - { runner: ubuntu-22.04,    target: x86_64-unknown-linux-gnu, platform: linux,   arch: x86_64 }
+          - { runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, platform: linux, arch: arm64 }
+          - { runner: macos-13,        target: x86_64-apple-darwin,      platform: macos,   arch: x86_64 }
+          - { runner: macos-14,        target: aarch64-apple-darwin,     platform: macos,   arch: arm64  }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust 构建缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.target }}
+
+      - name: 安装 Linux 系统依赖
+        if: startsWith(matrix.runner, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            libgtk-3-dev patchelf
+
+      - name: 统一三处版本号为 ${{ needs.prepare.outputs.version }}
+        run: node scripts/bump-version.mjs ${{ needs.prepare.outputs.version }}
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile=false
+
+      - name: 构建（Tauri 打包）
+        run: pnpm tauri build --target ${{ matrix.target }}
+
+      - name: 收集并规范化产物
+        run: node scripts/collect-artifacts.mjs --version ${{ needs.prepare.outputs.version }} --platform ${{ matrix.platform }} --arch ${{ matrix.arch }}
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist-artifacts/*
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------- 发布
+  release:
+    name: 创建 Release
+    needs: [ prepare, build ]
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+
+      - name: 下载全部产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 汇总产物清单
+        id: assets
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f -print0 | while IFS= read -r -d '' f; do
+            cp "$f" release-assets/
+          done
+          ls -1 release-assets > /dev/null
+          node -e "
+            const fs=require('fs');
+            const names=fs.readdirSync('release-assets');
+            fs.writeFileSync('assets.json', JSON.stringify(names));
+            console.log('共', names.length, '个资产');
+            console.log(names.join('\n'));
+          "
+
+      - name: 生成更新说明
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          ASSETS_JSON: ${{ toJSON(fromJSON('[]')) }}
+        run: node scripts/release-notes.mjs
+
+      - name: 创建 / 更新 Release 并上传资产
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag="${{ needs.prepare.outputs.tag }}"
+          pre="${{ needs.prepare.outputs.prerelease }}"
+          title="${{ needs.prepare.outputs.version }}"
+          if [ "$pre" = "true" ]; then
+            title="$title 快照构建 #${{ github.run_number }}"
+          fi
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" release-assets/* --clobber
+            gh release edit "$tag" --notes-file release-notes.md --title "$title"
+          else
+            args=(--title "$title" --notes-file release-notes.md --target "${{ github.sha }}")
+            if [ "$pre" = "true" ]; then args+=(--prerelease); fi
+            gh release create "$tag" release-assets/* "${args[@]}"
+          fi
+
+      # 正式发布后：把仓库内版本号 dump 到下一 PATCH
+      - name: 递增版本号到下一 PATCH
+        if: needs.prepare.outputs.prerelease == 'false'
+        shell: bash
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          node scripts/bump-version.mjs --next
+          next="$(node -p "require('./package.json').version")"
+          git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
+          git commit -m "chore: 版本号递增到 ${next} [skip ci]"
+          git push origin HEAD:${{ github.event.repository.default_branch }}
+          echo "已将版本号递增到 ${next}"
