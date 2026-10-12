@@ -1,5 +1,6 @@
 mod backup;
 mod blockdb;
+mod camera;
 mod commands;
 mod dto;
 mod error;
