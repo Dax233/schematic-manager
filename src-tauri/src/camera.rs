@@ -81,9 +81,6 @@ impl ViewPreset {
     }
 }
 
-/// 默认的俯仰角，用于没有指定视角时
-pub const DEFAULT_PITCH: f32 = 30.0;
-
 /// 正交相机：由视线方向与右向量确定的屏幕基
 #[derive(Debug, Clone, Copy)]
 pub struct Camera {
