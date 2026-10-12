@@ -243,7 +243,50 @@ watch(
   },
 );
 
-defineExpose({ applyPreset, fitCamera: () => props.scene && fitCamera(props.scene) });
+/**
+ * 按指定边长离屏渲染并返回 PNG 字节。
+ *
+ * 导出与屏幕上看到的画面保持一致：临时把渲染器调到目标尺寸、
+ * 相机宽高比设为 1、清屏色设为全透明，渲染后立即恢复原状，
+ * 因此用户不会看到界面尺寸被改动。
+ */
+async function exportPng(size: number): Promise<Uint8Array> {
+  const r = renderer.value;
+  if (!r || !camera || !threeScene) {
+    throw new Error("3D 视图尚未就绪，无法导出");
+  }
+  const prev = new THREE.Vector2();
+  r.getSize(prev);
+  const prevRatio = r.getPixelRatio();
+  const prevAspect = camera.aspect;
+
+  try {
+    r.setPixelRatio(1);
+    r.setSize(size, size, false);
+    camera.aspect = 1;
+    camera.updateProjectionMatrix();
+    r.setClearAlpha(0); // 透明背景
+    r.render(threeScene, camera);
+
+    const blob: Blob = await new Promise((resolve, reject) => {
+      r.domElement.toBlob((b) => (b ? resolve(b) : reject(new Error("导出图像失败"))), "image/png");
+    });
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally {
+    r.setPixelRatio(prevRatio);
+    r.setSize(prev.x, prev.y, false);
+    camera.aspect = prevAspect;
+    camera.updateProjectionMatrix();
+    r.setClearAlpha(0);
+    render();
+  }
+}
+
+defineExpose({
+  applyPreset,
+  exportPng,
+  fitCamera: () => props.scene && fitCamera(props.scene),
+});
 </script>
 
 <template>

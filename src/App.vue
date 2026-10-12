@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { writeFile } from "@tauri-apps/plugin-fs";
 import type { TableColumnData, TableData } from "@arco-design/web-vue";
 import { Message } from "@arco-design/web-vue";
 import { analyzeSchematic, buildScene, saveMetadata, scanLitematics } from "./api";
@@ -27,6 +28,8 @@ const sceneLoading = ref(false);
 const sceneError = ref("");
 const brightness = ref(1.45);
 const activeView = ref("left45");
+const exportSize = ref(1024);
+const exporting = ref(false);
 const sceneInfo = computed(() => {
   if (!scene.value) return "";
   const s = scene.value;
@@ -149,6 +152,32 @@ function setView(name: string) {
   viewer.value?.applyPreset(name);
 }
 
+/** 导出当前视角为透明背景 PNG */
+async function exportPreview() {
+  const cur = selected.value;
+  if (!cur || !scene.value) return;
+  const size = exportSize.value;
+  const stem = cur.fileName.replace(/\.litematic$/i, "");
+  const target = await save({
+    title: "导出预览图",
+    defaultPath: `${stem}_preview_${size}.png`,
+    filters: [{ name: "PNG 图片", extensions: ["png"] }],
+  });
+  if (typeof target !== "string") return;
+
+  exporting.value = true;
+  try {
+    const bytes = await viewer.value?.exportPng(size);
+    if (!bytes) throw new Error("3D 视图尚未就绪");
+    await writeFile(target, bytes);
+    Message.success(`已导出 ${size}×${size} 预览图`);
+  } catch (e) {
+    Message.error(`导出失败：${e}`);
+  } finally {
+    exporting.value = false;
+  }
+}
+
 async function onRowClick(raw: TableData) {
   const record = raw as unknown as SchematicSummary;
   selected.value = record;
@@ -239,6 +268,21 @@ const close = () => appWindow.close();
               :style="{ width: '140px' }"
             />
             <span class="preview__value">{{ Math.round(brightness * 100) }}%</span>
+            <a-select v-model="exportSize" size="small" style="width: 104px">
+              <a-option :value="512">512</a-option>
+              <a-option :value="1024">1024</a-option>
+              <a-option :value="2048">2048</a-option>
+              <a-option :value="3072">3072</a-option>
+            </a-select>
+            <a-button
+              size="small"
+              type="primary"
+              :loading="exporting"
+              :disabled="!scene"
+              @click="exportPreview"
+            >
+              导出预览图
+            </a-button>
             <span class="preview__spacer" />
             <span v-if="sceneError" class="preview__error">{{ sceneError }}</span>
             <span v-else-if="sceneInfo" class="preview__info">{{ sceneInfo }}</span>
