@@ -168,10 +168,20 @@ async function runDuplicateScan() {
   }
 }
 
-/** 表格行键：组内路径拼接后唯一 */
+/** 表格行键：组内路径拼接后唯一。
+ *
+ * 用于给表格数据补一个稳定且唯一的字段，再由 a-table 的 row-key 指向它。
+ * Arco 的 row-key 只接受字符串（prop 类型是 StringConstructor），
+ * 直接传函数不会报错但会被忽略，表格退化成按行号做键。
+ */
 function dupGroupKey(r: DuplicateGroup): string {
   return r.paths.join("|");
 }
+
+/** 供表格使用的重复组数据：在原对象上补一个 _key 字段 */
+const dupGroupsWithKey = computed(() =>
+  (dupResult.value?.groups ?? []).map((g) => ({ ...g, _key: dupGroupKey(g) })),
+);
 
 /** 一组重复文件可回收的空间：组内除保留一份外的其余副本之和。
  *
@@ -1262,10 +1272,10 @@ const close = () => appWindow.close();
           <a-table
             v-else
             :columns="dupGroupColumns"
-            :data="dupResult.groups"
+            :data="dupGroupsWithKey"
             :pagination="{ pageSize: 8 }"
             size="small"
-            :row-key="dupGroupKey"
+            row-key="_key"
           >
             <template #files="{ record }">
               <div v-for="p in record.paths" :key="p" class="dup-path">{{ p }}</div>

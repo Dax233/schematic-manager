@@ -33,18 +33,23 @@ vi.mock("../components/SceneViewer.vue", () => ({
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import App from "../App.vue";
+import type { SchematicSummary, SceneData, DuplicateGroup, ConvertItem } from "../types";
 
 const mockInvoke = vi.mocked(invoke);
 const mockOpen = vi.mocked(open);
 
-/** 一个可用的投影摘要，字段与后端 SchematicSummary 对齐 */
-const summary = {
+/** 一个可用的投影摘要，字段与后端 SchematicSummary 对齐
+ *
+ * 必须标注类型：不加标注时它不是「赋给有类型变量的对象字面量」，
+ * TS 的多余属性检查不会生效，夹具与 DTO 漂移了编译器也不会报错。
+ */
+const summary: SchematicSummary = {
+  path: "/p/测试.litematic",
   fileName: "测试.litematic",
   dirName: "/p",
-  path: "/p/测试.litematic",
   fileSize: 2048,
+  error: "",
   formatVersion: 6,
-  formatSubVersion: 1,
   dataVersion: 3465,
   mcVersionName: "1.20.1",
   name: "测试投影",
@@ -60,11 +65,6 @@ const summary = {
   tileEntityCount: 0,
   pendingTicks: 0,
   hasPreview: false,
-  previewPixels: 0,
-  fullyAnalyzed: false,
-  distinctBlockTypes: 0,
-  distinctStates: 0,
-  error: "",
 };
 
 /** 挂载外壳界面 */
@@ -73,12 +73,12 @@ function mountApp() {
 }
 
 /** 一个可用的场景数据，字段与后端 SceneData 对齐 */
-const scene = {
+const scene: SceneData = {
   batches: [],
   totalVertices: 0,
   totalTriangles: 0,
-  enclosing: [16, 10, 16] as [number, number, number],
-  origin: [0, 0, 0] as [number, number, number],
+  enclosing: [16, 10, 16],
+  origin: [0, 0, 0],
   mcVersionName: "1.20.1",
   dataVersion: 3465,
   unresolvedBlocks: 0,
@@ -109,8 +109,12 @@ function stubInvoke(overrides: Record<string, unknown> = {}) {
           distinctStates: 0,
         };
       case "list_block_versions":
-      case "list_packs":
         return [];
+      case "list_packs":
+        // 返回 PackListDto（后端类型），不是数组：App.vue 打开资源包面板时
+        // 立刻读 r.packs / r.skipped / r.loadFailures，给数组会在
+        // r.skipped.length 处抛 TypeError，被 catch 变成「读取资源包清单失败」。
+        return { packs: [], skipped: [], loadFailures: [] };
       case "list_backups":
       case "read_operation_log":
         return [];
@@ -242,6 +246,152 @@ describe("主要操作流程", () => {
     const btn = (label: string) => w.findAll("button").find((b) => b.text().includes(label));
     expect(btn("方块替换")?.attributes("disabled"), "选中后应可用").toBeUndefined();
     expect(btn("版本转换")?.attributes("disabled"), "选中后应可用").toBeUndefined();
+    w.unmount();
+  });
+});
+
+describe("重复文件筛查", () => {
+  /** 在整份文档里按文案找按钮。
+   *
+   * Arco 的弹窗内容会被 teleport 到 body，因此 wrapper.findAll 看不到它
+   * 内部的元素，必须查 document。
+   */
+  function findButton(label: string): HTMLButtonElement | undefined {
+    return [...document.querySelectorAll("button")].find((b) =>
+      (b.textContent ?? "").includes(label),
+    );
+  }
+
+  it("「可回收」按组内单份大小计算，不依赖左侧列表", async () => {
+    // 这条防的是一个真实缺陷：可回收原先从 files.value 反查文件大小，
+    // 而该列表只含当前已扫描的目录，与筛查目录常常不同，反查失败时
+    // 静默按 0 处理，于是「单个大小」有值而「可回收」恒为 0 B。
+    const size = 4096;
+    const paths = ["/a/x.litematic", "/b/x.litematic", "/c/x.litematic"];
+    stubInvoke({
+      // 注意：筛查目录故意与左侧列表的目录不同，正是原缺陷的触发条件
+      scan_duplicates: {
+        groups: [{ size, paths }],
+        scanned: paths.length,
+        totalBytes: size * paths.length,
+        unreadable: [],
+        dir: "C:/其他目录",
+      },
+    });
+
+    const w = mountApp();
+    // 打开弹窗
+    const open = w.findAll("button").find((b) => b.text().includes("重复文件筛查"));
+    await open!.trigger("click");
+    await flushPromises();
+
+    // 筛查目录必须先填：runDuplicateScan 会拒绝空目录。
+    // 这里直接写组件的响应式状态而不是模拟输入框键入，避免依赖 Arco
+    // 输入组件的内部实现；被验证的仍是「结果表格如何显示」这段逻辑。
+    (w.vm as unknown as { dupDir: string }).dupDir = "C:/其他目录";
+    await flushPromises();
+
+    const start = findButton("开始筛查");
+    expect(start, "弹窗里应有「开始筛查」").toBeTruthy();
+    start!.click();
+    await flushPromises();
+
+    // 三个副本、保留一份 -> 单份 4096 字节（"4.0 KB"），可回收 8192 字节（"8.0 KB"）。
+    // 按 formatSize 的规则断言确切文本：显示 "0 B" 就是原先的缺陷复现。
+    const body = document.body.textContent ?? "";
+    expect(body, "应显示重复组").toContain("x.litematic");
+    expect(body, "单个大小应为 4.0 KB").toContain("4.0 KB");
+    expect(
+      body,
+      `「可回收」应为 8.0 KB（两个多余副本），显示 0 B 即为缺陷复现。实际：${body.slice(0, 600)}`,
+    ).toContain("8.0 KB");
+    w.unmount();
+  });
+});
+
+describe("版本转换", () => {
+  function findButton(label: string): HTMLButtonElement | undefined {
+    return [...document.querySelectorAll("button")].find((b) =>
+      (b.textContent ?? "").includes(label),
+    );
+  }
+
+  it("分析失败后不应再显示「可以直接转换」", async () => {
+    // 这条防的是：分析失败的 catch 只清空条目、不复位 convAnalyzed，
+    // 于是模板把「已分析且条目为空」当成「方块都存在」，展示绿色成功提示，
+    // 且确定按钮可用，点下去会用空条目执行转换。
+    let analyzeCalls = 0;
+    mockInvoke.mockImplementation((async (cmd: string) => {
+      switch (cmd) {
+        case "scan_litematics":
+          return { items: [summary], skippedDirs: 0, skippedPaths: [] };
+        case "convert_targets":
+          return [{ index: 0, name: "1.19.2", dataVersion: 3120 }];
+        case "analyze_conversion":
+          analyzeCalls += 1;
+          // 第一次成功且无缺口（显示成功提示），第二次失败
+          if (analyzeCalls === 1) return [];
+          throw new Error("模拟分析失败");
+        // 选中文件后会加载场景与详情；必须返回结构正确的对象，
+        // 否则界面在访问字段时抛错，表现为「测试通过但留下未处理错误」
+        case "build_scene":
+          return scene;
+        case "analyze_schematic":
+          return {
+            blocks: [],
+            entities: [],
+            tileEntities: [],
+            nonAirTotal: 0,
+            airTotal: 0,
+            distinctBlockTypes: 0,
+            distinctStates: 0,
+          };
+        case "list_block_versions":
+          return [];
+        default:
+          return [];
+      }
+    }) as never);
+
+    const w = mountApp();
+    // 目录选择框要返回一个路径，否则不会进入扫描流程
+    mockOpen.mockResolvedValue("/p");
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+
+    await w.findAll("button").find((b) => b.text().includes("版本转换"))!.trigger("click");
+    await flushPromises();
+
+    // 选一个目标版本，否则分析按钮会提示「请先选择目标版本」
+    const select = document.querySelector(".arco-select-view, .arco-select") as HTMLElement | null;
+    if (select) {
+      select.click();
+      await flushPromises();
+      const opt = [...document.querySelectorAll(".arco-select-option")].find((o) =>
+        (o.textContent ?? "").includes("1.19.2"),
+      ) as HTMLElement | undefined;
+      if (opt) {
+        opt.click();
+        await flushPromises();
+      }
+    }
+
+    const analyze = findButton("分析差异");
+    expect(analyze, "弹窗里应有「分析差异」").toBeTruthy();
+    analyze!.click();
+    await flushPromises();
+    expect(document.body.textContent, "首次分析成功应给出成功提示").toContain(
+      "可以直接转换",
+    );
+
+    analyze!.click();
+    await flushPromises();
+    expect(
+      document.body.textContent,
+      "分析失败后不应残留「可以直接转换」的成功提示",
+    ).not.toContain("可以直接转换");
     w.unmount();
   });
 });
