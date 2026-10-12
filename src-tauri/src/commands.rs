@@ -667,6 +667,27 @@ pub fn save_metadata(
     author: Option<String>,
     description: Option<String>,
 ) -> Result<SaveOutcome, String> {
+    // NBT 的字符串长度字段是 u16，写入时超限只能报错。在碰文件之前先校验：
+    // 一是让用户拿到「哪一项太长」的可读提示，而不是等写盘阶段才失败
+    // （那时的错误来自编码深层，容易被误当成文件损坏）；二是这类校验
+    // 不该依赖磁盘状态。
+    //
+    // 这里按字符数粗筛，精确的字节数由 nbt 层按 modified UTF-8 判定。
+    // 中文每字 3 字节；用 20000 字符做上限，留出足够余量又远低于 65535 字节。
+    const MAX_META_CHARS: usize = 20000;
+    for (label, v) in [
+        ("名称", &name),
+        ("作者", &author),
+        ("描述", &description),
+    ] {
+        if let Some(s) = v {
+            let n = s.chars().count();
+            if n > MAX_META_CHARS {
+                return Err(format!("{label}过长：{n} 个字符，上限 {MAX_META_CHARS} 个字符"));
+            }
+        }
+    }
+
     let p = PathBuf::from(&path);
     if !p.is_file() {
         return Err(format!("文件不存在：{path}"));
@@ -762,6 +783,70 @@ mod tests {
     fn mc_version_command_proxies_table() {
         assert!(!mc_version_name(3465).is_empty());
         assert_eq!(mc_version_name(-1), "");
+    }
+
+    /// 超长元数据必须在写入之前被拒绝。
+    ///
+    /// NBT 的字符串长度字段是 u16：超限时若只截断长度字段，写出的文件
+    /// 记录长度与实际字节数不符，后续字段全部错位，而写入路径的终点是
+    /// 覆盖用户的 .litematic。因此这里要求「明确报错」而不是「写出坏文件」。
+    #[test]
+    fn oversized_metadata_is_rejected_before_writing() {
+        let too_long = "啊".repeat(20_001);
+        let err = save_metadata(
+            "__sm_not_exist__.litematic".into(),
+            None,
+            None,
+            Some(too_long),
+        )
+        .expect_err("超长描述应被拒绝");
+        assert!(
+            err.contains("过长"),
+            "错误信息应指出超长，实际：{err}"
+        );
+    }
+
+    /// 三个字段都要校验，不能只检查描述。
+    #[test]
+    fn oversized_name_and_author_are_rejected_too() {
+        let long = "x".repeat(20_001);
+        for (label, name, author) in [
+            ("名称", Some(long.clone()), None),
+            ("作者", None, Some(long.clone())),
+        ] {
+            let err = save_metadata(
+                "__sm_not_exist__.litematic".into(),
+                name,
+                author,
+                None,
+            )
+            .expect_err(&format!("超长{label}应被拒绝"));
+            assert!(
+                err.contains("过长") && err.contains(label),
+                "错误信息应指明是哪一项超长，实际：{err}"
+            );
+        }
+    }
+
+    /// 恰好等于上限时不应因长度被拒。
+    ///
+    /// 路径不存在，因此会以「文件不存在」失败——关键是不能再报「过长」，
+    /// 否则说明上限被判成了 >=。
+    #[test]
+    fn metadata_at_exact_limit_is_not_rejected_for_length() {
+        let ok = "x".repeat(20_000);
+        let err = save_metadata(
+            "__sm_not_exist__.litematic".into(),
+            None,
+            None,
+            Some(ok),
+        )
+        .expect_err("文件不存在应报错");
+        assert!(
+            !err.contains("过长"),
+            "恰好达上限不应被判超长，实际：{err}"
+        );
+        assert!(err.contains("不存在"), "应报文件不存在，实际：{err}");
     }
 
     use crate::blockdb::{BlockDb, BlockDef, LangEntry, Model, ModelElement, ModelFace, TextureInfo, Variant, VersionDef};

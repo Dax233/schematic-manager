@@ -20,6 +20,16 @@ use crate::error::{AppError, AppResult};
 use crate::nbt::{self, Value};
 use std::collections::BTreeMap;
 
+/// 单个区域的方块数上限。
+///
+/// 体积来自文件里的 Size 三个分量，是纯粹不可信的外部输入：不设上界时
+/// 三个 i32::MAX 相乘会溢出（debug panic、release 回绕成任意值），
+/// 回绕结果还会被用来分配 indices（每个方块 4 字节）。
+///
+/// 取 5000 万：已远超真实投影的量级（最大规模的工程也用不到千万级），
+/// 同时把单次分配限制在约 200 MB，不会因一个畸形文件耗尽内存。
+const MAX_REGION_VOLUME: usize = 50_000_000;
+
 /// 方块状态：名称 + 属性（保持顺序，序列化时顺序稳定）
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BlockState {
@@ -342,6 +352,28 @@ pub fn summary_from_nbt(root: &Value) -> Summary {
 }
 
 /// 解析单个区域
+/// 由区域尺寸算出方块数，并校验不会溢出、不超过上限。
+///
+/// 单独成函数是为了能直接测试边界：区域解析到这一步已经需要构造完整的
+/// NBT 与足够长的 BlockStates，而这里只需三个整数。
+///
+/// 调用方必须先确认三个分量均为正（负值表示向负方向延伸，会先被归一化）。
+fn region_volume(size: [i32; 3], name: &str) -> AppResult<usize> {
+    let mut volume: usize = 1;
+    for a in 0..3 {
+        volume = volume
+            .checked_mul(size[a] as usize)
+            .ok_or_else(|| AppError::Corrupt(format!("区域 {name} 的尺寸过大，体积计算溢出")))?;
+    }
+    if volume > MAX_REGION_VOLUME {
+        return Err(AppError::Corrupt(format!(
+            "区域 {name} 的体积为 {volume}，超过上限 {MAX_REGION_VOLUME}（约合 {} MB 的方块索引）",
+            MAX_REGION_VOLUME * 4 / 1024 / 1024
+        )));
+    }
+    Ok(volume)
+}
+
 fn region_from_nbt(name: &str, v: &Value) -> AppResult<Region> {
     let mut r = Region { name: name.to_string(), ..Default::default() };
 
@@ -371,7 +403,13 @@ fn region_from_nbt(name: &str, v: &Value) -> AppResult<Region> {
     if size.iter().any(|&s| s <= 0) {
         return Ok(r);
     }
-    r.volume = size[0] as usize * size[1] as usize * size[2] as usize;
+
+    // 体积必须用 checked 运算并设上界。
+    // 三个分量各自可达 i32::MAX，直接相乘会溢出：debug 构建 panic，
+    // release 构建回绕成一个任意值，随后被用来分配 indices
+    // （每个方块 4 字节），既可能给出错误结果也可能耗尽内存。
+    // 该值只受文件内容控制，因此必须当成不可信输入处理。
+    r.volume = region_volume(size, name)?;
 
     // v7 用 Palette，v6 用 BlockStatePalette
     let pal_val = v
@@ -402,6 +440,7 @@ fn region_from_nbt(name: &str, v: &Value) -> AppResult<Region> {
     // BlockStates 数组偏短时 read_bits 会一律返回 0，而索引 0 通常是空气，
     // 于是统计结果静默偏小——用户会看到一个「看起来正常但数字是错的」投影。
     if let Some(longs) = v.get("BlockStates").and_then(|x| x.as_longs()) {
+        // volume 与 bits 都在上面受过约束（bits 最大 32），这里不会溢出
         let need = (r.volume * r.bits as usize).div_ceil(64);
         if longs.len() < need {
             return Err(AppError::Corrupt(format!(
@@ -894,6 +933,100 @@ mod tests {
         // 原点应移动到负方向的起点：15 + (-16) + 1 = 0，9 + (-10) + 1 = 0
         assert_eq!(r.pos, [0, 0, -8]);
         assert_eq!(r.volume, 2560);
+    }
+
+    /// 构造一个用于测试区域解析的最小 NBT 结构。
+    /// `size` 与 `pos` 直接给出，调色板只放两项，BlockStates 尽量给足。
+    fn region_fixture(pos: [i32; 3], size: [i32; 3], longs: usize) -> Value {
+        let ints3 = |a: [i32; 3]| {
+            Value::Compound(vec![
+                ("x".into(), Value::Int(a[0])),
+                ("y".into(), Value::Int(a[1])),
+                ("z".into(), Value::Int(a[2])),
+            ])
+        };
+        Value::Compound(vec![
+            ("Position".into(), ints3(pos)),
+            ("Size".into(), ints3(size)),
+            (
+                "BlockStatePalette".into(),
+                Value::List(
+                    vec![
+                        Value::Compound(vec![("Name".into(), Value::String("minecraft:air".into()))]),
+                        Value::Compound(vec![("Name".into(), Value::String("minecraft:stone".into()))]),
+                    ],
+                    crate::nbt::TAG_COMPOUND,
+                ),
+            ),
+            ("BlockStates".into(), Value::LongArray(vec![0i64; longs])),
+        ])
+    }
+
+    /// 尺寸大到体积溢出时，必须报错而不是 panic 或回绕。
+    ///
+    /// 三个 i32::MAX 相乘约 9.9e27，超出 64 位 usize 上限（约 1.8e19），
+    /// 在 debug 构建会 panic、release 会回绕；回绕值随即被用来分配
+    /// indices（每方块 4 字节）。该值完全由文件内容决定，因此一个畸形的
+    /// .litematic 就能触发，必须挡住。
+    #[test]
+    fn volume_computation_overflow_is_rejected() {
+        let err = region_volume([i32::MAX, i32::MAX, i32::MAX], "huge")
+            .expect_err("乘积累积溢出应被拒绝");
+        assert!(
+            err.to_string().contains("溢出"),
+            "错误信息应说明计算溢出，实际：{err}"
+        );
+    }
+
+    /// 乘积不溢出但超过上限时，同样必须拒绝。
+    ///
+    /// 与溢出分支区分开：这里的乘积在 usize 范围内。
+    #[test]
+    fn volume_above_limit_is_rejected() {
+        // 100000^3 = 1e15，远超 MAX_REGION_VOLUME 但远小于 usize 上限
+        let err = region_volume([100_000, 100_000, 100_000], "big")
+            .expect_err("超过上限应被拒绝");
+        assert!(
+            err.to_string().contains("上限"),
+            "错误信息应提到上限，实际：{err}"
+        );
+    }
+
+    /// 恰好等于上限时应被接受，避免边界判错。
+    #[test]
+    fn volume_at_exact_limit_is_accepted() {
+        // 50_000_000 = 50000 * 1000 * 1，正好是 MAX_REGION_VOLUME
+        let v = region_volume([50_000, 1_000, 1], "edge").expect("恰好达上限应被接受");
+        assert_eq!(v, MAX_REGION_VOLUME);
+    }
+
+    /// 超过上限一个方块即被拒绝，确认上限不是 < 与 <= 的关系判错。
+    #[test]
+    fn volume_one_over_limit_is_rejected() {
+        assert!(
+            region_volume([MAX_REGION_VOLUME as i32 + 1, 1, 1], "over").is_err(),
+            "超过上限 1 应被拒绝"
+        );
+    }
+
+    /// 真实量级的尺寸照常通过。
+    #[test]
+    fn typical_region_volume_is_accepted() {
+        // 一个 256×256×256 的区块级投影
+        assert_eq!(region_volume([256, 256, 256], "t").unwrap(), 256 * 256 * 256);
+        // 256×128×256 ≈ 840 万，是相当大规模的工程
+        assert_eq!(region_volume([256, 128, 256], "t").unwrap(), 256 * 128 * 256);
+    }
+
+    /// 正常尺寸仍照常解析，确认上限没有误伤端到端路径。
+    #[test]
+    fn normal_region_volume_still_parses() {
+        let longs = (16usize * 10 * 16 * 2).div_ceil(64);
+        let r = region_fixture([0, 0, 0], [16, 10, 16], longs);
+        let parsed = region_from_nbt("ok", &r).expect("正常尺寸应能解析");
+        assert_eq!(parsed.volume, 2560);
+        assert_eq!(parsed.size, [16, 10, 16]);
+        assert_eq!(parsed.indices.len(), 2560);
     }
 
     #[test]

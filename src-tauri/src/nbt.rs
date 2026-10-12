@@ -201,6 +201,32 @@ fn encode_modified_utf8(s: &str) -> Vec<u8> {
     out
 }
 
+/// NBT 字符串长度字段是 u16，因此单个字符串最多 65535 字节（Java 的
+/// DataOutput.writeUTF 也是这个上限）。
+///
+/// 超限必须报错而不是截断：`len as u16` 会回绕成一个比实际写入量小的值，
+/// 后续所有字段的解析位置随之错位，写出的文件不可读。而写入路径的终点是
+/// 覆盖用户的 .litematic，因此这里宁可失败也不能产出损坏的文件。
+pub const MAX_STRING_BYTES: usize = u16::MAX as usize;
+
+/// 写入一个字符串：u16 字节长度 + modified UTF-8 字节。
+///
+/// 键名与字符串值都必须走这里。此前键名直接用 `as_bytes()`（原始 UTF-8），
+/// 而读取端对两者统一按 modified UTF-8 解码，导致键名含补充平面字符时
+/// 「写得出、读不回」——区域名里有一个 emoji 就能让整个文件无法打开。
+fn write_string(out: &mut Vec<u8>, s: &str) -> AppResult<()> {
+    let b = encode_modified_utf8(s);
+    if b.len() > MAX_STRING_BYTES {
+        return Err(AppError::Corrupt(format!(
+            "字符串过长：编码后 {} 字节，上限 {MAX_STRING_BYTES} 字节",
+            b.len()
+        )));
+    }
+    out.extend_from_slice(&(b.len() as u16).to_be_bytes());
+    out.extend_from_slice(&b);
+    Ok(())
+}
+
 
 // ---------------------------------------------------------------- 读取
 
@@ -355,7 +381,7 @@ pub fn parse(data: &[u8]) -> AppResult<Value> {
 
 // ---------------------------------------------------------------- 写入
 
-fn write_payload(out: &mut Vec<u8>, v: &Value) {
+fn write_payload(out: &mut Vec<u8>, v: &Value) -> AppResult<()> {
     match v {
         Value::Byte(x) => out.push(*x as u8),
         Value::Short(x) => out.extend_from_slice(&x.to_be_bytes()),
@@ -367,11 +393,7 @@ fn write_payload(out: &mut Vec<u8>, v: &Value) {
             out.extend_from_slice(&(b.len() as i32).to_be_bytes());
             out.extend_from_slice(b);
         }
-        Value::String(s) => {
-            let b = encode_modified_utf8(s);
-            out.extend_from_slice(&(b.len() as u16).to_be_bytes());
-            out.extend_from_slice(&b);
-        }
+        Value::String(s) => write_string(out, s)?,
         Value::List(items, elem) => {
             // 原样写回解析时读到的元素类型。
             // 不能改用 items.first() 推断：空列表没有元素，会退化成 End，
@@ -379,16 +401,16 @@ fn write_payload(out: &mut Vec<u8>, v: &Value) {
             out.push(*elem);
             out.extend_from_slice(&(items.len() as i32).to_be_bytes());
             for it in items {
-                write_payload(out, it);
+                write_payload(out, it)?;
             }
         }
         Value::Compound(fields) => {
             for (k, val) in fields {
                 out.push(val.type_id());
-                let kb = k.as_bytes();
-                out.extend_from_slice(&(kb.len() as u16).to_be_bytes());
-                out.extend_from_slice(kb);
-                write_payload(out, val);
+                // 键名也必须是 modified UTF-8：读取端对所有字符串统一解码，
+                // 用原始 UTF-8 写 emoji 键名会写得出、读不回
+                write_string(out, k)?;
+                write_payload(out, val)?;
             }
             out.push(TAG_END);
         }
@@ -405,17 +427,16 @@ fn write_payload(out: &mut Vec<u8>, v: &Value) {
             }
         }
     }
+    Ok(())
 }
 
 /// 序列化为具名根标签形式的 NBT 字节。
-pub fn serialize(root: &Value, root_name: &str) -> Vec<u8> {
+pub fn serialize(root: &Value, root_name: &str) -> AppResult<Vec<u8>> {
     let mut out = Vec::new();
     out.push(root.type_id());
-    let nb = root_name.as_bytes();
-    out.extend_from_slice(&(nb.len() as u16).to_be_bytes());
-    out.extend_from_slice(nb);
-    write_payload(&mut out, root);
-    out
+    write_string(&mut out, root_name)?;
+    write_payload(&mut out, root)?;
+    Ok(out)
 }
 
 // ---------------------------------------------------------------- gzip
@@ -456,7 +477,7 @@ pub fn parse_maybe_gzip(file: &[u8]) -> AppResult<Value> {
 
 /// 序列化并 gzip 压缩。
 pub fn serialize_gzip(root: &Value, root_name: &str, level: u32) -> AppResult<Vec<u8>> {
-    gzip(&serialize(root, root_name), level)
+    gzip(&serialize(root, root_name)?, level)
 }
 
 #[cfg(test)]
@@ -500,7 +521,7 @@ mod tests {
             ("emoji".into(), Value::String("笑脸\u{1F600}".into())),
             ("nul".into(), Value::String("a\u{0}b".into())),
         ]);
-        assert_eq!(parse(&serialize(&v, "")).unwrap(), v);
+        assert_eq!(parse(&serialize(&v, "").expect("序列化失败")).unwrap(), v);
     }
 
     #[test]
@@ -520,7 +541,7 @@ mod tests {
             ("emptyInts".into(), Value::List(Vec::new(), TAG_INT)),
             ("emptyStrs".into(), Value::List(Vec::new(), TAG_STRING)),
         ]);
-        let bytes = serialize(&v, "");
+        let bytes = serialize(&v, "").expect("序列化失败");
         let back = parse(&bytes).unwrap();
         assert_eq!(back, v);
         if let Value::Compound(f) = &back {
@@ -534,14 +555,14 @@ mod tests {
     #[test]
     fn roundtrip_keeps_content() {
         let v = sample();
-        let bytes = serialize(&v, "");
+        let bytes = serialize(&v, "").expect("序列化失败");
         let back = parse(&bytes).unwrap();
         assert_eq!(v, back);
     }
 
     #[test]
     fn field_order_is_preserved() {
-        let bytes = serialize(&sample(), "");
+        let bytes = serialize(&sample(), "").expect("序列化失败");
         let back = parse(&bytes).unwrap();
         if let Value::Compound(f) = &back {
             let keys: Vec<&str> = f.iter().map(|(k, _)| k.as_str()).collect();
@@ -562,7 +583,7 @@ mod tests {
     #[test]
     fn uncompressed_input_parses() {
         let v = sample();
-        let raw = serialize(&v, "");
+        let raw = serialize(&v, "").expect("序列化失败");
         assert_eq!(parse_maybe_gzip(&raw).unwrap(), v);
     }
 
@@ -578,7 +599,7 @@ mod tests {
 
     #[test]
     fn truncated_data_errors_without_panic() {
-        let bytes = serialize(&sample(), "");
+        let bytes = serialize(&sample(), "").expect("序列化失败");
         for cut in [1usize, 3, 10, 25] {
             let _ = parse(&bytes[..cut.min(bytes.len())]);
         }
@@ -618,3 +639,75 @@ mod tests {
         assert!(inflate_zlib(&comp).is_err(), "gzip 数据不应被 zlib 解压接受");
     }
 }
+
+    // ---- 字符串编码的对称性与长度上限 ----
+
+    /// 键名必须与字符串值走同一套编码。
+    ///
+    /// 曾经键名用原始 UTF-8 写、读取端却按 modified UTF-8 解，导致键名含
+    /// 补充平面字符（emoji）时写得出、读不回：报「不是合法的 modified
+    /// UTF-8」，整个投影文件再也打不开。区域名由用户命名，是可达路径。
+    #[test]
+    fn compound_keys_roundtrip_with_supplementary_plane_characters() {
+        let v = Value::Compound(vec![
+            ("区域😀".to_string(), Value::Int(1)),
+            ("普通".to_string(), Value::Int(2)),
+            ("emoji🔧tail".to_string(), Value::Int(3)),
+        ]);
+        let bytes = serialize(&v, "").expect("序列化失败");
+        let back = parse(&bytes).expect("键名含 emoji 时必须能读回");
+        assert_eq!(back, v, "键名往返必须逐字节一致");
+    }
+
+    /// 键名与值里的 NUL 字符都要往返。modified UTF-8 用 0xC0 0x80 表示 NUL，
+    /// 与 C 风格字符串不同，这里确认两侧都按这个规则处理。
+    #[test]
+    fn strings_with_nul_character_roundtrip() {
+        let v = Value::Compound(vec![("a\u{0}b".to_string(), Value::String("x\u{0}y".into()))]);
+        let bytes = serialize(&v, "").expect("序列化失败");
+        let back = parse(&bytes).expect("含 NUL 的字符串必须能读回");
+        assert_eq!(back, v);
+    }
+
+    /// 超出 u16 长度上限的字符串必须报错，而不是截断长度字段。
+    ///
+    /// 截断会让文件里记录的长度小于实际写入的字节数，后续字段全部错位，
+    /// 而写入路径的终点是覆盖用户的 .litematic —— 宁可失败也不能写出
+    /// 悄悄损坏的文件。
+    #[test]
+    fn oversized_string_fails_instead_of_truncating() {
+        // 中文在 modified UTF-8 下每字 3 字节，30000 字即 90000 字节
+        let s = "啊".repeat(30000);
+        assert!(s.len() * 3 > MAX_STRING_BYTES, "用例本身必须真的超限");
+        let err = serialize(&Value::String(s), "").expect_err("超长字符串应报错");
+        assert!(
+            err.to_string().contains("过长"),
+            "错误信息应说明是长度问题，实际：{err}"
+        );
+    }
+
+    /// 恰好等于上限时应能写出，避免把边界判错成超限。
+    #[test]
+    fn string_at_exact_limit_is_accepted() {
+        // ASCII 一字节一字符，正好取到上限
+        let s = "a".repeat(MAX_STRING_BYTES);
+        let bytes = serialize(&Value::String(s.clone()), "").expect("恰好达上限应可写出");
+        let back = parse(&bytes).expect("应能读回");
+        assert_eq!(back, Value::String(s));
+    }
+
+    /// 超长键名同样必须报错。
+    #[test]
+    fn oversized_key_fails_instead_of_truncating() {
+        let v = Value::Compound(vec![("k".repeat(MAX_STRING_BYTES + 1), Value::Byte(1))]);
+        assert!(serialize(&v, "").is_err(), "超长键名应报错");
+    }
+
+    /// 超长根名同样必须报错。
+    #[test]
+    fn oversized_root_name_fails_instead_of_truncating() {
+        assert!(
+            serialize(&Value::Byte(1), &"r".repeat(MAX_STRING_BYTES + 1)).is_err(),
+            "超长根名应报错"
+        );
+    }

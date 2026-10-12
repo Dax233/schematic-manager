@@ -104,6 +104,10 @@ async function runConvertAnalyze() {
   } catch (e) {
     Message.error(`分析失败：${e}`);
     convItems.value = [];
+    // 必须复位分析标志。否则模板里「convAnalyzed 且条目为空」这一组合
+    // 会被判成「方块都存在、可以直接转换」，向用户展示绿色的成功提示，
+    // 而实际是分析失败、根本没有结果。
+    convAnalyzed.value = false;
   } finally {
     convBusy.value = false;
   }
@@ -169,11 +173,16 @@ function dupGroupKey(r: DuplicateGroup): string {
   return r.paths.join("|");
 }
 
-/** 一组重复文件可回收的空间：组内除保留一份外的其余副本之和 */
-function wastedOf(paths: string[]): number {
+/** 一组重复文件可回收的空间：组内除保留一份外的其余副本之和。
+ *
+ * 大小必须取自 DuplicateGroup.size（去重阶段算出的单份大小），不能用
+ * files.value 去反查：录制列表只含当前已扫描的那个目录，而重复筛查的
+ * 目录由弹窗单独填写，两者常常不是同一个目录。反查失败时过去用 `?? 0`
+ * 静默按 0 处理，于是「可回收」列恒显示 0 B，与同一行的「单个大小」矛盾。
+ */
+function wastedOf(size: number, paths: string[]): number {
   if (paths.length < 2) return 0;
-  const one = files.value.find((f) => f.path === paths[0])?.fileSize ?? 0;
-  return one * (paths.length - 1);
+  return size * (paths.length - 1);
 }
 
 const dupGroupColumns = [
@@ -1051,7 +1060,7 @@ const close = () => appWindow.close();
       :width="760"
       :ok-loading="convBusy"
       ok-text="开始转换"
-      :ok-button-props="{ disabled: convTargetIdx === undefined || !selected }"
+      :ok-button-props="{ disabled: convTargetIdx === undefined || !selected || !convAnalyzed }"
       @ok="doConvert"
     >
       <a-alert v-if="!selected" type="warning" style="margin-bottom: 12px">
@@ -1262,7 +1271,7 @@ const close = () => appWindow.close();
               <div v-for="p in record.paths" :key="p" class="dup-path">{{ p }}</div>
             </template>
             <template #size="{ record }">{{ formatSize(record.size) }}</template>
-            <template #wasted="{ record }">{{ formatSize(wastedOf(record.paths)) }}</template>
+            <template #wasted="{ record }">{{ formatSize(wastedOf(record.size, record.paths)) }}</template>
           </a-table>
 
           <a-alert

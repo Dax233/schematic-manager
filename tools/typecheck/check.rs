@@ -1,4 +1,4 @@
-﻿//! 仅用于本机类型检查，不参与实际构建。
+//! 仅用于本机类型检查，不参与实际构建。
 //!
 //! 注意：本 crate 只包含纯逻辑模块，不含 commands.rs / dto.rs，
 //! 因此编译器会把「被 commands 使用」的项误报为 dead_code。
@@ -33,3 +33,4 @@
 #[path = "../../src-tauri/src/visibility.rs"] mod visibility;
 #[path = "../../src-tauri/src/zip.rs"] mod zip;
 #[path = "../../src-tauri/src/backup.rs"] mod backup;
+#[path = "../../src-tauri/src/startup.rs"] mod startup;
