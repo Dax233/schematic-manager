@@ -217,6 +217,34 @@ where
     })
 }
 
+/// 收集一个模型链里全部面的贴图路径（去重、排序）。
+///
+/// 存在的理由：模型面里存的是**字符串表下标**，而该下标来自模型自己引用的
+/// 路径，形成顺序依赖。因此分两遍：先用本函数收集全部路径并登记字符串池，
+/// 再调用 convert_model（此时路径到下标已完整可查），避免边查边写的借用冲突。
+pub fn collect_texture_paths(chain: &Chain, elements: &[crate::blockstate::ModelElementDef], cur_ns: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for e in elements {
+        for (_, f) in &e.faces {
+            if let Some(p) = resolve_face_texture_path(chain, &f.texture, cur_ns) {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// 把面的贴图引用解析成规范路径（只解析，不查表）。
+///
+/// 与 `resolve_face_texture` 的区别：这里不要求路径已登记到字符串池，
+/// 因此调用方可以在拿到路径后再登记，避免「先有表还是先有路径」的循环。
+pub fn resolve_face_texture_path(chain: &Chain, raw: &str, cur_ns: &str) -> Option<String> {
+    let path = resolve_tex_ref(&chain.textures, raw)?;
+    crate::jar_index::qualify(&path, cur_ns)
+}
+
 /// 解析面的贴图引用到「字符串池下标 + 规范路径」。
 ///
 /// 返回 None 表示无法解析：变量缺失、成环、或路径未登记。

@@ -489,14 +489,34 @@ impl BlockDb {
         Ok(Self { format_version, strings, langs, textures, models, versions, pixels })
     }
 
-    /// 从 pack 文件载入（文件为 zlib 压缩）。
+    /// 从 pack 文件载入。
+    ///
+    /// 随包分发的 blocks.dat.z 用 **zlib** 容器压缩（与 legacy-cpp 的
+    /// `uncompress` 一致），而 `.litematic` 用的是 gzip。两者容器不同，
+    /// 只按一种解压会让内置方块库在发布版整块不可用。
+    /// 因此这里按魔数分派：gzip 用 gunzip、zlib 用 inflate_zlib，
+    /// 都不是时按未压缩处理。
     ///
     /// 参数含义见 load_from_bytes。
     pub fn load(path: &str, is_overlay: bool) -> AppResult<Self> {
         let bytes = std::fs::read(path)?;
-        let raw = crate::nbt::gunzip(&bytes)
-            .or_else(|_| Ok::<Vec<u8>, AppError>(bytes.clone()))?;
+        let raw = Self::decompress(&bytes)?;
         Self::load_from_bytes(&raw, is_overlay)
+    }
+
+    /// 按容器魔数解压：gzip（1f 8b）或 zlib（78 xx），都不是则原样返回。
+    fn decompress(bytes: &[u8]) -> AppResult<Vec<u8>> {
+        if bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
+            return crate::nbt::gunzip(bytes);
+        }
+        // zlib 头：CMF 低 4 位为 8（deflate），且 (CMF*256+FLG) 能被 31 整除
+        if bytes.len() >= 2 && bytes[0] & 0x0f == 8 {
+            let hdr = bytes[0] as u16 * 256 + bytes[1] as u16;
+            if hdr % 31 == 0 {
+                return crate::nbt::inflate_zlib(bytes);
+            }
+        }
+        Ok(bytes.to_vec())
     }
 
     /// 把模型的贴图字符串表下标解析成指定版本的贴图池下标。
@@ -819,4 +839,47 @@ mod tests {
         let ov = BlockDb::load_from_bytes(&pack, true).expect("解析失败");
         assert!(ov.versions[0].is_overlay, "调用方声明的叠加包应被标记");
     }
+
+    // ---- 容器格式分派 ----
+
+    /// 内置方块库用 zlib 容器（与 legacy-cpp 的 uncompress 一致），
+    /// 而 .litematic 用 gzip。两者容器不同，只按一种解压会让内置方块库
+    /// 在发布版整块不可用——这条测试正是为此存在。
+    #[test]
+    fn decompress_accepts_zlib_container() {
+        let payload = b"PMBLKDB\0some payload bytes";
+        let packed = crate::nbt::gzip(payload, 6).unwrap();
+        // 先把 gzip 解出来，再用 zlib 重新压——本地编码器产出 stored 块，
+        // 仍能覆盖「按魔数分派」这一行为本身
+        let plain = crate::nbt::gunzip(&packed).unwrap();
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        use std::io::Write;
+        z.write_all(&plain).unwrap();
+        let zb = z.finish().unwrap();
+        assert_eq!(&zb[..1], &[0x78], "zlib 头应以 78 开头");
+        assert_eq!(BlockDb::decompress(&zb).unwrap(), payload);
+    }
+
+    #[test]
+    fn decompress_accepts_gzip_container() {
+        let payload = b"litematic-like payload";
+        let packed = crate::nbt::gzip(payload, 6).unwrap();
+        assert_eq!(&packed[..2], &[0x1f, 0x8b], "gzip 头");
+        assert_eq!(BlockDb::decompress(&packed).unwrap(), payload);
+    }
+
+    #[test]
+    fn decompress_passes_through_uncompressed() {
+        // 既非 gzip 也非 zlib：按未压缩处理，交给后续解析给出明确错误
+        let raw = b"PMBLKDB\0";
+        assert_eq!(BlockDb::decompress(raw).unwrap(), raw);
+    }
+
+    #[test]
+    fn decompress_does_not_misread_plain_bytes_as_zlib() {
+        // 首字节低 4 位恰为 8、但头校验不通过的数据不应被当成 zlib
+        let raw = b"\x78\x00not-a-zlib-stream";
+        assert_eq!(BlockDb::decompress(raw).unwrap(), raw, "头校验不通过应按未压缩处理");
+    }
+
 }

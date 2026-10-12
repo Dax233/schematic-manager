@@ -20,6 +20,7 @@ mod model_pack;
 mod nbt;
 mod png;
 mod pool;
+mod pack_build;
 mod replace;
 mod scene;
 mod transform;

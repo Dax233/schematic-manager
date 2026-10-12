@@ -101,7 +101,12 @@ $failed = $testOut | Select-String -Pattern '^test result: FAILED'
 $passed = $testOut | Select-String -Pattern '^test result: ok'
 
 # 已知受桩限制的测试：都依赖真实的 gzip/zlib 解压
-$stubBound = 'gzip_roundtrip|zlib_|blockdb::tests::|real_sample|decoded_block_count|metadata_edit_roundtrips'
+# 本地环境的硬限制（非代码问题）：
+#   本机拒绝对系统临时目录的写入，而该测试要把副本落到临时目录。
+#   把 TEMP 指到工作区内即可通过（见下面的环境变量设置）。
+# gzip/zlib 曾在此清单里，自本地 flate2 桩改为真实解压后已不受限，
+# 真实 .litematic 样本也能完整往返。
+$stubBound = 'metadata_edit_roundtrips_through_disk'
 $names = $testOut | Where-Object { $_ -match '^    [a-z_]+::tests::' } | ForEach-Object { $_.Trim() }
 $real = $names | Where-Object { $_ -notmatch $stubBound }
 Write-Host ""

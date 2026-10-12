@@ -333,8 +333,30 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// 解析 JSON 字节
-pub fn from_slice(b: &[u8]) -> Result<Value, Error> {
+/// 解析 JSON 字节。
+///
+/// 真实 serde_json 的签名是 `from_slice<T: Deserialize>(&[u8]) -> Result<T>`，
+/// 桩里为了便于使用而固定返回 Value；但**必须保留泛型参数**，
+/// 否则调用写成 `from_slice::<Value>(..)` 时会与真实 API 不一致，
+/// 本地检查通过而 CI 失败。
+pub fn from_slice<T: FromValue>(b: &[u8]) -> Result<T, Error> {
+    let v = parse_slice(b)?;
+    T::from_value(v)
+}
+
+/// 允许把解析结果当作 Value 或其他包装类型
+pub trait FromValue: Sized {
+    fn from_value(v: Value) -> Result<Self, Error>;
+}
+
+impl FromValue for Value {
+    fn from_value(v: Value) -> Result<Self, Error> {
+        Ok(v)
+    }
+}
+
+/// 不做类型转换的解析（内部用）
+pub fn parse_slice(b: &[u8]) -> Result<Value, Error> {
     let mut p = Parser::new(b);
     let v = p.parse_value()?;
     p.skip_ws();
@@ -345,7 +367,7 @@ pub fn from_slice(b: &[u8]) -> Result<Value, Error> {
 }
 
 /// 解析 JSON 字符串
-pub fn from_str(s: &str) -> Result<Value, Error> {
+pub fn from_str<T: FromValue>(s: &str) -> Result<T, Error> {
     from_slice(s.as_bytes())
 }
 
