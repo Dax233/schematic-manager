@@ -57,6 +57,35 @@
 | Linux | ✅ | ✅ |
 | macOS | ✅ | ✅ |
 
+## 故障排查
+
+**双击后没有任何反应？**
+
+程序启动失败时会在两个位置留一份 `启动失败.log`，并弹出提示窗口：
+
+1. 程序所在目录（例如 `C:\Program Files\投影文件管理器\`）
+2. 若上处不可写，则退到系统临时目录
+
+日志里含失败原因、出错位置与程序路径。
+
+**提示「WebView2 错误」或「拒绝访问」**
+
+程序界面依赖系统的 Microsoft Edge WebView2 运行时（Windows 11 自带）。
+遇到这类错误时，多为其用户数据目录损坏，可删除后重试：
+
+```
+%LOCALAPPDATA%\com.heiheids.schematic-manager
+```
+
+若仍无法启动，请安装 WebView2 运行时：
+<https://developer.microsoft.com/microsoft-edge/webview2/>
+
+**无人值守环境**
+
+环境变量 `SCHEMATIC_MANAGER_NO_ERROR_DIALOG=1` 可让启动失败只写日志、
+不弹窗。适用于自动化脚本或计划任务——弹窗是模态的，无人点击时会一直
+等待。默认不设置，普通用户不受影响。
+
 ## 项目结构
 
 - `src/` —— Vue 前端

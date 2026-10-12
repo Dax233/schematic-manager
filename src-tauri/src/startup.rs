@@ -109,6 +109,30 @@ fn build_body(err: &str, exe: &str, log_path: Option<&str>) -> String {
     body
 }
 
+/// 抑制弹窗的环境变量名。
+///
+/// 给自动化场景用：模态弹窗会一直阻塞直到有人点「确定」，在无人值守的
+/// 环境（CI、远程会话）里会让进程永久挂起——这正是它存在的理由，
+/// 而不是为了图方便。
+///
+/// 设置后错误仍会写日志，只是不弹窗。**默认不设置**，因此真实用户的
+/// 行为不受影响。
+pub const NO_DIALOG_ENV: &str = "SCHEMATIC_MANAGER_NO_ERROR_DIALOG";
+
+/// 是否应当弹窗。
+///
+/// 只在环境变量明确取 1/true 时抑制，避免因变量被设成空串或 "0"
+/// 而意外改变用户可见行为。
+fn dialog_allowed() -> bool {
+    match std::env::var(NO_DIALOG_ENV) {
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            !(v == "1" || v == "true" || v == "yes")
+        }
+        Err(_) => true,
+    }
+}
+
 /// 把启动失败报告给用户：写日志 + 弹窗，并返回展示过的文本。
 pub fn report(err: &str) -> String {
     let exe = std::env::current_exe()
@@ -125,7 +149,12 @@ pub fn report(err: &str) -> String {
         let _ = std::fs::write(p, &body);
     }
 
-    show_message(&body);
+    if dialog_allowed() {
+        show_message(&body);
+    } else {
+        // 抑制弹窗时把正文写到 stderr，便于从终端或 CI 日志里看到
+        eprintln!("{body}");
+    }
     body
 }
 
@@ -217,5 +246,27 @@ mod tests {
             b.contains("无法写入日志文件"),
             "写不了日志时要如实说明，不能让用户以为有日志可查"
         );
+    }
+
+    /// 环境变量是进程级的，测试之间会相互影响，因此串行用同一把锁。
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn dialog_is_allowed_by_default_and_suppressed_only_explicitly() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        std::env::remove_var(NO_DIALOG_ENV);
+        assert!(dialog_allowed(), "默认应允许弹窗，否则用户看不到错误");
+
+        // 只有明确的真值才抑制：空串、"0" 都不应改变用户可见行为
+        for v in ["", "0", "no", "false"] {
+            std::env::set_var(NO_DIALOG_ENV, v);
+            assert!(dialog_allowed(), "取值 {v:?} 不应抑制弹窗");
+        }
+        for v in ["1", "true", "TRUE", " yes "] {
+            std::env::set_var(NO_DIALOG_ENV, v);
+            assert!(!dialog_allowed(), "取值 {v:?} 应抑制弹窗");
+        }
+        std::env::remove_var(NO_DIALOG_ENV);
     }
 }
