@@ -1,3 +1,4 @@
+mod backup;
 mod commands;
 mod dto;
 mod error;
@@ -18,6 +19,7 @@ pub fn run() {
             commands::scan_litematics,
             commands::analyze_schematic,
             commands::mc_version_name,
+            commands::save_metadata,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

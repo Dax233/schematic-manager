@@ -54,6 +54,15 @@ pub struct EntityCount {
     pub count: u64,
 }
 
+/// 保存操作的结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveOutcome {
+    pub path: String,
+    /// 保存前生成的备份文件位置
+    pub backup_path: String,
+}
+
 /// 完整分析结果
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

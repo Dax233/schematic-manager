@@ -36,6 +36,13 @@ export interface EntityCount {
   count: number;
 }
 
+/** 保存操作的结果 */
+export interface SaveOutcome {
+  path: string;
+  /** 保存前生成的备份文件位置 */
+  backupPath: string;
+}
+
 export interface AnalysisResult {
   blocks: BlockCount[];
   entities: EntityCount[];

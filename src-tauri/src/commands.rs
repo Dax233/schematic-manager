@@ -3,9 +3,18 @@
 //! 约定：命令只做参数校验、调用解析层、把结果转成 DTO，
 //! 不在这里承载业务规则，便于解析层独立测试。
 
-use crate::dto::{AnalysisResult, BlockCount, EntityCount, SchematicSummary};
+use crate::backup;
+use crate::dto::{AnalysisResult, BlockCount, EntityCount, SaveOutcome, SchematicSummary};
 use crate::litematic::{self, Summary};
 use std::path::{Path, PathBuf};
+
+/// 程序所在目录。备份目录以它为根，与旧版行为一致。
+fn exe_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
 
 /// 由内部摘要转换为对前端的契约
 fn to_dto(s: Summary) -> SchematicSummary {
@@ -132,6 +141,50 @@ pub fn analyze_schematic(path: String) -> Result<AnalysisResult, String> {
         tile_entities: tiles,
         non_air_total: a.non_air_total,
         air_total: a.air_total,
+    })
+}
+
+/// 保存元数据（投影名称 / 作者 / 描述）。
+///
+/// 写入前先在 backups/ 下留一份原件：这几项都是用户手动输入的内容，
+/// 出错时必须有可回退的原件。备份失败则中止保存，不做「没备份就改」。
+#[tauri::command]
+pub fn save_metadata(
+    path: String,
+    name: Option<String>,
+    author: Option<String>,
+    description: Option<String>,
+) -> Result<SaveOutcome, String> {
+    let p = PathBuf::from(&path);
+    if !p.is_file() {
+        return Err(format!("文件不存在：{path}"));
+    }
+
+    let bak = backup::create(&exe_dir(), &p, "metadata")
+        .map_err(|e| format!("备份失败，已中止保存：{e}"))?;
+
+    let mut sc = litematic::Schematic::load(&path).map_err(|e| e.to_string())?;
+    let mut changed = false;
+    if let Some(v) = name {
+        changed |= sc.set_meta_name(&v);
+    }
+    if let Some(v) = author {
+        changed |= sc.set_meta_author(&v);
+    }
+    if let Some(v) = description {
+        changed |= sc.set_meta_description(&v);
+    }
+
+    if !changed {
+        // 三处字段都不存在（例如格式过于陈旧）：不能假装成功
+        return Err("该投影缺少可编辑的元数据字段".into());
+    }
+
+    sc.save_to(&path).map_err(|e| format!("写入失败：{e}"))?;
+
+    Ok(SaveOutcome {
+        path,
+        backup_path: bak.backup_path.to_string_lossy().into_owned(),
     })
 }
 
