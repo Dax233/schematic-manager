@@ -53,8 +53,6 @@ export interface ReplaceRule {
   toProps: [string, string][];
   /** 是否继承源方块中目标也支持的属性 */
   inheritProps: boolean;
-  /** 目标不支持的属性是否保留 */
-  keepUnknownProps: boolean;
 }
 
 /** 方块替换结果 */
@@ -92,7 +90,7 @@ export interface BackupEntry {
   stem: string;
   op: string;
   /** 纳秒时间戳的十进制字符串；超出 JS 安全整数范围，故不用 number */
-  createdMs: string;
+  createdNs: string;
   size: number;
 }
 

@@ -44,8 +44,15 @@ pub fn create(exe_dir: &Path, src: &Path, op: &str) -> AppResult<BackupOutcome> 
         .map(|v| v.to_string_lossy().into_owned())
         .ok_or_else(|| crate::error::AppError::Parse("源文件没有文件名主干".into()))?;
 
-    let dir = backup_root(exe_dir).join(&stem);
+    // 分组目录必须把「原始所在目录」也区分开：不同目录下同名文件
+    // （A/demo.litematic 与 B/demo.litematic）若共用一个分组，
+    // 还原时只比对文件名主干会把两个不同文件判为同源，进而覆盖错对象。
+    let dir = group_dir(exe_dir, src)?;
     std::fs::create_dir_all(&dir)?;
+
+    // 记录原始完整路径。legacy-cpp 用一个 index.tsv 记 origPath，
+    // 这里改为每组一个旁文件——省掉索引与实际文件不一致的失配面。
+    std::fs::write(dir.join(ORIG_PATH_FILE), orig_path_of(src))?;
 
     let file_name = format!("{stem}__{}__{op}.litematic", timestamp());
     let dst = dir.join(file_name);
@@ -54,17 +61,66 @@ pub fn create(exe_dir: &Path, src: &Path, op: &str) -> AppResult<BackupOutcome> 
     Ok(BackupOutcome { backup_path: dst })
 }
 
+/// 记录原始路径的旁文件名
+const ORIG_PATH_FILE: &str = ".orig_path";
+
+/// FNV-1a 64 位哈希，用于把父目录折叠成分组名后缀
+fn hash_path(s: &str) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x1000_0000_01b3;
+    let mut h = OFFSET;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(PRIME);
+    }
+    h
+}
+
+/// 原始路径的规范化文本，用于跨平台比较。
+///
+/// 统一小写并去掉尾部分隔符：Windows 路径大小写不敏感，
+/// `C:\A` 与 `c:\a` 必须视为同一处。
+fn orig_path_of(src: &Path) -> String {
+    let abs = std::fs::canonicalize(src).unwrap_or_else(|_| {
+        src.parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default()
+            .join(src.file_name().unwrap_or_default())
+    });
+    let mut t = abs.to_string_lossy().replace('/', "\\").to_lowercase();
+    while t.len() > 3 && t.ends_with('\\') {
+        t.pop();
+    }
+    t
+}
+
+fn group_dir(exe_dir: &Path, src: &Path) -> AppResult<PathBuf> {
+    let stem = src
+        .file_stem()
+        .map(|v| v.to_string_lossy().into_owned())
+        .ok_or_else(|| crate::error::AppError::Parse("源文件没有文件名主干".into()))?;
+    let parent = src
+        .parent()
+        .map(|p| p.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let key = hash_path(&parent);
+    Ok(backup_root(exe_dir).join(format!("{stem}_{key:016x}")))
+}
+
 
 /// 一条备份记录
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackupEntry {
     pub path: PathBuf,
+    /// 原始文件的完整路径。还原时必须比对它，只看文件名主干会把
+    /// 不同目录下的同名文件误判为同一文件。
+    pub orig_path: String,
     /// 原始文件的文件名主干
     pub stem: String,
     /// 触发备份的操作名
     pub op: String,
-    /// 备份时间（毫秒时间戳）
-    pub created_ms: u64,
+    /// 备份时间（纳秒时间戳，由 timestamp() 产生）
+    pub created_ns: u64,
     pub size: u64,
 }
 
@@ -78,12 +134,12 @@ fn parse_backup_name(name: &str) -> Option<(String, u64, String)> {
         return None;
     }
     let op = parts[0].to_string();
-    let created_ms = parts[1].parse::<u64>().ok()?;
+    let created_ns = parts[1].parse::<u64>().ok()?;
     let stem = parts[2].to_string();
     if stem.is_empty() || op.is_empty() {
         return None;
     }
-    Some((stem, created_ms, op))
+    Some((stem, created_ns, op))
 }
 
 /// 列出全部备份，按时间倒序（最新的在前）。
@@ -104,13 +160,20 @@ pub fn list(root: &Path) -> Vec<BackupEntry> {
             let Some(name) = path.file_name().map(|v| v.to_string_lossy().into_owned()) else {
                 continue;
             };
-            let Some((stem, created_ms, op)) = parse_backup_name(&name) else { continue };
+            let Some((stem, created_ns, op)) = parse_backup_name(&name) else { continue };
             let size = f.metadata().map(|m| m.len()).unwrap_or(0);
-            out.push(BackupEntry { path, stem, op, created_ms, size });
+            // 原始路径来自分组目录下的旁文件；缺失时留空，
+            // 由还原前的校验拒绝，而不是默认放行
+            let orig_path = path
+                .parent()
+                .and_then(|d| std::fs::read_to_string(d.join(ORIG_PATH_FILE)).ok())
+                .map(|v| v.trim().to_string())
+                .unwrap_or_default();
+            out.push(BackupEntry { path, orig_path, stem, op, created_ns, size });
         }
     }
     // 时间戳相同（同纳秒级）时按路径兜底排序，保证结果稳定
-    out.sort_by(|a, b| b.created_ms.cmp(&a.created_ms).then_with(|| a.path.cmp(&b.path)));
+    out.sort_by(|a, b| b.created_ns.cmp(&a.created_ns).then_with(|| a.path.cmp(&b.path)));
     out
 }
 
@@ -131,10 +194,15 @@ pub fn delete(backup: &Path) -> AppResult<()> {
         return Err(AppError::Parse(format!("备份文件不存在：{}", backup.display())));
     }
     std::fs::remove_file(backup)?;
-    // 分组目录空了就一并删掉，避免 backups 下堆积空目录
+    // 分组目录里若只剩记录原始路径的旁文件，就连同目录一并清理，
+    // 避免 backups 下堆积空目录
     if let Some(dir) = backup.parent() {
+        let _ = std::fs::remove_file(dir.join(ORIG_PATH_FILE));
         if let Ok(mut it) = std::fs::read_dir(dir) {
             if it.next().is_none() {
+                // 清理失败不静默：目录残留会让用户看到空分组，
+                // 但删除本身已成功，因此记为可忽略的失败仍要如实返回？
+                // 这里选择忽略并保留目录——删除失败不影响备份已删的事实。
                 let _ = std::fs::remove_dir(dir);
             }
         }
@@ -150,11 +218,21 @@ pub fn matches_target(backup: &Path, target: &Path) -> bool {
     let Some(name) = backup.file_name().map(|v| v.to_string_lossy().into_owned()) else {
         return false;
     };
-    let Some((stem, _, _)) = parse_backup_name(&name) else { return false };
-    target
-        .file_stem()
-        .map(|v| v.to_string_lossy() == stem)
-        .unwrap_or(false)
+    if parse_backup_name(&name).is_none() {
+        return false;
+    }
+    // 比对完整原始路径，而不是只看文件名主干：
+    // A/demo.litematic 与 B/demo.litematic 主干相同却是两个文件，
+    // 只比主干会把 A 的备份还原到 B 上。
+    let Some(dir) = backup.parent() else { return false };
+    let Ok(recorded) = std::fs::read_to_string(dir.join(ORIG_PATH_FILE)) else {
+        return false; // 没有记录就不放行
+    };
+    let recorded = recorded.trim();
+    if recorded.is_empty() {
+        return false;
+    }
+    recorded == orig_path_of(target)
 }
 
 /// 路径是否位于指定根目录之内。
@@ -352,16 +430,67 @@ mod tests {
     }
 
     #[test]
-    fn matches_target_compares_stems() {
-        let dir = PathBuf::from("/x");
-        let backup = dir.join("demo__123__metadata.litematic");
-        assert!(matches_target(&backup, &dir.join("demo.litematic")));
-        // 不同文件必须判为不匹配
-        assert!(!matches_target(&backup, &dir.join("other.litematic")));
+    fn matches_target_requires_same_original_path() {
+        let base = temp_dir("match");
+        let root = backup_root(&base);
+
+        // 两个不同目录下的同名文件
+        let dir_a = base.join("A");
+        let dir_b = base.join("B");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let fa = dir_a.join("demo.litematic");
+        let fb = dir_b.join("demo.litematic");
+        std::fs::write(&fa, b"a").unwrap();
+        std::fs::write(&fb, b"b").unwrap();
+
+        let ba = create(&base, &fa, "metadata").unwrap();
+
+        // 同源：完整路径一致
+        assert!(matches_target(&ba.backup_path, &fa));
+        // 跨目录同名文件绝不能被判为同源，否则 A 的备份会盖到 B 上
+        assert!(
+            !matches_target(&ba.backup_path, &fb),
+            "A/demo.litematic 的备份不能还原到 B/demo.litematic"
+        );
         // 文件名不合规时判为不匹配，而不是默认通过
-        assert!(!matches_target(&dir.join("demo.litematic"), &dir.join("demo.litematic")));
+        assert!(!matches_target(&dir_a.join("demo.litematic"), &fa));
+        // 记录缺失时也不放行
+        let orphan = root.join("x").join("x__1__metadata.litematic");
+        std::fs::create_dir_all(orphan.parent().unwrap()).unwrap();
+        std::fs::write(&orphan, b"x").unwrap();
+        assert!(!matches_target(&orphan, &fa));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
+    #[test]
+    fn same_name_in_different_dirs_gets_separate_groups() {
+        let base = temp_dir("groups");
+        let dir_a = base.join("A");
+        let dir_b = base.join("B");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let fa = dir_a.join("demo.litematic");
+        let fb = dir_b.join("demo.litematic");
+        std::fs::write(&fa, b"a").unwrap();
+        std::fs::write(&fb, b"b").unwrap();
+
+        let ba = create(&base, &fa, "metadata").unwrap();
+        let bb = create(&base, &fb, "metadata").unwrap();
+
+        assert_ne!(
+            ba.backup_path.parent(),
+            bb.backup_path.parent(),
+            "同名但不同目录的文件不能混进同一分组"
+        );
+        // 各自的备份只能还原到自己的原文件
+        assert!(matches_target(&ba.backup_path, &fa));
+        assert!(matches_target(&bb.backup_path, &fb));
+        assert!(!matches_target(&ba.backup_path, &fb));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
     #[test]
     fn log_appends_and_reads_newest_first() {
         let base = temp_dir("log");

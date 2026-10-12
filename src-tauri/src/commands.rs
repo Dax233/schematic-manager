@@ -348,7 +348,7 @@ pub fn list_backups(stem: Option<String>) -> Vec<BackupEntryDto> {
             path: e.path.to_string_lossy().into_owned(),
             stem: e.stem,
             op: e.op,
-            created_ms: e.created_ms.to_string(),
+            created_ns: e.created_ns.to_string(),
             size: e.size,
         })
         .collect()

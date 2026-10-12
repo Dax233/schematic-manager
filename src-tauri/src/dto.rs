@@ -80,8 +80,6 @@ pub struct ReplaceRuleDto {
     pub to_props: Vec<(String, String)>,
     #[serde(default = "default_true")]
     pub inherit_props: bool,
-    #[serde(default)]
-    pub keep_unknown_props: bool,
 }
 
 fn default_true() -> bool {
@@ -96,7 +94,6 @@ impl From<ReplaceRuleDto> for crate::replace::ReplaceRule {
             to_name: d.to_name,
             to_props: d.to_props,
             inherit_props: d.inherit_props,
-            keep_unknown_props: d.keep_unknown_props,
         }
     }
 }
@@ -154,7 +151,7 @@ pub struct BackupEntryDto {
     /// 纳秒时间戳，以十进制字符串传递。
     /// 纳秒量级约 1.8e18，超出 JavaScript 安全整数范围（约 9e15），
     /// 用数值传递会丢精度，因此这里用字符串。
-    pub created_ms: String,
+    pub created_ns: String,
     pub size: u64,
 }
 

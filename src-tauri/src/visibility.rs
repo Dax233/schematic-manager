@@ -68,8 +68,12 @@ pub struct Quad {
     pub block_pos: [i32; 3],
 }
 
-/// 是否为空气（不产生任何面）
-fn is_air(name: &str) -> bool {
+/// 渲染时是否跳过该方块（不产生任何面）。
+///
+/// 比统计口径多一个 structure_void：legacy-cpp 渲染时跳过它
+/// （render.cpp:316-317），而统计把它算作非空气（litematic.cpp:374）。
+/// 两处口径不同是有意的，改名以示区别，避免日后被「统一」掉。
+fn is_render_skipped(name: &str) -> bool {
     matches!(
         name,
         "minecraft:air"
@@ -99,7 +103,7 @@ pub fn collect_quads(sc: &Schematic, db: &BlockDb, ver_idx: usize) -> Vec<Quad> 
 
         for (i, pi) in r.indices.iter().enumerate() {
             let Some(state) = r.palette.get(*pi as usize) else { continue };
-            if is_air(&state.name) {
+            if is_render_skipped(&state.name) {
                 continue;
             }
             // 区域在投影中的位置必须计入，否则多区域投影的各区域会

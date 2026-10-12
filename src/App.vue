@@ -87,7 +87,6 @@ const replaceForm = ref({
   toName: "",
   toPropsText: "",
   inheritProps: true,
-  keepUnknownProps: false,
 });
 const replacePreview = ref<number | null>(null);
 
@@ -112,7 +111,6 @@ function currentRule(): ReplaceRule {
     toName: f.toName.trim(),
     toProps: parseProps(f.toPropsText),
     inheritProps: f.inheritProps,
-    keepUnknownProps: f.keepUnknownProps,
   };
 }
 
@@ -736,11 +734,7 @@ const close = () => appWindow.close();
           <a-space direction="vertical" :size="4">
             <a-checkbox v-model="replaceForm.inheritProps">
               继承源方块中目标也支持的属性
-            </a-checkbox>
-            <a-checkbox v-model="replaceForm.keepUnknownProps">
-              保留目标不支持的属性（通常不应勾选，游戏会读不出该状态）
-            </a-checkbox>
-          </a-space>
+            </a-checkbox>          </a-space>
         </a-form-item>
 
         <a-form-item>
@@ -787,7 +781,7 @@ const close = () => appWindow.close();
             row-key="path"
             size="small"
           >
-            <template #time="{ record }">{{ formatTime(record.createdMs) }}</template>
+            <template #time="{ record }">{{ formatTime(record.createdNs) }}</template>
             <template #size="{ record }">{{ formatSize(record.size) }}</template>
             <template #act="{ record }">
               <a-space>

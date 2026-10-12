@@ -70,7 +70,12 @@ impl BlockState {
         self.props.sort_by(|a, b| a.0.cmp(&b.0));
     }
 
-    /// 是否为空气（minecraft:air / cave_air / void_air）
+    /// 是否为空气，用于统计。
+    ///
+    /// 不含 structure_void：legacy-cpp 统计时只把 air / cave_air / void_air
+    /// 计入空气（litematic.cpp:374-377），structure_void 算非空气。
+    /// 而渲染时会跳过 structure_void（render.cpp:317）。
+    /// 两处口径不同是有意的，因此这里不叫「渲染是否跳过」。
     pub fn is_air(&self) -> bool {
         matches!(
             self.name.as_str(),

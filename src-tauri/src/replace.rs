@@ -33,9 +33,6 @@ pub struct ReplaceRule {
     pub to_props: Vec<(String, String)>,
     /// 是否继承源方块中目标也支持的属性
     pub inherit_props: bool,
-    /// 目标不支持的属性是否保留。默认 false：
-    /// 保留会让游戏读到无法识别的属性，通常应当丢弃。
-    pub keep_unknown_props: bool,
 }
 
 /// 替换结果统计
@@ -68,16 +65,14 @@ fn replacement(
     }
     let mut next = crate::litematic::BlockState::new(&rule.to_name);
 
-    // 继承：源属性里目标也支持的才保留
+    // 继承：源属性里目标也支持的才保留。
+    // 没有「整份照抄源属性」的开关：目标不支持的属性会让游戏读不出该状态，
+    // legacy-cpp 也没有提供这种用法（其 keepUnknownProps 字段从未被读取）。
     if rule.inherit_props {
         for (k, v) in &state.props {
             if info.supports_prop(&rule.to_name, k, v) {
                 next.set_prop(k, v);
             }
-        }
-    } else if rule.keep_unknown_props {
-        for (k, v) in &state.props {
-            next.set_prop(k, v);
         }
     }
 
