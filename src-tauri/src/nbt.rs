@@ -34,7 +34,10 @@ pub enum Value {
     Double(f64),
     ByteArray(Vec<u8>),
     String(String),
-    List(Vec<Value>),
+    /// 列表。第二项为**文件声明的元素类型**：
+    /// 空列表在序列化时无法从元素推断类型，必须原样保留，
+    /// 否则「元素类型 Int、长度 0」的列表往返后会变成「元素类型 End」。
+    List(Vec<Value>, u8),
     Compound(Vec<(String, Value)>),
     IntArray(Vec<i32>),
     LongArray(Vec<i64>),
@@ -51,7 +54,7 @@ impl Value {
             Value::Double(_) => TAG_DOUBLE,
             Value::ByteArray(_) => TAG_BYTE_ARRAY,
             Value::String(_) => TAG_STRING,
-            Value::List(_) => TAG_LIST,
+            Value::List(..) => TAG_LIST,
             Value::Compound(_) => TAG_COMPOUND,
             Value::IntArray(_) => TAG_INT_ARRAY,
             Value::LongArray(_) => TAG_LONG_ARRAY,
@@ -107,7 +110,7 @@ impl Value {
 
     pub fn as_list(&self) -> Option<&[Value]> {
         match self {
-            Value::List(v) => Some(v),
+            Value::List(v, _) => Some(v),
             _ => None,
         }
     }
@@ -311,12 +314,11 @@ impl<'a> Reader<'a> {
                 if n < 0 {
                     return Err(AppError::Corrupt("List 长度为负".into()));
                 }
-                // 元素类型为 End 时列表必为空（规范如此），但仍按 n 读取以容错
                 let mut items = Vec::with_capacity(n.min(4096) as usize);
                 for _ in 0..n {
                     items.push(self.payload(elem, depth + 1)?);
                 }
-                Value::List(items)
+                Value::List(items, elem)
             }
             TAG_COMPOUND => {
                 let mut fields = Vec::new();
@@ -392,10 +394,11 @@ fn write_payload(out: &mut Vec<u8>, v: &Value) {
             out.extend_from_slice(&(b.len() as u16).to_be_bytes());
             out.extend_from_slice(&b);
         }
-        Value::List(items) => {
-            // 空列表按规范写元素类型 End
-            let elem = items.first().map(|v| v.type_id()).unwrap_or(TAG_END);
-            out.push(elem);
+        Value::List(items, elem) => {
+            // 原样写回解析时读到的元素类型。
+            // 不能改用 items.first() 推断：空列表没有元素，会退化成 End，
+            // 使「元素类型 Int、长度 0」的列表被改写。
+            out.push(*elem);
             out.extend_from_slice(&(items.len() as i32).to_be_bytes());
             for it in items {
                 write_payload(out, it);
@@ -479,7 +482,7 @@ mod tests {
             ("ratio".into(), Value::Double(0.5)),
             (
                 "list".into(),
-                Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+                Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)], TAG_INT),
             ),
             (
                 "nested".into(),
@@ -487,6 +490,56 @@ mod tests {
             ),
             ("longs".into(), Value::LongArray(vec![i64::MIN, -1, 0, 1, i64::MAX])),
         ])
+    }
+
+    #[test]
+    fn modified_utf8_roundtrip_covers_specials() {
+        // NUL 与补充平面字符是 modified UTF-8 与普通 UTF-8 的分歧点
+        for t in ["", "abc", "中文测试", "a\u{0}b", "emoji\u{1F600}end", "\u{10FFFF}"] {
+            let enc = encode_modified_utf8(t);
+            assert_eq!(decode_modified_utf8(&enc).expect("应能解码"), t, "往返必须一致");
+        }
+        // NUL 必须写成 C0 80，而不是原始 0x00
+        assert_eq!(encode_modified_utf8("\u{0}"), vec![0xC0, 0x80]);
+        // 补充平面必须写成 CESU-8 代理对（6 字节）
+        assert_eq!(encode_modified_utf8("\u{1F600}").len(), 6);
+    }
+
+    #[test]
+    fn modified_utf8_string_survives_nbt_roundtrip() {
+        let v = Value::Compound(vec![
+            ("emoji".into(), Value::String("笑脸\u{1F600}".into())),
+            ("nul".into(), Value::String("a\u{0}b".into())),
+        ]);
+        assert_eq!(parse(&serialize(&v, "")).unwrap(), v);
+    }
+
+    #[test]
+    fn invalid_modified_utf8_is_rejected() {
+        // 孤立低代理、非法首字节、截断的多字节序列都应显式报错，
+        // 而不是替换成 U+FFFD 后继续
+        assert!(decode_modified_utf8(&[0xED, 0xB0, 0x80]).is_err());
+        assert!(decode_modified_utf8(&[0xF8, 0x80]).is_err());
+        assert!(decode_modified_utf8(&[0xE0, 0x80]).is_err());
+    }
+
+    #[test]
+    fn empty_list_keeps_declared_element_type() {
+        // 「元素类型 Int、长度 0」的列表往返后必须仍是 Int。
+        // 若改用 items.first() 推断元素类型，空列表会退化成 End。
+        let v = Value::Compound(vec![
+            ("emptyInts".into(), Value::List(Vec::new(), TAG_INT)),
+            ("emptyStrs".into(), Value::List(Vec::new(), TAG_STRING)),
+        ]);
+        let bytes = serialize(&v, "");
+        let back = parse(&bytes).unwrap();
+        assert_eq!(back, v);
+        if let Value::Compound(f) = &back {
+            assert_eq!(f[0].1, Value::List(Vec::new(), TAG_INT));
+            assert_eq!(f[1].1, Value::List(Vec::new(), TAG_STRING));
+        } else {
+            panic!("根应为 Compound");
+        }
     }
 
     #[test]
