@@ -414,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn 往返序列化保持一致() {
+    fn roundtrip_keeps_content() {
         let v = sample();
         let bytes = serialize(&v, "");
         let back = parse(&bytes).unwrap();
@@ -422,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn 字段顺序被保留() {
+    fn field_order_is_preserved() {
         let bytes = serialize(&sample(), "");
         let back = parse(&bytes).unwrap();
         if let Value::Compound(f) = &back {
@@ -434,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn gzip_往返() {
+    fn gzip_roundtrip() {
         let v = sample();
         let z = serialize_gzip(&v, "", 6).unwrap();
         assert_eq!(&z[0..2], &[0x1f, 0x8b]);
@@ -442,14 +442,14 @@ mod tests {
     }
 
     #[test]
-    fn 未压缩数据也能解析() {
+    fn uncompressed_input_parses() {
         let v = sample();
         let raw = serialize(&v, "");
         assert_eq!(parse_maybe_gzip(&raw).unwrap(), v);
     }
 
     #[test]
-    fn 三元组读取() {
+    fn xyz_accessor_reads_triplet() {
         let v = Value::Compound(vec![
             ("x".into(), Value::Int(1)),
             ("y".into(), Value::Int(-2)),
@@ -459,7 +459,7 @@ mod tests {
     }
 
     #[test]
-    fn 截断数据报错而非 panic() {
+    fn truncated_data_errors_without_panic() {
         let bytes = serialize(&sample(), "");
         for cut in [1usize, 3, 10, 25] {
             let _ = parse(&bytes[..cut.min(bytes.len())]);
@@ -467,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn set_替换保持位置() {
+    fn set_replaces_in_place() {
         let mut v = Value::Compound(vec![
             ("a".into(), Value::Int(1)),
             ("b".into(), Value::Int(2)),
