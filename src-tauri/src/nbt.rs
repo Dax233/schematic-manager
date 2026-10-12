@@ -61,10 +61,6 @@ impl Value {
         }
     }
 
-    pub fn type_name(&self) -> &'static str {
-        tag_type_name(self.type_id())
-    }
-
     pub fn get(&self, key: &str) -> Option<&Value> {
         match self {
             Value::Compound(fields) => fields.iter().find(|(k, _)| k == key).map(|(_, v)| v),
@@ -205,24 +201,6 @@ fn encode_modified_utf8(s: &str) -> Vec<u8> {
     out
 }
 
-pub fn tag_type_name(t: u8) -> &'static str {
-    match t {
-        TAG_END => "End",
-        TAG_BYTE => "Byte",
-        TAG_SHORT => "Short",
-        TAG_INT => "Int",
-        TAG_LONG => "Long",
-        TAG_FLOAT => "Float",
-        TAG_DOUBLE => "Double",
-        TAG_BYTE_ARRAY => "ByteArray",
-        TAG_STRING => "String",
-        TAG_LIST => "List",
-        TAG_COMPOUND => "Compound",
-        TAG_INT_ARRAY => "IntArray",
-        TAG_LONG_ARRAY => "LongArray",
-        _ => "Unknown",
-    }
-}
 
 // ---------------------------------------------------------------- 读取
 

@@ -119,14 +119,6 @@ impl Region {
     pub fn inside(&self, x: i32, y: i32, z: i32) -> bool {
         x >= 0 && y >= 0 && z >= 0 && x < self.size[0] && y < self.size[1] && z < self.size[2]
     }
-
-    pub fn block_at(&self, x: i32, y: i32, z: i32) -> Option<&BlockState> {
-        if !self.inside(x, y, z) {
-            return None;
-        }
-        let i = self.indices.get(self.index(x, y, z))?;
-        self.palette.get(*i as usize)
-    }
 }
 
 // ---------------------------------------------------------------- 位打包

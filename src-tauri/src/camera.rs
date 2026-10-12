@@ -70,15 +70,6 @@ impl ViewPreset {
             Self::Back => (180.0, 12.0),
         }
     }
-
-    pub fn id_name(self) -> &'static str {
-        match self {
-            Self::Front => "front",
-            Self::Left45 => "left45",
-            Self::Right45 => "right45",
-            Self::Back => "back",
-        }
-    }
 }
 
 /// 正交相机：由视线方向与右向量确定的屏幕基

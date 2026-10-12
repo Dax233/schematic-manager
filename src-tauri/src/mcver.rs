@@ -226,6 +226,4 @@ mod tests {
         assert_eq!(version_name_from_data_version(last.0 + 100000), last.1);
     }
 
-    fn pairs_first() -> i32 { DATA_VERSIONS[0].0 }
-    fn first_name() -> String { DATA_VERSIONS[0].1.to_string() }
 }
