@@ -247,7 +247,8 @@ fn open_db(app: Option<&tauri::AppHandle>) -> AppResult<&'static crate::blockdb:
     if let Some(db) = BLOCK_DB.get() {
         return Ok(db);
     }
-    let loaded = crate::blockdb::BlockDb::load(&db_archive(app)?.to_string_lossy())?;
+    // 内置方块库是基础版本（legacy-cpp 的 kind=0），不是叠加包
+    let loaded = crate::blockdb::BlockDb::load(&db_archive(app)?.to_string_lossy(), false)?;
     // 并发下可能被别的线程抢先设置，此时沿用已设置的即可
     let _ = BLOCK_DB.set(loaded);
     BLOCK_DB

@@ -153,7 +153,7 @@ pub fn build_with_db(schematic_path: &str, db: &BlockDb) -> AppResult<SceneData>
 
 /// 从文件载入并组装场景。
 pub fn build(schematic_path: &str, db_path: &str) -> AppResult<SceneData> {
-    let db = BlockDb::load(db_path)?;
+    let db = BlockDb::load(db_path, false)?;
     build_with_db(schematic_path, &db)
 }
 

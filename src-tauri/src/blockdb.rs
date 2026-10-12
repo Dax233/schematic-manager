@@ -270,8 +270,18 @@ pub struct BlockDb {
 }
 
 impl BlockDb {
-    /// 从已解压的字节解析
-    pub fn load_from_bytes(data: &[u8]) -> AppResult<Self> {
+    /// 从已解压的字节解析。
+    ///
+    /// `is_overlay` 必须由调用方给出，不能从数据推测：叠加包与基础版本的
+    /// 差别在于**资源包类型**，而资源包类型是导入时由用户选择的
+    /// （legacy-cpp 的 PackInfo::kind：0=内置基础库 1=MC 版本包 2=模组包，
+    /// 见 blockdb_packs.cpp:41），并不记录在 pack 文件里。
+    ///
+    /// 尤其不能以 dataVersion 为负来判定：打包脚本会把**缺少**
+    /// data_version 的普通版本也记为 -1
+    /// （legacy-cpp/tools/pack_blockdb.py:446），那样会把基础版误判成
+    /// 叠加包，进而把它排除在版本选择之外。
+    pub fn load_from_bytes(data: &[u8], is_overlay: bool) -> AppResult<Self> {
         let mut r = BinReader::new(data, true);
 
         let magic = r.take(8)?;
@@ -453,8 +463,9 @@ impl BlockDb {
                 texture_by_path,
                 blocks,
                 langs: langs_for_version,
-                // 叠加包以负的 dataVersion 标记
-                is_overlay: data_version < 0,
+                // 由载入方给出，不推测。dataVersion 为负只表示打包时
+                // 缺少版本号，与是否为叠加包无关。
+                is_overlay,
             });
         }
 
@@ -474,12 +485,14 @@ impl BlockDb {
         Ok(Self { format_version, strings, langs, textures, models, versions, pixels })
     }
 
-    /// 从 pack 文件载入（文件为 zlib 压缩）
-    pub fn load(path: &str) -> AppResult<Self> {
+    /// 从 pack 文件载入（文件为 zlib 压缩）。
+    ///
+    /// 参数含义见 load_from_bytes。
+    pub fn load(path: &str, is_overlay: bool) -> AppResult<Self> {
         let bytes = std::fs::read(path)?;
         let raw = crate::nbt::gunzip(&bytes)
             .or_else(|_| Ok::<Vec<u8>, AppError>(bytes.clone()))?;
-        Self::load_from_bytes(&raw)
+        Self::load_from_bytes(&raw, is_overlay)
     }
 
     /// 把模型的贴图字符串表下标解析成指定版本的贴图池下标。
@@ -548,6 +561,11 @@ mod tests {
     /// 构造一个最小可用的 pack 字节流，用于验证解析流程。
     /// 真实文件由 legacy-cpp 的 packbuild 生成，这里只覆盖格式解析本身。
     fn build_minimal_pack() -> Vec<u8> {
+        build_minimal_pack_with_dv(3465)
+    }
+
+    /// 构造最小 pack，可指定 dataVersion
+    fn build_minimal_pack_with_dv(data_version: i32) -> Vec<u8> {
         let mut w: Vec<u8> = Vec::new();
         let s32 = |w: &mut Vec<u8>, v: i32| w.extend_from_slice(&v.to_le_bytes());
         let u32f = |w: &mut Vec<u8>, v: u32| w.extend_from_slice(&v.to_le_bytes());
@@ -615,7 +633,7 @@ mod tests {
         // 版本段
         u32f(&mut w, 1); // 段内重复计数
         u32f(&mut w, 0); // 版本名下标
-        s32(&mut w, 3465); // dataVersion
+        s32(&mut w, data_version); // dataVersion
         u32f(&mut w, 0); // langTableIdx
         u32f(&mut w, 1); // 贴图路径数
         u32f(&mut w, 2);
@@ -635,7 +653,7 @@ mod tests {
 
     #[test]
     fn parses_minimal_pack() {
-        let db = BlockDb::load_from_bytes(&build_minimal_pack()).expect("解析失败");
+        let db = BlockDb::load_from_bytes(&build_minimal_pack(), false).expect("解析失败");
         assert_eq!(db.format_version, 3);
         assert_eq!(db.versions.len(), 1);
         assert_eq!(db.models.len(), 1);
@@ -658,7 +676,7 @@ mod tests {
 
     #[test]
     fn model_face_lookup_follows_mask_order() {
-        let db = BlockDb::load_from_bytes(&build_minimal_pack()).unwrap();
+        let db = BlockDb::load_from_bytes(&build_minimal_pack(), false).unwrap();
         let e = &db.models[0].elements[0];
         assert_eq!(e.face_mask, 1);
         assert!(e.face(Face::Down).is_some(), "位 0 对应 Down");
@@ -669,7 +687,7 @@ mod tests {
 
     #[test]
     fn texture_pixels_are_sliced_correctly() {
-        let db = BlockDb::load_from_bytes(&build_minimal_pack()).unwrap();
+        let db = BlockDb::load_from_bytes(&build_minimal_pack(), false).unwrap();
         let px = db.texture_pixels(0).unwrap();
         assert_eq!(px, &(0u8..16).collect::<Vec<u8>>()[..]);
         assert!(db.texture_pixels(99).is_none());
@@ -677,7 +695,7 @@ mod tests {
 
     #[test]
     fn pick_version_chooses_nearest() {
-        let db = BlockDb::load_from_bytes(&build_minimal_pack()).unwrap();
+        let db = BlockDb::load_from_bytes(&build_minimal_pack(), false).unwrap();
         assert_eq!(db.pick_version(3000), Some(0));
         assert_eq!(db.pick_version(3465), Some(0));
     }
@@ -686,14 +704,14 @@ mod tests {
     fn bad_magic_is_rejected() {
         let mut b = assert_baseline_parses();
         b[0] = b'X';
-        assert!(BlockDb::load_from_bytes(&b).is_err());
+        assert!(BlockDb::load_from_bytes(&b, false).is_err());
     }
 
     #[test]
     fn unsupported_format_version_is_rejected() {
         let mut b = assert_baseline_parses();
         b[8..12].copy_from_slice(&99u32.to_le_bytes());
-        let e = BlockDb::load_from_bytes(&b).unwrap_err().to_string();
+        let e = BlockDb::load_from_bytes(&b, false).unwrap_err().to_string();
         assert!(e.contains("格式版本"), "错误信息应说明版本不支持：{e}");
     }
 
@@ -701,7 +719,7 @@ mod tests {
     fn truncated_data_errors_instead_of_panicking() {
         let full = build_minimal_pack();
         for cut in [10usize, 40, 120, 200, full.len() - 1] {
-            let _ = BlockDb::load_from_bytes(&full[..cut.min(full.len())]);
+            let _ = BlockDb::load_from_bytes(&full[..cut.min(full.len())], false);
         }
     }
 
@@ -728,7 +746,7 @@ mod tests {
     fn assert_baseline_parses() -> Vec<u8> {
         let good = build_minimal_pack();
         assert!(
-            BlockDb::load_from_bytes(&good).is_ok(),
+            BlockDb::load_from_bytes(&good, false).is_ok(),
             "基准 pack 必须能正常解析，否则本测试验证的不是被篡改的那个校验"
         );
         good
@@ -740,7 +758,7 @@ mod tests {
         let pos = lang_section_count_offset(&b);
         b[pos..pos + 4].copy_from_slice(&7u32.to_le_bytes());
 
-        let e = BlockDb::load_from_bytes(&b).unwrap_err().to_string();
+        let e = BlockDb::load_from_bytes(&b, false).unwrap_err().to_string();
         assert!(e.contains("不一致"), "应报段内计数不一致：{e}");
         // 错误信息应指明是哪个段，便于排查
         assert!(e.contains("语言表"), "错误信息应指明段名：{e}");
@@ -751,7 +769,7 @@ mod tests {
         // 截在字符串表中间：缺少终止符或数据不足，都应报错而不是越界
         let mut b = build_minimal_pack();
         b.truncate(8 + 5 * 4 + 4 + 3);
-        assert!(BlockDb::load_from_bytes(&b).is_err());
+        assert!(BlockDb::load_from_bytes(&b, false).is_err());
     }
 
     #[test]
@@ -765,7 +783,32 @@ mod tests {
         pos += 4;                 // 贴图段内重复计数
         pos += 2 + 2 + 4;         // w, h, offset
         b[pos..pos + 4].copy_from_slice(&9999u32.to_le_bytes()); // len 越界
-        let e = BlockDb::load_from_bytes(&b).unwrap_err().to_string();
+        let e = BlockDb::load_from_bytes(&b, false).unwrap_err().to_string();
         assert!(e.contains("超出像素池"), "应报贴图范围越界：{e}");
+    }
+
+    /// 负的 dataVersion 不等于「叠加包」。
+    ///
+    /// 打包脚本会把缺少 data_version 的**普通版本**记为 -1
+    /// （legacy-cpp/tools/pack_blockdb.py:446），而叠加包与否取决于
+    /// 资源包类型（导入时用户选择），并不在文件里。若用负值判定，
+    /// 这类基础版会被误标为叠加包，从而被排除在版本选择之外。
+    #[test]
+    fn negative_data_version_is_not_an_overlay() {
+        let pack = build_minimal_pack_with_dv(-1);
+
+        // 明确告知是基础版本：不应被判为叠加包
+        let base = BlockDb::load_from_bytes(&pack, false).expect("解析失败");
+        assert_eq!(base.versions[0].data_version, -1);
+        assert!(!base.versions[0].is_overlay, "负 dataVersion 不应被判为叠加包");
+        // 基础版本必须能参与版本选择；若被误标为叠加包就会被排除
+        assert!(
+            base.pick_version(-1).is_some(),
+            "基础版本即便缺少 dataVersion 也应能参与版本选择"
+        );
+
+        // 明确告知是叠加包：应如实标记
+        let ov = BlockDb::load_from_bytes(&pack, true).expect("解析失败");
+        assert!(ov.versions[0].is_overlay, "调用方声明的叠加包应被标记");
     }
 }
