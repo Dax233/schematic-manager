@@ -133,8 +133,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 不在此指定 version：pnpm/action-setup 在 package.json 已声明
+      # packageManager 时，若同时给出 version 会直接报错退出
+      # （ERR_PNPM_BAD_PM_VERSION）。版本统一由 package.json 的
+      # packageManager 字段决定，本地与 CI 因此始终一致。
       - uses: pnpm/action-setup@v4
-        with: { version: 9 }
 
       - uses: actions/setup-node@v4
         with:
