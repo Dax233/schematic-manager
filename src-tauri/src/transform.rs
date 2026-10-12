@@ -100,6 +100,31 @@ pub fn to_world(
     ]
 }
 
+/// 把邻面剔除的方向按变体旋转一并旋转。
+///
+/// 方块被旋转后，它朝向某个邻居的「那一面」也跟着变了。
+/// 若仍按未旋转的方向去找邻居，就会剔除错误的方块——
+/// 表现为旋转过的楼梯、栅栏等周围出现空洞或缺面。
+///
+/// 做法与参考实现一致：把方向向量当作「自方块中心偏移的 16 分之一点」，
+/// 旋转后再换算回方向，最后四舍五入回整数偏移。
+pub fn rotate_cull_offset(off: [i32; 3], rot_x_div90: u8, rot_y_div90: u8) -> [i32; 3] {
+    if variant_rotation_is_identity(rot_x_div90, rot_y_div90) {
+        return off;
+    }
+    let p = [
+        off[0] as f32 * 16.0 + 8.0,
+        off[1] as f32 * 16.0 + 8.0,
+        off[2] as f32 * 16.0 + 8.0,
+    ];
+    let r = rotate_variant(p, rot_x_div90, rot_y_div90);
+    [
+        ((r[0] - 8.0) / 16.0).round() as i32,
+        ((r[1] - 8.0) / 16.0).round() as i32,
+        ((r[2] - 8.0) / 16.0).round() as i32,
+    ]
+}
+
 /// 变体的旋转是否为单位变换。用于跳过无谓计算。
 pub fn variant_rotation_is_identity(rot_x_div90: u8, rot_y_div90: u8) -> bool {
     rot_x_div90 % 4 == 0 && rot_y_div90 % 4 == 0
@@ -215,6 +240,28 @@ mod tests {
         let got = to_world([1.0, 2.0, 3.0], &e, 1, 0, [0, 0, 0]);
         let want = [1.0 / 16.0, 13.0 / 16.0, 2.0 / 16.0];
         assert!(approx3(got, want));
+    }
+
+    #[test]
+    fn cull_offset_rotates_with_variant() {
+        // 无旋转时原样返回
+        assert_eq!(rotate_cull_offset([1, 0, 0], 0, 0), [1, 0, 0]);
+        // 绕 Y 90 度：+X 方向应变为 -Z 方向
+        assert_eq!(rotate_cull_offset([1, 0, 0], 0, 1), [0, 0, -1]);
+        // 绕 X 90 度：+Y 方向应变为 +Z 方向
+        assert_eq!(rotate_cull_offset([0, 1, 0], 1, 0), [0, 0, 1]);
+        // 绕 Y 180 度：+X 变为 -X
+        assert_eq!(rotate_cull_offset([1, 0, 0], 0, 2), [-1, 0, 0]);
+        // 结果始终是单位偏移（不出现 0 以外的分量组合错误）
+        for rx in 0u8..4 {
+            for ry in 0u8..4 {
+                for off in [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]] {
+                    let r = rotate_cull_offset(off, rx, ry);
+                    let mag: i32 = r.iter().map(|v| v.abs()).sum();
+                    assert_eq!(mag, 1, "rx={rx} ry={ry} off={off:?} -> {r:?} 不是单位偏移");
+                }
+            }
+        }
     }
 
     #[test]

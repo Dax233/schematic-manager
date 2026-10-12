@@ -6,6 +6,7 @@
 use crate::block_model::resolve_models;
 use crate::blockdb::{BlockDb, Face, VersionDef, NO_TEXTURE};
 use crate::geometry::{build_face_corners, cull_neighbor_offset, face_shade};
+use crate::transform::rotate_cull_offset;
 use crate::litematic::{BlockState, Schematic};
 
 /// 判断一个方块状态是否「完全遮光」，即能否剔除相邻方块朝向它的面。
@@ -115,7 +116,13 @@ pub fn collect_quads(sc: &Schematic, db: &BlockDb, version: &VersionDef) -> Vec<
 
                         // 邻面剔除。cullface 为 0xFF 表示不参与剔除。
                         if mf.cullface != 0xFF {
-                            let off = cull_neighbor_offset(cullface_to_face(mf.cullface));
+                            // 剔除方向必须随变体旋转：方块转向后，它朝向某个
+                            // 邻居的那一面也变了，否则会剔除错误的邻居。
+                            let off = rotate_cull_offset(
+                                cull_neighbor_offset(cullface_to_face(mf.cullface)),
+                                rm.rot_x_div90,
+                                rm.rot_y_div90,
+                            );
                             let n = [bp[0] + off[0], bp[1] + off[1], bp[2] + off[2]];
                             if r.inside(n[0], n[1], n[2]) {
                                 // 区域外视为空气，不剔除：否则结构的外表面会缺失
