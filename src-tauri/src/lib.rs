@@ -8,8 +8,8 @@ mod error;
 mod geometry;
 mod litematic;
 mod mcver;
+mod mesh;
 mod nbt;
-mod raster;
 mod transform;
 mod visibility;
 
