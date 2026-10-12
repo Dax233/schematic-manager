@@ -13,6 +13,9 @@
  *   GITHUB_TOKEN / GH_TOKEN   必填
  *   GITHUB_REPOSITORY         必填，形如 user/repo
  *   TAG                       必填，本次发布的 tag（同时用于拼下载链接）
+ *   VERSION                   可选，纯版本号（形如 0.1.0），用于匹配资产名。
+ *                             默认从 TAG 推导。快照 tag 带 +snapshot.N 后缀，
+ *                             绝不能拿它去匹配资产名，否则正则无法命中。
  *   HEAD_REF                  可选，用于提交对比的 ref，默认取 TAG。
  *                             快照发布时 tag 尚未创建，必须传 github.sha
  *   PRERELEASE                可选，'true' 表示预发布
@@ -26,6 +29,10 @@ const TAG = process.env.TAG || "";
 // 快照发布的 tag 由 gh release create 创建，生成说明时它还不存在于远端，
 // 因此对比要用提交 sha；下载链接仍然用 tag。
 const HEAD_REF = process.env.HEAD_REF || TAG;
+// 资产名里用的是纯版本号（如 schematic-manager-0.1.0-linux-x86_64.deb），
+// 而快照 tag 形如 v0.1.0+snapshot.11。用 tag 去匹配资产名永远匹配不上
+// （且 + 在正则中是量词），因此单独取版本号。
+const VERSION = process.env.VERSION || TAG.replace(/^v/, "");
 const PRERELEASE = String(process.env.PRERELEASE || "false") === "true";
 const OUTPUT = process.env.OUTPUT || "release-notes.md";
 const TOKEN = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "";
@@ -184,7 +191,7 @@ async function main() {
 
   const { groups, breaking, other } = groupCommits(commits);
 
-  const version = TAG.replace(/^v/, "");
+  const version = VERSION;
   const out = [];
   out.push(`## ${version}${PRERELEASE ? "（预发布）" : ""}`);
   out.push("");

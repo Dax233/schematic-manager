@@ -242,6 +242,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           TAG: ${{ needs.prepare.outputs.tag }}
+          # 资产名里用的是纯版本号，快照 tag 带 +snapshot.N 后缀不能用于匹配
+          VERSION: ${{ needs.prepare.outputs.version }}
           # 快照 tag 此刻还没创建，对比必须用提交 sha；资产清单由上一步写入 assets.json
           HEAD_REF: ${{ github.sha }}
           PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
