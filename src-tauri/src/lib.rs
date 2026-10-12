@@ -12,6 +12,7 @@ mod dto;
 mod duplicate;
 mod error;
 mod geometry;
+mod jar_index;
 mod litematic;
 mod mcver;
 mod mesh;
