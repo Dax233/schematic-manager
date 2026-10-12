@@ -13,6 +13,7 @@ mod litematic;
 mod mcver;
 mod mesh;
 mod nbt;
+mod png;
 mod replace;
 mod scene;
 mod transform;

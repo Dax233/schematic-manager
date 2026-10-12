@@ -420,6 +420,17 @@ pub fn serialize(root: &Value, root_name: &str) -> Vec<u8> {
 
 // ---------------------------------------------------------------- gzip
 
+/// zlib（RFC1950）解压。
+///
+/// 与 gzip 的区别不只是文件头：PNG 的 IDAT 用的就是 zlib 容器，
+/// 而 gzip 容器多一层头与 CRC。两者混用会得到解析失败。
+pub fn inflate_zlib(data: &[u8]) -> AppResult<Vec<u8>> {
+    let mut d = flate2::read::ZlibDecoder::new(data);
+    let mut out = Vec::new();
+    d.read_to_end(&mut out)?;
+    Ok(out)
+}
+
 pub fn gunzip(data: &[u8]) -> AppResult<Vec<u8>> {
     let mut d = flate2::read::GzDecoder::new(data);
     let mut out = Vec::new();
@@ -586,5 +597,24 @@ mod tests {
             assert_eq!(keys, ["a", "b", "c"]);
             assert_eq!(f[0].1, Value::Int(9));
         }
+    }
+
+    #[test]
+    fn zlib_roundtrip_recovers_content() {
+        // 用压缩器造真实输入，避免手写字节序列带来的假设
+        let src: Vec<u8> = (0..1024).map(|i| (i * 7 % 251) as u8).collect();
+        let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(&src).unwrap();
+        let comp = e.finish().unwrap();
+        assert_ne!(comp, src, "压缩结果不应与原文相同");
+        assert_eq!(inflate_zlib(&comp).unwrap(), src);
+    }
+
+    #[test]
+    fn zlib_rejects_gzip_input() {
+        // 用 gzip 容器喂给 zlib 解压必须报错，而不是静默出错数据
+        let src = b"hello".to_vec();
+        let comp = gzip(&src, 6).unwrap();
+        assert!(inflate_zlib(&comp).is_err(), "gzip 数据不应被 zlib 解压接受");
     }
 }

@@ -9,6 +9,7 @@
 #[path = "../../src-tauri/src/duplicate.rs"] mod duplicate;
 #[path = "../../src-tauri/src/mesh.rs"] mod mesh;
 #[path = "../../src-tauri/src/nbt.rs"] mod nbt;
+#[path = "../../src-tauri/src/png.rs"] mod png;
 #[path = "../../src-tauri/src/mcver.rs"] mod mcver;
 #[path = "../../src-tauri/src/litematic.rs"] mod litematic;
 #[path = "../../src-tauri/src/blockdb.rs"] mod blockdb;

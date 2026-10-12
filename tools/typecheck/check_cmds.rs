@@ -29,6 +29,7 @@
 #[path = "../../src-tauri/src/mcver.rs"] mod mcver;
 #[path = "../../src-tauri/src/mesh.rs"] mod mesh;
 #[path = "../../src-tauri/src/nbt.rs"] mod nbt;
+#[path = "../../src-tauri/src/png.rs"] mod png;
 #[path = "../../src-tauri/src/replace.rs"] mod replace;
 #[path = "../../src-tauri/src/scene.rs"] mod scene;
 #[path = "../../src-tauri/src/transform.rs"] mod transform;

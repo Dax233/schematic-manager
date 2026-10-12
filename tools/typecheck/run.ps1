@@ -97,7 +97,7 @@ $failed = $testOut | Select-String -Pattern '^test result: FAILED'
 $passed = $testOut | Select-String -Pattern '^test result: ok'
 
 # 已知受桩限制的测试：都依赖真实的 gzip/zlib 解压
-$stubBound = 'gzip_roundtrip|blockdb::tests::|real_sample|decoded_block_count|metadata_edit_roundtrips'
+$stubBound = 'gzip_roundtrip|zlib_|blockdb::tests::|real_sample|decoded_block_count|metadata_edit_roundtrips'
 $names = $testOut | Where-Object { $_ -match '^    [a-z_]+::tests::' } | ForEach-Object { $_.Trim() }
 $real = $names | Where-Object { $_ -notmatch $stubBound }
 Write-Host ""
