@@ -91,3 +91,108 @@ u8[compSize]            // zlib 压缩的像素池
 - 读取：`legacy-cpp/src/blockdb.cpp`（`BlockDB::Load`，约第 113 行起）
 - 写出：`legacy-cpp/src/packbuild.cpp`（约 32KB，是格式的权威来源）
 - 数据结构：`legacy-cpp/src/blockdb.h`
+
+## 从写出实现确认的完整布局
+
+以下取自 `legacy-cpp/src/packbuild.cpp` 的写出序列（约 431~524 行），
+它是格式的权威来源。**每个 pack 文件只含一个版本**，
+程序运行时会加载多个 pack（基础版 + 模组叠加包）再合并。
+
+### 文件头
+
+```
+u32 formatVersion      // 当前为 3
+u32 versionCount       // 该 pack 内的版本数，实际为 1
+u32 textureCount
+u32 modelCount
+u32 langTableCount     // 实际为 1
+```
+
+### 字符串表
+
+字符串以 **NUL 结尾（C 风格）**，不是长度前缀：
+
+```
+u32 strCount
+strCount × <字节序列> 0x00
+```
+
+### 语言表
+
+```
+u32 langTableCount            // 段内重复计数，= 1
+langTableCount × {
+    u32 n
+    n × { u32 blockNameIdx, u32 enIdx, u32 zhIdx }
+}
+```
+
+### 贴图表
+
+```
+u32 textureCount
+textureCount × { u16 w, u16 h, u32 offset, u32 len, u8 hasAlpha }
+u32 pixelsRawSize
+u32 pixelsCompSize
+u8[pixelsCompSize]            // zlib 压缩的 RGBA8888 像素池
+```
+
+### 模型表
+
+```
+u32 modelCount
+modelCount × {
+    u8  translucent
+    u16 elementCount
+    elementCount × {
+        <元素边界，6 个浮点>            // 待确认具体类型与顺序
+        u8  hasRot
+        u8  rotKind
+        u8  axis
+        u8  rescale
+        <旋转相关的角度/原点，待确认>
+        u8  faceMask                    // 自低位起，置位顺序对应面
+        popcount(faceMask) × {
+            u32 texIdx                  // 贴图池下标，0xFFFFFFFF 表示缺失
+            u8  cullface                // 0xFF 表示无
+            u16 rotation                // 归一化到 0~359
+            <该面的 UV，4 个值，待确认>
+        }
+    }
+}
+```
+
+### 版本段
+
+```
+u32 sectionCount                // 段内重复计数，= 1
+sectionCount × {
+    u32 versionId               // 版本标识（dataVersion 或字符串表下标）
+    u32 langTableIdx
+    u32 texPathCount
+    texPathCount × { u32 texPathStrIdx, u32 texturePoolIdx }   // 路径 → 池下标
+    u32 blockCount
+    blockCount × {
+        u32 blockNameStrIdx
+        u16 variantCount
+        variantCount × {
+            u32 whenStrIdx       // 方块状态条件字符串
+            u32 modelIdx
+            u8  rotXDiv90
+            u8  rotYDiv90
+            u8  uvlock
+        }
+        u16 multipartCount
+        multipartCount × <与 variant 相同的五个字段>
+    }
+}
+```
+
+## 仍待确认的细节
+
+1. 模型元素边界的字段类型与顺序（浮点还是定点）
+2. 元素旋转的角度与原点表达
+3. 每个面的 UV 字段数量与类型
+4. `faceMask` 自低位起置位的顺序对应哪六个面
+5. `versionId` 是 dataVersion 还是字符串表下标
+6. 模组叠加包与基础版的合并规则（`isOverlay` 在读取实现中如何判定）
