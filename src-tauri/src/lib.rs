@@ -4,6 +4,7 @@ mod block_search;
 mod blockstate;
 mod blockstate_chain;
 mod blockdb;
+mod blockdb_write;
 mod camera;
 mod convert;
 mod commands;

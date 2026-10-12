@@ -23,6 +23,7 @@
 #[path = "../../src-tauri/src/blockstate.rs"] mod blockstate;
 #[path = "../../src-tauri/src/blockstate_chain.rs"] mod blockstate_chain;
 #[path = "../../src-tauri/src/blockdb.rs"] mod blockdb;
+#[path = "../../src-tauri/src/blockdb_write.rs"] mod blockdb_write;
 #[path = "../../src-tauri/src/camera.rs"] mod camera;
 #[path = "../../src-tauri/src/convert.rs"] mod convert;
 #[path = "../../src-tauri/src/duplicate.rs"] mod duplicate;

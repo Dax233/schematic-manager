@@ -13,6 +13,7 @@
 #[path = "../../src-tauri/src/mcver.rs"] mod mcver;
 #[path = "../../src-tauri/src/litematic.rs"] mod litematic;
 #[path = "../../src-tauri/src/blockdb.rs"] mod blockdb;
+#[path = "../../src-tauri/src/blockdb_write.rs"] mod blockdb_write;
 #[path = "../../src-tauri/src/block_model.rs"] mod block_model;
 #[path = "../../src-tauri/src/block_search.rs"] mod block_search;
 #[path = "../../src-tauri/src/blockstate.rs"] mod blockstate;
