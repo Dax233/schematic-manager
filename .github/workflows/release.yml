@@ -1,8 +1,9 @@
 name: 构建与发布
 
 # 触发规则：
-#   1. push 到 main           -> 自动快照发布（pre-release），tag 形如 v0.1.0+snapshot.<构建次数>
-#   2. push 形如 v1.2.3 的 tag -> 正式发布，并以该版本号构建；随后把仓库内版本号递增到下一 PATCH
+#   1. push 到 main            -> 快照发布（pre-release），tag 形如 v0.1.1+snapshot.<构建次数>
+#   2. push 形如 v1.2.3 的 tag  -> 正式发布，以该版本号构建；随后把仓库内版本号递增到下一 PATCH
+#   3. 手动触发                 -> 按当前 package.json 版本做一次快照构建
 on:
   push:
     branches: [ main ]
@@ -11,16 +12,29 @@ on:
 
 # 创建 Release、上传资产、回推版本号提交需要 contents: write；
 # 构建失败时登记诊断 Issue 需要 issues: write（缺少它 gh issue create 会被 403 拒绝，
-# 而步骤又带 continue-on-error，会表现为"成功但什么都没做"）。
+# 而步骤又带 continue-on-error，会表现为「成功但什么都没做」）。
 permissions:
   contents: write
   issues: write
+
+# 日志带颜色便于在网页上阅读
+env:
+  CARGO_TERM_COLOR: always
+
+# 同一个 ref 上只保留最新的一次运行。连续推送时旧运行已被新提交取代，
+# 继续跑只会白占 runner，并可能与新运行争抢同一个 Release 与版本号提交。
+# 正式发布（tag）与快照（main）的 ref 不同，因此两者不会互相取消。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # ---------------------------------------------------------------- 计算版本
   prepare:
     name: 计算版本号与标签
     runs-on: ubuntu-latest
+    # 只做版本号计算，正常几秒结束；设上限以免异常时长时间占用
+    timeout-minutes: 5
     outputs:
       version:    ${{ steps.calc.outputs.version }}
       tag:        ${{ steps.calc.outputs.tag }}
@@ -40,7 +54,7 @@ jobs:
           if [[ "$ref" == refs/tags/v* ]]; then
             tag="${ref#refs/tags/}"
 
-            # 快照 tag 由工作流自己创建，若被匹配到则直接跳过，避免自触发循环
+            # 快照 tag 由本工作流自己创建，若被匹配到则直接跳过，避免自触发循环
             if [[ "$tag" == *"+snapshot."* ]]; then
               echo "检测到快照 tag（$tag），跳过本次构建"
               echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -79,14 +93,71 @@ jobs:
             exit 1
           fi
 
+  # ---------------------------------------------------------------- 前端检查
+  # 只在一个平台跑一次，不放进构建矩阵。
+  #
+  # 原因一：这些检查与平台无关。同一份 dist 会用于全部六个平台，
+  #   放进矩阵等于把同样的工作重复六遍，纯粹浪费时间。
+  # 原因二：此前它们位于构建矩阵内，任何一个前端错误都会让六个平台
+  #   同时失败，掩盖了「只有前端坏了、各平台后端其实还好」这一事实。
+  #
+  # 步骤顺序有依赖关系，不可调换：安装依赖必须排在类型检查之前。
+  # 早前版本把类型检查放在前面，pnpm typecheck 找不到 vue-tsc 而必然失败，
+  # 又因 continue-on-error 被掩盖成「通过」。
+  frontend:
+    name: 前端检查
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # 不在此指定 version：package.json 已声明 packageManager，
+      # 两者同时给出时 pnpm/action-setup 会直接报错退出
+      # （ERR_PNPM_BAD_PM_VERSION）。版本统一由 package.json 决定，
+      # 本地与 CI 因此始终一致。
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: 安装前端依赖
+        # 锁文件已入库，用 frozen 确保装到的版本与本地一致；
+        # 锁文件与 package.json 不一致时直接失败，而不是静默解析出别的版本
+        run: pnpm install --frozen-lockfile
+
+      - name: 类型检查
+        run: pnpm typecheck
+
+      # 前端 invoke 的命令名或参数名与后端对不上时，Rust 侧编译照样通过，
+      # 只在运行时表现为「点了按钮没反应」。界面无法在 CI 里做真实渲染测试，
+      # 因此这道静态检查是拦住这类错误的主要防线。
+      # 已用四种典型错误验证过它确实会失败：命令名写错、参数写成下划线、
+      # 漏传必填参数、多传后端没有的参数。
+      - name: 前后端命令契约检查
+        run: pnpm check:ipc
+
+      # 覆盖各功能发出的命令名与参数，以及界面挂载与主要交互流程。
+      - name: 前端单元测试
+        run: pnpm test
+
+      - name: 前端构建
+        # 单独构建一次：SCSS 编译、资源引用一类的错误在本步就会暴露，
+        # 不必等到六个平台各失败一次才发现
+        run: pnpm build
+
   # ---------------------------------------------------------------- 单元测试
-  # 只在一个平台跑：测试验证的是与平台无关的解析/位打包逻辑，
+  # 只在一个平台跑：测试验证的是与平台无关的解析、位打包与方块转换逻辑，
   # 六个平台重复执行没有额外价值，反而拖慢反馈。
   test:
     name: 单元测试
     needs: prepare
     if: needs.prepare.outputs.skip != 'true'
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -108,35 +179,35 @@ jobs:
             libgtk-3-dev
 
       - name: 运行单元测试
-        # 位打包、NBT 往返、区域索引等逻辑的回归防线
+        # 位打包、NBT 往返、区域索引、方块库合并等逻辑的回归防线
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib -- --nocapture
 
   # ---------------------------------------------------------------- 多平台构建
   build:
     name: 构建 ${{ matrix.platform }}-${{ matrix.arch }}
-    needs: prepare
+    # 等前端与后端测试都通过再开始：这两项失败时各平台的打包注定失败，
+    # 提前拦住可以省下六个 runner（运行 #38 里六个平台就是这样白跑一遍）
+    needs: [ prepare, frontend, test ]
     if: needs.prepare.outputs.skip != 'true'
     runs-on: ${{ matrix.runner }}
+    # 打包含最多三次重试，每次约十余分钟；给足余量但不超过默认的 360 分钟
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { runner: windows-latest,  target: x86_64-pc-windows-msvc,   platform: windows, arch: x86_64, bundles: nsis }
-          - { runner: windows-11-arm,  target: aarch64-pc-windows-msvc,  platform: windows, arch: arm64,  bundles: nsis }
-          - { runner: ubuntu-22.04,    target: x86_64-unknown-linux-gnu, platform: linux,   arch: x86_64, bundles: deb,appimage }
-          - { runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, platform: linux, arch: arm64, bundles: deb,appimage }
+          - { runner: windows-latest,   target: x86_64-pc-windows-msvc,    platform: windows, arch: x86_64, bundles: nsis }
+          - { runner: windows-11-arm,   target: aarch64-pc-windows-msvc,   platform: windows, arch: arm64,  bundles: nsis }
+          - { runner: ubuntu-22.04,     target: x86_64-unknown-linux-gnu,  platform: linux,   arch: x86_64, bundles: deb,appimage }
+          - { runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, platform: linux,   arch: arm64,  bundles: deb,appimage }
           # macos-13 已被 GitHub 弃用：实测该标签的任务永远停在 queued，
           # 会连带让整个运行无法结束（日志也因此无法下载）。改用 macos-15-intel。
-          - { runner: macos-15-intel,  target: x86_64-apple-darwin,      platform: macos,   arch: x86_64, bundles: dmg }
-          - { runner: macos-14,        target: aarch64-apple-darwin,     platform: macos,   arch: arm64,  bundles: dmg }
+          - { runner: macos-15-intel,   target: x86_64-apple-darwin,      platform: macos,   arch: x86_64, bundles: dmg }
+          - { runner: macos-14,         target: aarch64-apple-darwin,     platform: macos,   arch: arm64,  bundles: dmg }
 
     steps:
       - uses: actions/checkout@v4
 
-      # 不在此指定 version：pnpm/action-setup 在 package.json 已声明
-      # packageManager 时，若同时给出 version 会直接报错退出
-      # （ERR_PNPM_BAD_PM_VERSION）。版本统一由 package.json 的
-      # packageManager 字段决定，本地与 CI 因此始终一致。
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
@@ -165,6 +236,8 @@ jobs:
             libgtk-3-dev patchelf
 
       - name: 统一三处版本号为 ${{ needs.prepare.outputs.version }}
+        # 程序内置版本号取自 Cargo.toml，安装包文件名取自 tauri.conf.json，
+        # 两者与 package.json 必须一致，否则「装的版本」与「显示的版本」会对不上
         run: node scripts/bump-version.mjs ${{ needs.prepare.outputs.version }}
 
       - name: 环境诊断
@@ -178,30 +251,7 @@ jobs:
           rustup target list --installed
 
       - name: 安装前端依赖
-        # 锁文件已入库，用 frozen 确保 CI 装到的版本与本地一致；
-        # 锁文件与 package.json 不一致时直接失败，而不是静默解析出别的版本
         run: pnpm install --frozen-lockfile
-
-      - name: 类型检查
-        # 顺序必须在安装依赖之后：此前排在前面，pnpm typecheck 找不到
-        # vue-tsc，必然失败，又因 continue-on-error 被掩盖成「通过」。
-        # 本地已确认 0 错误，因此这里改为阻断。
-        run: pnpm typecheck
-
-      # 前后端命令契约的静态检查。
-      #
-      # 前端 invoke 的命令名或参数名与后端对不上时，Rust 侧编译照样通过，
-      # 只在运行时表现为「点了按钮没反应」——而界面无法在 CI 里自动化测试，
-      # 因此这道检查是拦住这类错误唯一的自动化防线。
-      # 已用四种典型错误（命令名写错、参数写成下划线、漏传必填、多传参数）
-      # 验证过它确实会失败。
-      - name: 前后端命令契约检查
-        run: pnpm check:ipc
-
-      # 前端单元测试：覆盖各功能发出的命令名与参数、以及界面渲染。
-      # 此前项目只有 Rust 侧测试，前端逻辑完全没有自动化保护。
-      - name: 前端单元测试
-        run: pnpm test
 
       # Windows 只打 NSIS，不打 MSI。
       # 原因：项目的 productName 与版权信息是中文，WiX 的 light.exe 会报
@@ -215,9 +265,9 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          # 失败重试：Tauri 打包阶段需要联网下载打包工具链
-          # （如 NSIS），实测出现过 http status: 504 的瞬时失败，
-          # 同一提交重跑即通过。这类基础设施抖动不应让整个发布失败。
+          # 失败重试：Tauri 打包阶段需要联网下载打包工具链（如 NSIS），
+          # 实测出现过 http status: 504 的瞬时失败，同一提交重跑即通过。
+          # 这类基础设施抖动不应让整个发布失败。
           for attempt in 1 2 3; do
             echo "===== 构建尝试 $attempt/3  target=${{ matrix.target }} ====="
             if pnpm tauri build --target ${{ matrix.target }} \
@@ -269,9 +319,10 @@ jobs:
   # ---------------------------------------------------------------- 发布
   release:
     name: 创建 Release
-    needs: [ prepare, test, build ]
+    needs: [ prepare, frontend, test, build ]
     if: needs.prepare.outputs.skip != 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
