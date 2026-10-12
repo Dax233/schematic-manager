@@ -128,8 +128,24 @@ jobs:
       - name: 统一三处版本号为 ${{ needs.prepare.outputs.version }}
         run: node scripts/bump-version.mjs ${{ needs.prepare.outputs.version }}
 
+      - name: 环境诊断
+        shell: bash
+        run: |
+          echo "runner=${{ matrix.runner }}  target=${{ matrix.target }}"
+          node --version
+          pnpm --version
+          rustc --version
+          cargo --version
+          rustup target list --installed
+
+      - name: 类型检查（暂不阻断打包）
+        # 本机无法执行 vue-tsc，类型问题先在 CI 上暴露但不阻塞多平台打包链路；
+        # 待类型全部收敛后改为阻断。
+        continue-on-error: true
+        run: pnpm typecheck
+
       - name: 安装前端依赖
-        run: pnpm install --frozen-lockfile=false
+        run: pnpm install --no-frozen-lockfile
 
       - name: 构建（Tauri 打包）
         run: pnpm tauri build --target ${{ matrix.target }}

@@ -7,9 +7,12 @@ const appWindow = getCurrentWindow();
 const files = ref<Array<Record<string, unknown>>>([]);
 const status = ref("就绪");
 
-const columns = [
-  { title: "名称", dataIndex: "name", width: 200, sortable: { sortDirections: ["ascend", "descend"] as const } },
-  { title: "制作版本", dataIndex: "mcVersion", width: 100, sortable: { sortDirections: ["ascend", "descend"] as const } },
+// 用 TableColumnData 显式标注，避免字面量推断与 Arco 类型定义冲突
+import type { TableColumnData } from "@arco-design/web-vue";
+
+const columns: TableColumnData[] = [
+  { title: "名称", dataIndex: "name", width: 200, sortable: { sortDirections: ["ascend", "descend"] } },
+  { title: "制作版本", dataIndex: "mcVersion", width: 100, sortable: { sortDirections: ["ascend", "descend"] } },
   { title: "尺寸", dataIndex: "size", width: 140 },
   { title: "来源目录", dataIndex: "dir", ellipsis: true, tooltip: true },
 ];
@@ -56,6 +59,7 @@ onMounted(() => {
           size="small"
           :scroll="{ y: '100%' }"
           :bordered="{ wrapper: true, cell: false }"
+          :row-selection="{ type: 'checkbox' }"
         >
           <template #empty>
             <a-empty description="尚未添加扫描目录" />
