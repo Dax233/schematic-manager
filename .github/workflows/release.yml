@@ -21,17 +21,18 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
-# 并发控制：**只串行化，不取消**。
+# 不设 concurrency。
 #
-# 需求是「每次推送提交时自动构建并创建 Release」。若开 cancel-in-progress，
-# 连续推送会让前一次运行被取消，那次提交就永远不会产出 Release——实测
-# 因此丢了两次发布（#45、#46 被取消，对应提交没有对应 Release）。
-# 因此这里只保证同一 ref 上的运行按顺序执行，不去打断进行中的构建。
+# 需求是「每次推送提交时自动构建并创建 Release」，而 concurrency 组与这条
+# 需求根本冲突：GitHub 即使设了 cancel-in-progress: false，也会**取消同一组
+# 内排队中的运行**，只保留最新一个。实测因此丢过三次发布：
+#   #45、#46 被 cancel-in-progress: true 取消
+#   #48 被改成 false 后仍被取消（它排在 #47 之后，属"排队中的旧运行"）
+# 这三次推送都没有对应 Release。
 #
-# 正式发布（tag）与快照（main）的 ref 不同，两者不会互相排队。
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+# 本来也不需要并发保护：每次快照用的 tag 是 v<版本>+snapshot.<run_number>，
+# run_number 在仓库内唯一，因此两次运行永远不会写同一个 Release。
+# 版本号提交只在正式发布（tag 触发）时产生，而正式发布不会连续发生。
 
 jobs:
   # ---------------------------------------------------------------- 计算版本
