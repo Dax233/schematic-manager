@@ -518,9 +518,9 @@ mod tests {
     /// 真实文件由 legacy-cpp 的 packbuild 生成，这里只覆盖格式解析本身。
     fn build_minimal_pack() -> Vec<u8> {
         let mut w: Vec<u8> = Vec::new();
-        let mut s32 = |w: &mut Vec<u8>, v: i32| w.extend_from_slice(&v.to_le_bytes());
-        let mut u32f = |w: &mut Vec<u8>, v: u32| w.extend_from_slice(&v.to_le_bytes());
-        let mut u16f = |w: &mut Vec<u8>, v: u16| w.extend_from_slice(&v.to_le_bytes());
+        let s32 = |w: &mut Vec<u8>, v: i32| w.extend_from_slice(&v.to_le_bytes());
+        let u32f = |w: &mut Vec<u8>, v: u32| w.extend_from_slice(&v.to_le_bytes());
+        let u16f = |w: &mut Vec<u8>, v: u16| w.extend_from_slice(&v.to_le_bytes());
 
         w.extend_from_slice(b"PMBLKDB\0");
         u32f(&mut w, 3); // format

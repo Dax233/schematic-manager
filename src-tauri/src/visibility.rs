@@ -3,7 +3,7 @@
 //! 对照 legacy-cpp/render.cpp 的 ComputeOpaque 与 RenderSchematic 中的
 //! 面遍历。这一层把解析层、模型解析与几何串起来，产出光栅化的输入。
 
-use crate::block_model::{resolve_models, ResolvedModel};
+use crate::block_model::resolve_models;
 use crate::blockdb::{BlockDb, Face, VersionDef, NO_TEXTURE};
 use crate::geometry::{build_face_corners, cull_neighbor_offset, face_shade};
 use crate::litematic::{BlockState, Schematic};

@@ -734,10 +734,13 @@ mod tests {
             ("Size".into(), Value::Compound(vec![
                 ("x".into(), Value::Int(-16)), ("y".into(), Value::Int(-10)), ("z".into(), Value::Int(16)),
             ])),
-            ("BlockStatePalette".into(), Value::List(vec![
-                Value::Compound(vec![("Name".into(), Value::String("minecraft:air".into()))]),
-                Value::Compound(vec![("Name".into(), Value::String("minecraft:stone".into()))]),
-            ])),
+            ("BlockStatePalette".into(), Value::List(
+                vec![
+                    Value::Compound(vec![("Name".into(), Value::String("minecraft:air".into()))]),
+                    Value::Compound(vec![("Name".into(), Value::String("minecraft:stone".into()))]),
+                ],
+                crate::nbt::TAG_COMPOUND,
+            )),
             ("BlockStates".into(), Value::LongArray(vec![0i64; (16 * 10 * 16 * 2usize).div_ceil(64)])),
         ]);
         let r = region_from_nbt("t", &region).unwrap();
