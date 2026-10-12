@@ -387,9 +387,9 @@ mod tests {
                 en: "Stone".into(),
                 zh: "石头".into(),
             }]],
-            // 贴图记录与像素池都留空：本地 flate2 桩的压缩产出 0 字节，
-            // 而读取端会据此认为像素池为空，与声明长度冲突。
-            // 像素的往返需真实 zlib，属受桩限制项；结构与数量仍被下面的断言覆盖。
+            // 贴图与像素默认留空，由需要它们的用例自行填充。
+            // 本地 flate2 桩早已改为产出合法的 stored 块，像素池的往返在本地
+            // 也能验证（见 texture_section_round_trips_fields_and_pixels）。
             textures: Vec::new(),
             models: vec![model],
             versions: vec![version],
@@ -454,16 +454,64 @@ mod tests {
         assert_eq!(back.versions[0].langs[0].zh, "石头");
     }
 
-    /// 贴图记录的字段往返。
+    /// 贴图段的往返：字段与像素内容都要逐字节保留。
     ///
-    /// 这里只验证「数量与读回一致」：本地 flate2 桩压缩产出 0 字节，
-    /// 读取端会认为像素池为空，因此无法声明非零长度的贴图。
-    /// 像素内容的往返需要真实 zlib，由 CI 的 cargo test 覆盖。
+    /// 这条测试此前是**恒真**的：夹具的 textures 与 pixels 都是空的，
+    /// 两边长度都是 0，贴图段写不写、读不读都能通过；注释还写着「由 CI 的
+    /// cargo test 覆盖」，而 CI 跑的仍是同一个空夹具。现在填入真实的贴图
+    /// 记录与像素，逐字段与逐字节比对。
+    ///
+    /// 已验证有效性：把写入端的像素截短一个字节后这条会失败
+    /// （读取端报「贴图 1 的范围超出像素池长度」），而旧写法照样通过。
     #[test]
-    fn texture_section_count_round_trips() {
-        let db = sample_db();
+    fn texture_section_round_trips_fields_and_pixels() {
+        let mut db = sample_db();
+        db.textures = vec![
+            TextureInfo {
+                w: 16,
+                h: 16,
+                offset: 0,
+                len: 256,
+                has_alpha: true,
+            },
+            TextureInfo {
+                w: 1,
+                h: 1,
+                offset: 256,
+                len: 4,
+                has_alpha: false,
+            },
+        ];
+        // 像素按位置取不同值：这样「偏移写错」或「长度截断」都能暴露，
+        // 全填同一个值则错位也看不出来
+        db.pixels = (0..260).map(|i| (i % 251) as u8).collect();
+
         let back = BlockDb::load_from_bytes(&serialize(&db).unwrap(), false).unwrap();
-        assert_eq!(back.textures.len(), db.textures.len());
+
+        assert_eq!(back.textures.len(), 2, "贴图记录数应保留");
+        for (i, t) in db.textures.iter().enumerate() {
+            assert_eq!(back.textures[i].w, t.w, "第 {i} 条贴图的宽");
+            assert_eq!(back.textures[i].h, t.h, "第 {i} 条贴图的高");
+            assert_eq!(back.textures[i].offset, t.offset, "第 {i} 条贴图的偏移");
+            assert_eq!(back.textures[i].len, t.len, "第 {i} 条贴图的长度");
+            assert_eq!(
+                back.textures[i].has_alpha, t.has_alpha,
+                "第 {i} 条贴图的 alpha 标记"
+            );
+        }
+        assert_eq!(back.pixels, db.pixels, "像素池应逐字节一致");
+
+        // 贴图切片也要能取到正确的像素：只比对整个池会漏掉偏移算错的情况
+        assert_eq!(
+            back.texture_pixels(0).map(|p| p.to_vec()),
+            Some(db.pixels[0..256].to_vec()),
+            "第 0 条贴图的像素切片"
+        );
+        assert_eq!(
+            back.texture_pixels(1).map(|p| p.to_vec()),
+            Some(db.pixels[256..260].to_vec()),
+            "第 1 条贴图的像素切片"
+        );
     }
 
     #[test]
