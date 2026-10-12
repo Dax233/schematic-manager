@@ -1,0 +1,31 @@
+name: Runner 可用性探测
+
+# 仅手动触发。用途：确认各平台 runner 标签当前是否真的能被调度，
+# 避免主工作流因某个标签不可用而长时间停在 queued（并连带阻塞日志下载）。
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: 探测 ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - windows-latest
+          - windows-11-arm
+          - ubuntu-22.04
+          - ubuntu-22.04-arm
+          - macos-13
+          - macos-14
+          - macos-15-intel
+          - macos-latest
+    steps:
+      - name: 输出平台信息
+        shell: bash
+        run: |
+          echo "label=${{ matrix.runner }}"
+          echo "os=${{ runner.os }}  arch=${{ runner.arch }}"
+          uname -a || true
