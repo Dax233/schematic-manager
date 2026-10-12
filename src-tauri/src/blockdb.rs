@@ -871,11 +871,22 @@ mod tests {
         assert!(e.contains("格式版本"), "错误信息应说明版本不支持：{e}");
     }
 
+    /// 截断的方块库必须返回错误，而不是 panic，也不能「加载成功」。
+    ///
+    /// 原实现是 `let _ = ...`——返回值被丢弃，只验证了「不 panic」；
+    /// 若读取端回归成「截断时也返回 Ok」，旧写法照样通过。同文件下方
+    /// 已记录过「踩过『因为错误的原因通过』这个坑」，这里把断言补上。
     #[test]
     fn truncated_data_errors_instead_of_panicking() {
         let full = build_minimal_pack();
         for cut in [10usize, 40, 120, 200, full.len() - 1] {
-            let _ = BlockDb::load_from_bytes(&full[..cut.min(full.len())], false);
+            let cut = cut.min(full.len());
+            let r = BlockDb::load_from_bytes(&full[..cut], false);
+            assert!(
+                r.is_err(),
+                "截断到 {cut} 字节（完整 {} 字节）时应报错，实际加载成功",
+                full.len()
+            );
         }
     }
 

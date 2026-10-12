@@ -264,14 +264,17 @@ pub fn resolve_face_texture_path(chain: &Chain, raw: &str, cur_ns: &str) -> Opti
 /// 解析面的贴图引用到「字符串池下标 + 规范路径」。
 ///
 /// 返回 None 表示无法解析：变量缺失、成环、或路径未登记。
+///
+/// 解析部分（变量链、命名空间规范化）**委托给 `resolve_face_texture_path`**，
+/// 只额外做一次字符串池查表。两份实现各写一遍时，测试覆盖的是测试专用的
+/// 那一份，产品实际走的那份反而没有直接覆盖——这里保持单一实现。
 pub fn resolve_face_texture(
     chain: &Chain,
     raw: &str,
     cur_ns: &str,
     string_pool: &HashMap<String, u32>,
 ) -> Option<(u32, String)> {
-    let path = resolve_tex_ref(&chain.textures, raw)?;
-    let qualified = crate::jar_index::qualify(&path, cur_ns)?;
+    let qualified = resolve_face_texture_path(chain, raw, cur_ns)?;
     let idx = string_pool.get(&qualified).copied()?;
     Some((idx, qualified))
 }
@@ -749,5 +752,102 @@ mod tests {
         assert!(resolve_face_texture(&ch, "#nope", "minecraft", &pool).is_none());
         // 路径未登记到字符串池
         assert!(resolve_face_texture(&ch, "block/x", "minecraft", &pool).is_none());
+    }
+
+    // ---- resolve_face_texture_path：产品实际走的那条路径 ----
+    //
+    // 上面那组测试针对 resolve_face_texture，它多一层字符串池查表；
+    // 而 pack_build 与 collect_texture_paths 走的是不带池的
+    // resolve_face_texture_path。此前它只有间接覆盖，这里直接测。
+
+    #[test]
+    fn resolve_path_qualifies_bare_path_with_current_namespace() {
+        let ch = chain_with(&[("all", "block/stone")]);
+        assert_eq!(
+            resolve_face_texture_path(&ch, "#all", "minecraft").as_deref(),
+            Some("minecraft:block/stone"),
+            "缺命名空间的路径应按当前命名空间补全"
+        );
+    }
+
+    #[test]
+    fn resolve_path_keeps_explicit_namespace() {
+        let ch = chain_with(&[("all", "mymod:block/x")]);
+        assert_eq!(
+            resolve_face_texture_path(&ch, "#all", "minecraft").as_deref(),
+            Some("mymod:block/x"),
+            "已有命名空间不应被当前命名空间覆盖"
+        );
+    }
+
+    #[test]
+    fn resolve_path_accepts_direct_path_without_variable() {
+        let ch = chain_with(&[]);
+        assert_eq!(
+            resolve_face_texture_path(&ch, "block/x", "minecraft").as_deref(),
+            Some("minecraft:block/x"),
+            "直接给路径时不需要变量表"
+        );
+    }
+
+    /// 不需要字符串池：这是它与 resolve_face_texture 的关键区别，
+    /// 也是调用方能在拿到路径后再登记、从而打破循环的原因。
+    #[test]
+    fn resolve_path_does_not_require_pool_registration() {
+        let ch = chain_with(&[("all", "block/never_registered")]);
+        assert!(
+            resolve_face_texture_path(&ch, "#all", "minecraft").is_some(),
+            "未登记到字符串池的路径也应能解析出规范路径"
+        );
+    }
+
+    #[test]
+    fn resolve_path_returns_none_for_missing_variable() {
+        let ch = chain_with(&[]);
+        assert!(
+            resolve_face_texture_path(&ch, "#nope", "minecraft").is_none(),
+            "变量缺失时应返回 None"
+        );
+    }
+
+    /// 成环时必须终止并返回 None，而不是死循环或给出中间态。
+    #[test]
+    fn resolve_path_returns_none_for_cycle() {
+        let mut ch = chain_with(&[]);
+        ch.textures.insert(
+            "a".into(),
+            TexValue { sprite: "#b".into(), force_translucent: false },
+        );
+        ch.textures.insert(
+            "b".into(),
+            TexValue { sprite: "#a".into(), force_translucent: false },
+        );
+        assert!(
+            resolve_face_texture_path(&ch, "#a", "minecraft").is_none(),
+            "成环时应返回 None 而不是死循环"
+        );
+    }
+
+    /// collect_texture_paths 是产品路径上的收集函数，直接测它。
+    #[test]
+    fn collect_texture_paths_dedups_and_sorts() {
+        let ch = chain_with(&[("a", "block/z"), ("b", "block/a")]);
+        let elements = vec![
+            def_elem(
+                vec![
+                    ("up", def_face("#a", "", None)),
+                    ("down", def_face("#b", "", None)),
+                    ("north", def_face("#a", "", None)),
+                ],
+                [0.0; 3],
+                [16.0; 3],
+            ),
+        ];
+        let paths = collect_texture_paths(&ch, &elements, "minecraft");
+        assert_eq!(
+            paths,
+            vec!["minecraft:block/a".to_string(), "minecraft:block/z".to_string()],
+            "应去重并按字典序排序"
+        );
     }
 }

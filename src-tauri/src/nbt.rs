@@ -597,11 +597,21 @@ mod tests {
         assert_eq!(v.as_xyz(), Some([1, -2, 3]));
     }
 
+    /// 截断的数据必须返回错误，而不是 panic，也不能「解析成功」。
+    ///
+    /// 名字承诺了 errors，但原实现是 `let _ = parse(...)`——返回值被丢弃，
+    /// 只验证了「不 panic」。若 parse 回归成「截断时也返回 Ok」，旧写法
+    /// 照样通过。这里对每个截断点断言结果是 Err。
     #[test]
     fn truncated_data_errors_without_panic() {
         let bytes = serialize(&sample(), "").expect("序列化失败");
         for cut in [1usize, 3, 10, 25] {
-            let _ = parse(&bytes[..cut.min(bytes.len())]);
+            let cut = cut.min(bytes.len());
+            let r = parse(&bytes[..cut]);
+            assert!(
+                r.is_err(),
+                "截断到 {cut} 字节时应报错，实际得到 {r:?}"
+            );
         }
     }
 
