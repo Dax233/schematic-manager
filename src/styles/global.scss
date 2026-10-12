@@ -149,6 +149,9 @@ body,
 }
 
 // 详情区允许纵向滚动，表单较长时不会被裁掉
-.detail :deep(.arco-tabs-content) {
+// 注意：这里不能用 :deep()。:deep() 是 Vue 单文件组件 scoped style 的
+// 编译期语法，本文件由 main.ts 直接 import，走 Vite 的普通 CSS 管线，
+// 不会做该转换，产物里的字面量选择器会被浏览器当作无效伪类整条丢弃。
+.detail .arco-tabs-content {
   overflow-y: auto;
 }

@@ -160,10 +160,10 @@ pub fn save_metadata(
         return Err(format!("文件不存在：{path}"));
     }
 
-    let bak = backup::create(&exe_dir(), &p, "metadata")
-        .map_err(|e| format!("备份失败，已中止保存：{e}"))?;
-
+    // 先载入并判断是否真的有变化，再决定要不要备份。
+    // 顺序反过来的话，重复保存相同内容也会产出无用备份。
     let mut sc = litematic::Schematic::load(&path).map_err(|e| e.to_string())?;
+
     let mut changed = false;
     if let Some(v) = name {
         changed |= sc.set_meta_name(&v);
@@ -176,9 +176,21 @@ pub fn save_metadata(
     }
 
     if !changed {
-        // 三处字段都不存在（例如格式过于陈旧）：不能假装成功
-        return Err("该投影缺少可编辑的元数据字段".into());
+        // 可能是值本身没有变化，也可能是该投影缺少这几项字段。
+        // 两种都不应备份、也不应写盘；后者需要让用户知道。
+        let md = sc.root.get("Metadata");
+        let has_fields = md.is_some()
+            && ["Name", "Author", "Description"]
+                .iter()
+                .any(|k| md.and_then(|m| m.get(k)).is_some());
+        if !has_fields {
+            return Err("该投影缺少可编辑的元数据字段".into());
+        }
+        return Err("内容没有变化，未做保存".into());
     }
+
+    let bak = backup::create(&exe_dir(), &p, "metadata")
+        .map_err(|e| format!("备份失败，已中止保存：{e}"))?;
 
     sc.save_to(&path).map_err(|e| format!("写入失败：{e}"))?;
 

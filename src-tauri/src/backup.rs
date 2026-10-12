@@ -14,12 +14,15 @@ pub fn backup_root(exe_dir: &Path) -> PathBuf {
     exe_dir.join("backups")
 }
 
+/// 备份文件名的唯一后缀。
+///
+/// 用纳秒而非毫秒：同一毫秒内的两次备份若得到相同文件名，
+/// std::fs::copy 会直接覆盖，静默丢掉一份备份。
 fn timestamp() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    format!("{now}")
+        .unwrap_or_default();
+    format!("{}_{:09}", now.as_secs(), now.subsec_nanos())
 }
 
 /// 备份结果
@@ -99,6 +102,12 @@ mod tests {
 
         assert!(first.backup_path.exists());
         assert!(second.backup_path.exists());
+        // 只断言「两个文件都存在」测不出覆盖：路径相同时这两条依然通过，
+        // 因此必须显式断言路径不同。
+        assert_ne!(
+            first.backup_path, second.backup_path,
+            "两次备份必须落在不同文件，否则后者会静默覆盖前者"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }

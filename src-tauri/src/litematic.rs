@@ -372,8 +372,18 @@ fn region_from_nbt(name: &str, v: &Value) -> AppResult<Region> {
 
     r.bits = bits_for_palette(r.palette.len());
 
-    // 解码方块索引
+    // 解码方块索引。
+    // 必须先用「文件声明的 Size」换算出所需 long 数并校验：
+    // BlockStates 数组偏短时 read_bits 会一律返回 0，而索引 0 通常是空气，
+    // 于是统计结果静默偏小——用户会看到一个「看起来正常但数字是错的」投影。
     if let Some(longs) = v.get("BlockStates").and_then(|x| x.as_longs()) {
+        let need = (r.volume * r.bits as usize).div_ceil(64);
+        if longs.len() < need {
+            return Err(AppError::Corrupt(format!(
+                "区域 {name} 的 BlockStates 长度不足：按尺寸与位数需要 {need} 个 long，实际 {}",
+                longs.len()
+            )));
+        }
         r.indices = decode_indices(longs, r.volume, r.bits);
         // 越界索引视为空气，避免后续取值 panic
         let pal_len = r.palette.len() as i32;
@@ -402,7 +412,11 @@ pub struct Schematic {
     pub regions: Vec<Region>,
     pub path: String,
     pub loaded: bool,
-    pub modified: bool,
+    /// 元数据（名称/作者/描述/数据版本）被改动
+    pub meta_modified: bool,
+    /// 方块索引被改动。只有它为真时才需要重新编码 BlockStates，
+    /// 否则改一个描述也会重写全部区域的方块数据。
+    pub blocks_modified: bool,
 }
 
 impl Schematic {
@@ -410,7 +424,14 @@ impl Schematic {
     pub fn load(path: &str) -> AppResult<Self> {
         let bytes = std::fs::read(path)?;
         let root = nbt::parse_maybe_gzip(&bytes)?;
-        let mut sc = Self { root, regions: Vec::new(), path: path.to_string(), loaded: true, modified: false };
+        let mut sc = Self {
+            root,
+            regions: Vec::new(),
+            path: path.to_string(),
+            loaded: true,
+            meta_modified: false,
+            blocks_modified: false,
+        };
         sc.rebuild_regions()?;
         Ok(sc)
     }
@@ -511,13 +532,15 @@ impl Schematic {
 
     fn meta_set_str(&mut self, key: &str, v: &str) -> bool {
         let Some(md) = self.root.get("Metadata") else { return false };
-        if md.get(key).is_none() {
+        let Some(old) = md.get(key) else { return false };
+        // 值未变化时不算改动：否则重复保存相同内容也会触发备份与写盘
+        if old.as_str() == Some(v) {
             return false;
         }
         let mut md = md.clone();
         md.set(key, Value::String(v.to_string()));
         self.root.set("Metadata", md);
-        self.modified = true;
+        self.meta_modified = true;
         true
     }
 
@@ -535,7 +558,7 @@ impl Schematic {
             return false;
         }
         self.root.set("MinecraftDataVersion", Value::Int(v));
-        self.modified = true;
+        self.meta_modified = true;
         true
     }
 
@@ -543,8 +566,12 @@ impl Schematic {
     pub fn save_to(&mut self, path: &str) -> AppResult<()> {
         self.sync_to_nbt()?;
         let bytes = nbt::serialize_gzip(&self.root, "", 6)?;
-        std::fs::write(path, bytes)?;
-        self.modified = false;
+        // 先写临时文件再改名，避免中途失败留下半个文件
+        let tmp = format!("{path}.tmp");
+        std::fs::write(&tmp, bytes)?;
+        std::fs::rename(&tmp, path)?;
+        self.meta_modified = false;
+        self.blocks_modified = false;
         Ok(())
     }
 
@@ -555,23 +582,33 @@ impl Schematic {
 
     /// 把内存中的区域索引写回 NBT 的 BlockStates 字段
     fn sync_to_nbt(&mut self) -> AppResult<()> {
-        if !self.modified {
+        // 只有方块数据真的被改动过才重新编码 BlockStates，
+        // 否则改一个描述也会把全部区域的方块数据重写一遍。
+        if !self.blocks_modified {
             return Ok(());
         }
         let region_names: Vec<String> = self.regions.iter().map(|r| r.name.clone()).collect();
+        let mut regs = match self.root.get("Regions").cloned() {
+            Some(Value::Compound(v)) => v,
+            _ => {
+                return Err(AppError::Parse(
+                    "投影的 Regions 字段缺失或类型不正确，无法写回方块数据".into(),
+                ))
+            }
+        };
         for name in region_names {
-            let Some(r) = self.regions.iter().find(|r| r.name == name).cloned() else { continue };
+            let Some(r) = self.regions.iter().find(|r| r.name == name).cloned() else {
+                continue;
+            };
             if r.volume == 0 {
                 continue;
             }
-            let longs = encode_indices(&r.indices, r.bits);
-            let Some(Value::Compound(regs)) = self.root.get("Regions").cloned() else { continue };
-            let mut regs = regs;
-            if let Some(slot) = regs.iter_mut().find(|(n, _)| n == &name) {
-                slot.1.set("BlockStates", Value::LongArray(longs));
-            }
-            self.root.set("Regions", Value::Compound(regs));
+            let slot = regs.iter_mut().find(|(n, _)| n == &name).ok_or_else(|| {
+                AppError::Parse(format!("NBT 中找不到区域 {name}，无法写回方块数据"))
+            })?;
+            slot.1.set("BlockStates", Value::LongArray(encode_indices(&r.indices, r.bits)));
         }
+        self.root.set("Regions", Value::Compound(regs));
         Ok(())
     }
 }

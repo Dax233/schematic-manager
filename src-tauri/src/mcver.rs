@@ -199,10 +199,25 @@ mod tests {
     }
 
     #[test]
-    fn lookup_exact_and_between() {
-        assert_eq!(version_name_from_data_version(pairs_first()), first_name());
-        // 落到两个条目之间时取较小的那个
+    fn lookup_exact_below_and_between() {
+        let (first_dv, first_name) = DATA_VERSIONS[0];
+        assert_eq!(version_name_from_data_version(first_dv), first_name);
+        // 低于整张表
         assert_eq!(version_name_from_data_version(0), "");
+        assert_eq!(version_name_from_data_version(first_dv - 1), "");
+
+        // 真正落在相邻两条目之间：应取较小的那个
+        if DATA_VERSIONS.len() >= 2 {
+            let (lo_dv, lo_name) = DATA_VERSIONS[0];
+            let (hi_dv, _) = DATA_VERSIONS[1];
+            if hi_dv > lo_dv + 1 {
+                assert_eq!(
+                    version_name_from_data_version(lo_dv + 1),
+                    lo_name,
+                    "两条目之间应取不大于给定值的最大条目"
+                );
+            }
+        }
     }
 
     #[test]

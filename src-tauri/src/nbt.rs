@@ -126,6 +126,82 @@ impl Value {
     }
 }
 
+/// 解码 Java modified UTF-8。
+///
+/// Minecraft 的 NBT 字符串由 DataOutputStream.writeUTF 写出，用的是
+/// modified UTF-8，有两类字节序列不是合法 UTF-8：NUL 写作 C0 80，
+/// 补充平面字符（如 emoji）写作 CESU-8 代理对（每个 6 字节）。
+/// 用 String::from_utf8_lossy 会把它们替换成 U+FFFD 并改变长度，
+/// 再序列化就永久改写了文件内容。
+fn decode_modified_utf8(bytes: &[u8]) -> AppResult<String> {
+    let bad = || AppError::Corrupt("NBT 字符串不是合法的 modified UTF-8".into());
+    let mut out = String::with_capacity(bytes.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b & 0x80 == 0 {
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        let (cp, len) = if b & 0xF0 == 0xE0 {
+            if i + 2 >= bytes.len() { return Err(bad()); }
+            ((((b & 0x0F) as u32) << 12)
+                | (((bytes[i + 1] & 0x3F) as u32) << 6)
+                | ((bytes[i + 2] & 0x3F) as u32), 3)
+        } else if b & 0xE0 == 0xC0 {
+            if i + 1 >= bytes.len() { return Err(bad()); }
+            ((((b & 0x1F) as u32) << 6) | ((bytes[i + 1] & 0x3F) as u32), 2)
+        } else {
+            return Err(bad());
+        };
+        if (0xD800..0xDC00).contains(&cp) {
+            let j = i + len;
+            if j + 2 >= bytes.len() || bytes[j] & 0xF0 != 0xE0 { return Err(bad()); }
+            let lo = (((bytes[j] & 0x0F) as u32) << 12)
+                | (((bytes[j + 1] & 0x3F) as u32) << 6)
+                | ((bytes[j + 2] & 0x3F) as u32);
+            if !(0xDC00..0xE000).contains(&lo) { return Err(bad()); }
+            let combined = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+            out.push(char::from_u32(combined).ok_or_else(bad)?);
+            i = j + 3;
+            continue;
+        }
+        if (0xDC00..0xE000).contains(&cp) { return Err(bad()); }
+        out.push(char::from_u32(cp).ok_or_else(bad)?);
+        i += len;
+    }
+    Ok(out)
+}
+
+/// 编码为 Java modified UTF-8，与 decode_modified_utf8 互为逆运算。
+fn encode_modified_utf8(s: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len());
+    for ch in s.chars() {
+        let cp = ch as u32;
+        if cp == 0 {
+            out.extend_from_slice(&[0xC0, 0x80]);
+        } else if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push(0xC0 | (cp >> 6) as u8);
+            out.push(0x80 | (cp & 0x3F) as u8);
+        } else if cp < 0x10000 {
+            out.push(0xE0 | (cp >> 12) as u8);
+            out.push(0x80 | ((cp >> 6) & 0x3F) as u8);
+            out.push(0x80 | (cp & 0x3F) as u8);
+        } else {
+            let v = cp - 0x10000;
+            for c in [0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF)] {
+                out.push(0xE0 | (c >> 12) as u8);
+                out.push(0x80 | ((c >> 6) & 0x3F) as u8);
+                out.push(0x80 | (c & 0x3F) as u8);
+            }
+        }
+    }
+    out
+}
+
 pub fn tag_type_name(t: u8) -> &'static str {
     match t {
         TAG_END => "End",
@@ -203,11 +279,11 @@ impl<'a> Reader<'a> {
         Ok(f64::from_bits(self.i64()? as u64))
     }
 
-    /// NBT 字符串：u16 长度 + UTF-8 字节（Java 的 modified-UTF8 对常见文本与 UTF-8 等价）
+    /// NBT 字符串：u16 字节长度 + modified UTF-8 字节
     fn string(&mut self) -> AppResult<String> {
         let len = self.u16()? as usize;
         let b = self.take(len)?;
-        Ok(String::from_utf8_lossy(b).into_owned())
+        decode_modified_utf8(b)
     }
 
     fn payload(&mut self, tag: u8, depth: u32) -> AppResult<Value> {
@@ -312,9 +388,9 @@ fn write_payload(out: &mut Vec<u8>, v: &Value) {
             out.extend_from_slice(b);
         }
         Value::String(s) => {
-            let b = s.as_bytes();
+            let b = encode_modified_utf8(s);
             out.extend_from_slice(&(b.len() as u16).to_be_bytes());
-            out.extend_from_slice(b);
+            out.extend_from_slice(&b);
         }
         Value::List(items) => {
             // 空列表按规范写元素类型 End
