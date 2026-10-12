@@ -147,13 +147,13 @@ mod tests {
 
     #[test]
     fn scan_missing_dir_returns_empty() {
-        let r = scan_litematics("Z:\__not_exist__".into(), Some(2));
+        let r = scan_litematics(r"Z:\__not_exist__".into(), Some(2));
         assert!(r.is_empty());
     }
 
     #[test]
     fn peek_missing_file_reports_error() {
-        let s = peek_schematic("Z:\__not_exist__.litematic".into());
+        let s = peek_schematic(r"Z:\__not_exist__.litematic".into());
         assert!(!s.error.is_empty());
         assert_eq!(s.file_name, "__not_exist__.litematic");
     }
