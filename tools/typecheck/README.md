@@ -26,7 +26,7 @@ pwsh tools/typecheck/run.ps1
 
 ```
 error（用桩）  nbt  mcver  litematic  blockdb  block_model
-geometry  camera  visibility  backup
+geometry  visibility  startup  backup
 ```
 
 含以上模块的全部单元测试（以 `--test` 编译）。

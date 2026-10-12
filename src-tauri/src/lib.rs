@@ -1,11 +1,10 @@
-mod backup;
+﻿mod backup;
 mod block_model;
 mod block_search;
 mod blockstate;
 mod blockstate_chain;
 mod blockdb;
 mod blockdb_write;
-mod camera;
 mod commands;
 mod convert;
 mod dto;

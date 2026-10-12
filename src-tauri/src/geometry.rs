@@ -1,11 +1,13 @@
-//! 面的几何：角点生成与法线。
+//! 面的几何：角点生成。
 //!
-//! 对照 legacy-cpp/render.cpp 的 BuildFaceCorners 与 FaceNormalModel。
-//! 元素坐标为模型空间 0..16，四个角点的顺序与 UV 的对应关系
-//! 必须与 Minecraft 的模型规范一致，否则贴图会旋转或镜像。
+//! 对照 legacy-cpp/render.cpp 的 BuildFaceCorners。元素坐标为模型空间 0..16，
+//! 四个角点的顺序与 UV 的对应关系必须与 Minecraft 的模型规范一致，
+//! 否则贴图会旋转或镜像。
+//!
+//! 法线计算不在这里：相机与光照由前端的 three.js 负责，
+//! 后端只给出明暗系数（FACE_SHADE）。
 
 use crate::blockdb::Face;
-use crate::camera::Vec3;
 
 /// 一个面的四个角点及其 UV
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -83,18 +85,6 @@ pub fn build_face_corners(face: Face, from: [f32; 3], to: [f32; 3], uv: [f32; 4]
     };
 
     FaceCorners { pos, uv: uvs }
-}
-
-/// 面在模型空间的朝外法线
-pub fn face_normal(face: Face) -> Vec3 {
-    match face {
-        Face::Down => Vec3::new(0.0, -1.0, 0.0),
-        Face::Up => Vec3::new(0.0, 1.0, 0.0),
-        Face::North => Vec3::new(0.0, 0.0, -1.0),
-        Face::South => Vec3::new(0.0, 0.0, 1.0),
-        Face::West => Vec3::new(-1.0, 0.0, 0.0),
-        Face::East => Vec3::new(1.0, 0.0, 0.0),
-    }
 }
 
 /// 邻面剔除时，由 cullface 推出的邻居方块偏移
@@ -231,15 +221,20 @@ mod tests {
     }
 
     #[test]
-    fn normals_and_cull_offsets_point_outward() {
-        // 法线与剔除偏移必须同向，否则会把该剔除的面留下、该留的剔除
-        for f in [Face::Down, Face::Up, Face::North, Face::South, Face::West, Face::East] {
-            let n = face_normal(f);
-            let o = cull_neighbor_offset(f);
-            let same = (n.x != 0.0 && n.x as i32 == o[0])
-                || (n.y != 0.0 && n.y as i32 == o[1])
-                || (n.z != 0.0 && n.z as i32 == o[2]);
-            assert!(same, "{f:?} 的法线 {n:?} 与剔除偏移 {o:?} 不同向");
+    fn cull_offsets_point_outward() {
+        // 剔除偏移必须指向该面朝外的邻居方块；写死期望值而不是拿另一份
+        // 实现对照——否则两份实现同时写错时会互相印证成「通过」。
+        // 坐标约定：X 向东为正，Y 向上为正，Z 向南为正（与 Minecraft 一致）。
+        let cases = [
+            (Face::Down, [0, -1, 0]),
+            (Face::Up, [0, 1, 0]),
+            (Face::North, [0, 0, -1]),
+            (Face::South, [0, 0, 1]),
+            (Face::West, [-1, 0, 0]),
+            (Face::East, [1, 0, 0]),
+        ];
+        for (f, want) in cases {
+            assert_eq!(cull_neighbor_offset(f), want, "{f:?} 的剔除偏移不正确");
         }
     }
 

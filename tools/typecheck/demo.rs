@@ -26,7 +26,6 @@
 #[path = "../../src-tauri/src/blockstate.rs"] mod blockstate;
 #[path = "../../src-tauri/src/blockstate_chain.rs"] mod blockstate_chain;
 #[path = "../../src-tauri/src/backup.rs"] mod backup;
-#[path = "../../src-tauri/src/camera.rs"] mod camera;
 #[path = "../../src-tauri/src/convert.rs"] mod convert;
 #[path = "../../src-tauri/src/duplicate.rs"] mod duplicate;
 #[path = "../../src-tauri/src/geometry.rs"] mod geometry;
@@ -482,34 +481,26 @@ fn main() {
     check("备份与还原", restored == "原始内容", "内容正确恢复".into());
     out!("");
 
-    // ---- 12. 相机与几何 ----
-    out!("【12】相机与几何");
-    out!("  相机为纯朝向模型，按预设观察点计算视线方向：");
-    for preset in [
-        camera::ViewPreset::Front,
-        camera::ViewPreset::Left45,
-        camera::ViewPreset::Right45,
-        camera::ViewPreset::Back,
-    ] {
-        let cam = crate::camera::Camera::build(preset, None, 30.0);
-        // 把一个单位立方体投到屏幕，展示投影确实随预设变化
-        let (sx, sy, _) = cam.project(camera::Vec3::new(1.0, 1.0, 1.0));
-        out!(
-            "    {:?}：视线 ({:.3}, {:.3}, {:.3})，单位点投影 ({:.3}, {:.3})",
-            preset, cam.forward.x, cam.forward.y, cam.forward.z, sx, sy
-        );
-    }
+    // ---- 12. 几何与剔除 ----
+    //
+    // 相机不在这里：视角由前端 three.js 负责，后端只给出几何与明暗系数。
+    out!("【12】几何与剔除");
     use blockdb::Face;
     out!("  六个面的亮度系数：");
     for f in [Face::Down, Face::Up, Face::North, Face::South, Face::West, Face::East] {
         out!("    {:?}：{:.2}", f, geometry::face_shade(f));
+    }
+    out!("  六个面的邻面剔除偏移：");
+    for f in [Face::Down, Face::Up, Face::North, Face::South, Face::West, Face::East] {
+        let o = geometry::cull_neighbor_offset(f);
+        out!("    {:?}：({}, {}, {})", f, o[0], o[1], o[2]);
     }
     let corners = geometry::build_face_corners(Face::Up, [0.0, 0.0, 0.0], [16.0, 16.0, 16.0], [0.0, 0.0, 16.0, 16.0]);
     out!("  up 面的四个角（单位：1/16 方块）：");
     for (i, c) in corners.pos.iter().enumerate() {
         out!("    角 {i}：({:.1}, {:.1}, {:.1}) UV ({:.1}, {:.1})", c[0], c[1], c[2], corners.uv[i][0], corners.uv[i][1]);
     }
-    check("相机与几何", corners.pos.len() == 4, "up 面 4 个角正确生成".into());
+    check("几何与剔除", corners.pos.len() == 4, "up 面 4 个角正确生成".into());
     out!("");
 
     // ---- 汇总 ----

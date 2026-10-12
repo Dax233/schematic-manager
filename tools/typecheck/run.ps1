@@ -6,7 +6,7 @@
 # 这里用最小桩替代 flate2 与 thiserror，然后用 rustc 直接检查纯逻辑模块。
 #
 # 覆盖：error / nbt / mcver / litematic / blockdb / block_model /
-#       geometry / camera / visibility / backup，含全部单元测试。
+#       geometry / visibility / startup / backup，含全部单元测试。
 # 不覆盖：commands.rs / dto.rs / lib.rs / main.rs（依赖 tauri 与 serde）。
 #
 # 用途：在没有网络、没有 cargo 依赖的情况下，快速发现真实编译错误。
@@ -140,25 +140,48 @@ Remove-Item $exe -Force -ErrorAction SilentlyContinue
 & cmd /c "rustc --edition 2021 --crate-type lib --crate-name check --test --extern `"flate2=$stub`" --extern `"serde_json=$serdeJson`" `"$((Join-Path $here 'check.rs'))`" -o `"$exe`" 2>nul"
 if (-not (Test-Path $exe)) { Write-Host "  测试可执行文件编译失败"; exit 1 }
 $testOut = & $exe --test-threads=4 2>&1
+$testExit = $LASTEXITCODE
 $testOut | Where-Object { $_ -match 'test result|^failures:|^    ' } | Select-Object -First 40
-$failed = $testOut | Select-String -Pattern '^test result: FAILED'
-$passed = $testOut | Select-String -Pattern '^test result: ok'
 
-# 已知受桩限制的测试：都依赖真实的 gzip/zlib 解压
-# 本地环境的硬限制（非代码问题）：
-#   本机拒绝对系统临时目录的写入，而该测试要把副本落到临时目录。
-#   把 TEMP 指到工作区内即可通过（见下面的环境变量设置）。
-# gzip/zlib 曾在此清单里，自本地 flate2 桩改为真实解压后已不受限，
-# 真实 .litematic 样本也能完整往返。
-$stubBound = 'metadata_edit_roundtrips_through_disk'
-$names = $testOut | Where-Object { $_ -match '^    [a-z_]+::tests::' } | ForEach-Object { $_.Trim() }
-$real = $names | Where-Object { $_ -notmatch $stubBound }
-Write-Host ""
-if ($passed) {
+# 退出码以测试可执行文件自身的返回值为准。
+# 此前只看输出里能否匹配到失败项列表：若二进制崩溃或提前 abort，
+# 输出里没有匹配行，$real 为空，脚本会报告「测试全部通过」并 exit 0
+# ——把一次彻底的失败说成成功。
+if ($testExit -eq 0) {
+    Write-Host ""
     Write-Host "测试全部通过。"
-    exit 0
+} else {
+    # 已知受桩限制的测试：依赖真实的 gzip/zlib 解压
+    # gzip/zlib 曾在此清单里，自本地 flate2 桩改为真实解压后已不受限，
+    # 真实 .litematic 样本也能完整往返。
+    $stubBound = 'metadata_edit_roundtrips_through_disk'
+    $names = $testOut | Where-Object { $_ -match '^    [a-z_]+::tests::' } | ForEach-Object { $_.Trim() }
+    $real = $names | Where-Object { $_ -notmatch $stubBound }
+    Write-Host ""
+    Write-Host "失败项中与代码相关的:"
+    if ($real.Count -eq 0) {
+        Write-Host "  未能从输出中定位失败项（测试进程退出码 $testExit；可能是崩溃或超时）"
+        exit $testExit
+    }
+    $real | ForEach-Object { Write-Host "  $_" }
+    exit $real.Count
 }
-Write-Host "失败项中与代码相关的:"
-if ($real.Count -eq 0) { Write-Host "  无（其余失败均由 flate2 桩不支持压缩引起）" }
-else { $real | ForEach-Object { Write-Host "  $_" } }
-exit $real.Count
+
+# 演示程序单独编译一次。
+#
+# 它用真实数据走完整条链路，是人工查看进展的主要入口，但此前没有任何
+# 脚本编译它——改坏了不会有人发现，而它引用的模块一旦更名（例如删掉
+# camera）就会静默失效。这里做一次类型检查，成本只有几百毫秒。
+Write-Host ""
+Write-Host "附加：类型检查进展演示程序…"
+$demoOut = & rustc --edition 2021 --crate-type bin --crate-name demo `
+    --extern "flate2=$stub" --extern "serde_json=$serdeJson" `
+    (Join-Path $here 'demo.rs') --emit=metadata -o (Join-Path $here 'demo.rmeta') 2>&1
+$demoErr = @($demoOut | Select-String -Pattern '^error').Count
+if ($demoErr -gt 0) {
+    $demoOut | Select-Object -First 30
+    Write-Host "  进展演示程序类型检查失败"
+    exit $demoErr
+}
+Write-Host "  进展演示程序 -> 错误: 0"
+exit 0

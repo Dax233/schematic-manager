@@ -23,7 +23,6 @@
 #[path = "../../src-tauri/src/blockstate.rs"] mod blockstate;
 #[path = "../../src-tauri/src/blockstate_chain.rs"] mod blockstate_chain;
 #[path = "../../src-tauri/src/geometry.rs"] mod geometry;
-#[path = "../../src-tauri/src/camera.rs"] mod camera;
 #[path = "../../src-tauri/src/convert.rs"] mod convert;
 #[path = "../../src-tauri/src/pack_build.rs"] mod pack_build;
 #[path = "../../src-tauri/src/pack_registry.rs"] mod pack_registry;
