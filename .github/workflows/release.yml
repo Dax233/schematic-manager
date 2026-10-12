@@ -138,9 +138,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # 不启用 cache: pnpm —— 仓库尚未提交 pnpm-lock.yaml，
-          # 开启缓存会让 setup-node 直接报错。等锁文件入库后再打开。
           node-version: 20
+          cache: pnpm
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
@@ -175,14 +174,16 @@ jobs:
           cargo --version
           rustup target list --installed
 
-      - name: 类型检查（暂不阻断打包）
-        # 本机无法执行 vue-tsc，类型问题先在 CI 上暴露但不阻塞多平台打包链路；
-        # 待类型全部收敛后改为阻断。
-        continue-on-error: true
-        run: pnpm typecheck
-
       - name: 安装前端依赖
-        run: pnpm install --no-frozen-lockfile
+        # 锁文件已入库，用 frozen 确保 CI 装到的版本与本地一致；
+        # 锁文件与 package.json 不一致时直接失败，而不是静默解析出别的版本
+        run: pnpm install --frozen-lockfile
+
+      - name: 类型检查
+        # 顺序必须在安装依赖之后：此前排在前面，pnpm typecheck 找不到
+        # vue-tsc，必然失败，又因 continue-on-error 被掩盖成「通过」。
+        # 本地已确认 0 错误，因此这里改为阻断。
+        run: pnpm typecheck
 
       # Windows 只打 NSIS，不打 MSI。
       # 原因：项目的 productName 与版权信息是中文，WiX 的 light.exe 会报
