@@ -10,6 +10,7 @@
 #[path = "../../src-tauri/src/mesh.rs"] mod mesh;
 #[path = "../../src-tauri/src/nbt.rs"] mod nbt;
 #[path = "../../src-tauri/src/png.rs"] mod png;
+#[path = "../../src-tauri/src/pool.rs"] mod pool;
 #[path = "../../src-tauri/src/mcver.rs"] mod mcver;
 #[path = "../../src-tauri/src/jar_index.rs"] mod jar_index;
 #[path = "../../src-tauri/src/litematic.rs"] mod litematic;

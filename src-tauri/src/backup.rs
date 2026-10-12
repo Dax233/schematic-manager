@@ -67,7 +67,7 @@ const ORIG_PATH_FILE: &str = ".orig_path";
 /// FNV-1a 64 位哈希，用于把父目录折叠成分组名后缀
 fn hash_path(s: &str) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x1000_0000_01b3;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
     let mut h = OFFSET;
     for b in s.as_bytes() {
         h ^= *b as u64;

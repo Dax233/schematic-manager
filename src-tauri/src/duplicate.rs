@@ -43,7 +43,7 @@ pub struct Candidate {
 /// 只用于把候选集合收窄，不承担正确性——最终由逐字节比对定论。
 fn hash_reader<R: Read>(mut r: R) -> std::io::Result<u64> {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x1000_0000_01b3;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
     let mut h = OFFSET;
     let mut buf = [0u8; 64 * 1024];
     loop {

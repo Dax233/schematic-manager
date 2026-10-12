@@ -18,6 +18,7 @@ mod mcver;
 mod mesh;
 mod nbt;
 mod png;
+mod pool;
 mod replace;
 mod scene;
 mod transform;
