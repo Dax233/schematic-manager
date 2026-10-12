@@ -28,6 +28,10 @@ pub fn run() {
             commands::analyze_schematic,
             commands::mc_version_name,
             commands::build_scene,
+            commands::list_backups,
+            commands::restore_backup,
+            commands::delete_backup,
+            commands::read_operation_log,
             commands::save_metadata,
         ])
         .run(tauri::generate_context!())

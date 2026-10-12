@@ -5,9 +5,18 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import type { TableColumnData, TableData } from "@arco-design/web-vue";
 import { Message } from "@arco-design/web-vue";
-import { analyzeSchematic, buildScene, saveMetadata, scanLitematics } from "./api";
+import {
+  analyzeSchematic,
+  buildScene,
+  deleteBackup,
+  listBackups,
+  readOperationLog,
+  restoreBackup,
+  saveMetadata,
+  scanLitematics,
+} from "./api";
 import SceneViewer from "./components/SceneViewer.vue";
-import type { AnalysisResult, SceneData, SchematicSummary } from "./types";
+import type { AnalysisResult, BackupEntry, SceneData, SchematicSummary } from "./types";
 import { formatDims, formatSize, formatStacks } from "./utils/format";
 
 const appWindow = getCurrentWindow();
@@ -30,6 +39,13 @@ const brightness = ref(1.45);
 const activeView = ref("left45");
 const exportSize = ref(1024);
 const exporting = ref(false);
+
+// 备份与日志
+const backupOpen = ref(false);
+const backups = ref<BackupEntry[]>([]);
+const backupLoading = ref(false);
+const logs = ref<string[]>([]);
+const logLoading = ref(false);
 const sceneInfo = computed(() => {
   if (!scene.value) return "";
   const s = scene.value;
@@ -145,6 +161,77 @@ async function loadScene(record: SchematicSummary) {
   } finally {
     sceneLoading.value = false;
   }
+}
+
+function formatTime(ns: string): string {
+  if (!ns) return "—";
+  try {
+    // 纳秒用 BigInt 解析再转毫秒，避免超出安全整数范围导致时间错乱
+    const ms = Number(BigInt(ns) / 1000000n);
+    const d = new Date(ms);
+    return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
+  } catch {
+    return "—";
+  }
+}
+
+async function refreshBackups() {
+  backupLoading.value = true;
+  try {
+    backups.value = await listBackups(selected.value?.fileName.replace(/\.litematic$/i, ""));
+  } catch (e) {
+    Message.error(`读取备份失败：${e}`);
+  } finally {
+    backupLoading.value = false;
+  }
+}
+
+async function refreshLogs() {
+  logLoading.value = true;
+  try {
+    logs.value = await readOperationLog(300);
+  } catch (e) {
+    Message.error(`读取日志失败：${e}`);
+  } finally {
+    logLoading.value = false;
+  }
+}
+
+async function onRestore(row: BackupEntry) {
+  const cur = selected.value;
+  if (!cur) return;
+  try {
+    await restoreBackup(row.path, cur.path);
+    Message.success("已还原");
+    await Promise.all([refreshBackups(), refreshLogs()]);
+    // 还原后重新读取文件内容与预览，避免界面仍显示还原前的数据
+    const r = await scanLitematics(cur.dirName, 1);
+    const hit = r.items.find((f) => f.path === cur.path);
+    if (hit) {
+      selected.value = hit;
+      resetDraft(hit);
+      const idx = files.value.findIndex((f) => f.path === hit.path);
+      if (idx >= 0) files.value[idx] = hit;
+      void loadScene(hit);
+    }
+  } catch (e) {
+    Message.error(`还原失败：${e}`);
+  }
+}
+
+async function onDelete(row: BackupEntry) {
+  try {
+    await deleteBackup(row.path);
+    Message.success("已删除");
+    await Promise.all([refreshBackups(), refreshLogs()]);
+  } catch (e) {
+    Message.error(`删除失败：${e}`);
+  }
+}
+
+async function openBackups() {
+  backupOpen.value = true;
+  await Promise.all([refreshBackups(), refreshLogs()]);
 }
 
 function setView(name: string) {
@@ -409,6 +496,64 @@ const close = () => appWindow.close();
         </a-tabs>
       </div>
     </div>
+
+    <a-drawer
+      v-model:visible="backupOpen"
+      title="备份管理"
+      :width="620"
+      :footer="false"
+      unmount-on-close
+    >
+      <a-tabs default-active-key="backups">
+        <a-tab-pane key="backups" :title="`备份（${backups.length}）`">
+          <a-space style="margin-bottom: 8px">
+            <a-button size="small" @click="refreshBackups">刷新</a-button>
+            <span v-if="selected" class="hint-dim">
+              仅显示「{{ selected.fileName }}」的备份
+            </span>
+          </a-space>
+          <a-table
+            :columns="[
+              { title: '时间', slotName: 'time', width: 170 },
+              { title: '操作', dataIndex: 'op', width: 110 },
+              { title: '大小', slotName: 'size', width: 90 },
+              { title: '操作', slotName: 'act', width: 150 },
+            ]"
+            :data="backups"
+            :loading="backupLoading"
+            :pagination="{ pageSize: 12 }"
+            row-key="path"
+            size="small"
+          >
+            <template #time="{ record }">{{ formatTime(record.createdMs) }}</template>
+            <template #size="{ record }">{{ formatSize(record.size) }}</template>
+            <template #act="{ record }">
+              <a-space>
+                <a-link :disabled="!selected" @click="onRestore(record)">还原</a-link>
+                <a-popconfirm content="删除后无法恢复，确认删除？" @ok="onDelete(record)">
+                  <a-link status="danger">删除</a-link>
+                </a-popconfirm>
+              </a-space>
+            </template>
+            <template #empty>
+              <a-empty :description="selected ? '该文件暂无备份' : '请先选择一个投影文件'" />
+            </template>
+          </a-table>
+        </a-tab-pane>
+
+        <a-tab-pane key="logs" title="操作日志">
+          <a-space style="margin-bottom: 8px">
+            <a-button size="small" @click="refreshLogs">刷新</a-button>
+          </a-space>
+          <a-spin :loading="logLoading" style="width: 100%">
+            <a-empty v-if="logs.length === 0" description="暂无日志" />
+            <div v-else class="log-list">
+              <div v-for="(line, i) in logs" :key="i" class="log-list__row">{{ line }}</div>
+            </div>
+          </a-spin>
+        </a-tab-pane>
+      </a-tabs>
+    </a-drawer>
 
     <div class="statusbar">
       <span>{{ statusText }}</span>

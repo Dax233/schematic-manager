@@ -203,3 +203,19 @@ body,
     font-size: 12px;
   }
 }
+
+// 操作日志列表
+.log-list {
+  max-height: 520px;
+  overflow-y: auto;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+
+  &__row {
+    padding: 3px 6px;
+    border-bottom: 1px solid var(--color-border-1);
+    color: var(--color-text-2);
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+}

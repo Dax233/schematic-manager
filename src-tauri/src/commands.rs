@@ -5,8 +5,8 @@
 
 use crate::backup;
 use crate::dto::{
-    AnalysisResult, BlockCount, EntityCount, SceneDto, SaveOutcome, ScanResult,
-    SchematicSummary,
+    AnalysisResult, BackupEntryDto, BlockCount, EntityCount, SceneDto, SaveOutcome,
+    ScanResult, SchematicSummary,
 };
 use crate::litematic::{self, Summary};
 use std::path::{Path, PathBuf};
@@ -188,6 +188,58 @@ pub fn analyze_schematic(path: String) -> Result<AnalysisResult, String> {
         non_air_total: a.non_air_total,
         air_total: a.air_total,
     })
+}
+
+/// 列出备份。stem 非空时只返回该文件的备份。
+#[tauri::command]
+pub fn list_backups(stem: Option<String>) -> Vec<BackupEntryDto> {
+    backup::list(&backup::backup_root(&exe_dir()))
+        .into_iter()
+        .filter(|e| stem.as_deref().map_or(true, |s| s == e.stem))
+        .map(|e| BackupEntryDto {
+            path: e.path.to_string_lossy().into_owned(),
+            stem: e.stem,
+            op: e.op,
+            created_ms: e.created_ms.to_string(),
+            size: e.size,
+        })
+        .collect()
+}
+
+/// 把备份还原到目标文件。
+///
+/// 还原是覆盖写，因此先校验备份与目标同源：跨文件还原很容易把 A 的备份
+/// 盖到 B 上，而覆盖后 B 的原内容只剩它自己的备份可寻。
+#[tauri::command]
+pub fn restore_backup(backup_path: String, target_path: String) -> Result<(), String> {
+    let b = PathBuf::from(&backup_path);
+    let t = PathBuf::from(&target_path);
+    if !backup::matches_target(&b, &t) {
+        return Err(format!(
+            "备份与目标文件不同源，已中止还原：{}",
+            t.file_name().map(|v| v.to_string_lossy().into_owned()).unwrap_or_default()
+        ));
+    }
+    backup::restore(&b, &t).map_err(|e| e.to_string())?;
+    let name = t.file_name().map(|v| v.to_string_lossy().into_owned()).unwrap_or_default();
+    let _ = backup::append_log(&backup::backup_root(&exe_dir()), &format!("还原 {name} <- {backup_path}"));
+    Ok(())
+}
+
+/// 删除一条备份。
+#[tauri::command]
+pub fn delete_backup(backup_path: String) -> Result<(), String> {
+    let p = PathBuf::from(&backup_path);
+    backup::delete(&p).map_err(|e| e.to_string())?;
+    let name = p.file_name().map(|v| v.to_string_lossy().into_owned()).unwrap_or_default();
+    let _ = backup::append_log(&backup::backup_root(&exe_dir()), &format!("删除备份 {name}"));
+    Ok(())
+}
+
+/// 读取操作日志，由新到旧。
+#[tauri::command]
+pub fn read_operation_log(max_lines: Option<usize>) -> Vec<String> {
+    backup::read_log(&backup::backup_root(&exe_dir()), max_lines.unwrap_or(200).min(5000))
 }
 
 /// 组装前端 Three.js 渲染所需的场景。

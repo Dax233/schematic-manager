@@ -45,6 +45,16 @@ export interface ScanResult {
   skippedPaths: string[];
 }
 
+/** 一条备份记录 */
+export interface BackupEntry {
+  path: string;
+  stem: string;
+  op: string;
+  /** 纳秒时间戳的十进制字符串；超出 JS 安全整数范围，故不用 number */
+  createdMs: string;
+  size: number;
+}
+
 /** 场景批次：一个批次对应一张贴图 */
 export interface SceneBatch {
   texture: number;

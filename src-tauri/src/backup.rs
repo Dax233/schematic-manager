@@ -142,6 +142,21 @@ pub fn delete(backup: &Path) -> AppResult<()> {
     Ok(())
 }
 
+/// 备份与目标文件是否同源（文件名主干一致）。
+///
+/// 还原是覆盖写，若允许跨文件还原，用户很容易把 A 的备份盖到 B 上，
+/// 而且覆盖后原内容只剩备份可寻。因此还原前必须校验。
+pub fn matches_target(backup: &Path, target: &Path) -> bool {
+    let Some(name) = backup.file_name().map(|v| v.to_string_lossy().into_owned()) else {
+        return false;
+    };
+    let Some((stem, _, _)) = parse_backup_name(&name) else { return false };
+    target
+        .file_stem()
+        .map(|v| v.to_string_lossy() == stem)
+        .unwrap_or(false)
+}
+
 /// 操作日志文件位置
 pub fn log_path(root: &Path) -> PathBuf {
     root.join("operations.log")
@@ -311,6 +326,17 @@ mod tests {
 
         assert!(delete(&b.backup_path).is_err(), "删除不存在的备份应报错");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn matches_target_compares_stems() {
+        let dir = PathBuf::from("/x");
+        let backup = dir.join("demo__123__metadata.litematic");
+        assert!(matches_target(&backup, &dir.join("demo.litematic")));
+        // 不同文件必须判为不匹配
+        assert!(!matches_target(&backup, &dir.join("other.litematic")));
+        // 文件名不合规时判为不匹配，而不是默认通过
+        assert!(!matches_target(&dir.join("demo.litematic"), &dir.join("demo.litematic")));
     }
 
     #[test]

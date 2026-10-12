@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AnalysisResult,
+  BackupEntry,
   SaveOutcome,
   ScanResult,
   SceneData,
@@ -40,6 +41,26 @@ export function saveMetadata(
  */
 export function buildScene(schematicPath: string): Promise<SceneData> {
   return invoke<SceneData>("build_scene", { schematicPath });
+}
+
+/** 列出备份；传 stem 时只返回该文件的备份 */
+export function listBackups(stem?: string): Promise<BackupEntry[]> {
+  return invoke<BackupEntry[]>("list_backups", { stem: stem ?? null });
+}
+
+/** 把备份还原到目标文件。后端会校验二者同源。 */
+export function restoreBackup(backupPath: string, targetPath: string): Promise<void> {
+  return invoke<void>("restore_backup", { backupPath, targetPath });
+}
+
+/** 删除一条备份 */
+export function deleteBackup(backupPath: string): Promise<void> {
+  return invoke<void>("delete_backup", { backupPath });
+}
+
+/** 读取操作日志，由新到旧 */
+export function readOperationLog(maxLines = 200): Promise<string[]> {
+  return invoke<string[]>("read_operation_log", { maxLines });
 }
 
 /** dataVersion 对应的游戏版本名 */

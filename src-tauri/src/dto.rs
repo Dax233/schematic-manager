@@ -68,6 +68,20 @@ pub struct ScanResult {
     pub skipped_paths: Vec<String>,
 }
 
+/// 一条备份记录
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupEntryDto {
+    pub path: String,
+    pub stem: String,
+    pub op: String,
+    /// 纳秒时间戳，以十进制字符串传递。
+    /// 纳秒量级约 1.8e18，超出 JavaScript 安全整数范围（约 9e15），
+    /// 用数值传递会丢精度，因此这里用字符串。
+    pub created_ms: String,
+    pub size: u64,
+}
+
 /// 场景批次：供前端一个材质使用
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
