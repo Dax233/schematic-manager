@@ -4,7 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { TableColumnData } from "@arco-design/web-vue";
 import { Message } from "@arco-design/web-vue";
-import { analyzeSchematic, scanLitematics } from "./api";
+import { analyzeSchematic, saveMetadata, scanLitematics } from "./api";
 import type { AnalysisResult, SchematicSummary } from "./types";
 import { formatDims, formatSize, formatStacks } from "./utils/format";
 
@@ -14,6 +14,10 @@ const files = ref<SchematicSummary[]>([]);
 const selected = ref<SchematicSummary | null>(null);
 const analysis = ref<AnalysisResult | null>(null);
 const analyzing = ref(false);
+const saving = ref(false);
+// 元数据编辑草稿。选中文件时用文件中的值填充
+const draft = ref({ name: "", author: "", description: "" });
+const dirty = ref(false);
 const status = ref("就绪");
 
 const columns: TableColumnData[] = [
@@ -55,9 +59,47 @@ async function pickDirectory() {
   }
 }
 
+function resetDraft(record: SchematicSummary | null) {
+  draft.value = {
+    name: record?.name ?? "",
+    author: record?.author ?? "",
+    description: record?.description ?? "",
+  };
+  dirty.value = false;
+}
+
+async function saveDraft() {
+  const cur = selected.value;
+  if (!cur) return;
+  saving.value = true;
+  try {
+    const out = await saveMetadata(cur.path, {
+      name: draft.value.name,
+      author: draft.value.author,
+      description: draft.value.description,
+    });
+    dirty.value = false;
+    // 重新读取，确保界面显示的是文件中的真实内容而不是内存里的草稿
+    const fresh = await scanLitematics(cur.dirName, 1);
+    const hit = fresh.find((f) => f.path === cur.path);
+    if (hit) {
+      selected.value = hit;
+      resetDraft(hit);
+      const idx = files.value.findIndex((f) => f.path === hit.path);
+      if (idx >= 0) files.value[idx] = hit;
+    }
+    Message.success(`已保存，备份在：${out.backupPath}`);
+  } catch (e) {
+    Message.error(`保存失败：${e}`);
+  } finally {
+    saving.value = false;
+  }
+}
+
 async function onRowClick(record: SchematicSummary) {
   selected.value = record;
   analysis.value = null;
+  resetDraft(record);
   if (record.error) return;
   analyzing.value = true;
   try {
@@ -112,6 +154,51 @@ const close = () => appWindow.close();
       <div class="detail">
         <a-tabs default-active-key="info" style="padding: 0 8px">
           <a-tab-pane key="info" title="信息">
+            <template v-if="selected">
+              <a-form :model="draft" layout="vertical" size="small">
+                <a-form-item label="投影名称">
+                  <a-input
+                    v-model="draft.name"
+                    :disabled="!!selected.error"
+                    @input="dirty = true"
+                  />
+                </a-form-item>
+                <a-form-item label="作者">
+                  <a-input
+                    v-model="draft.author"
+                    :disabled="!!selected.error"
+                    @input="dirty = true"
+                  />
+                </a-form-item>
+                <a-form-item label="描述">
+                  <a-textarea
+                    v-model="draft.description"
+                    :auto-size="{ minRows: 3, maxRows: 8 }"
+                    :disabled="!!selected.error"
+                    @input="dirty = true"
+                  />
+                </a-form-item>
+                <a-space>
+                  <a-button
+                    type="primary"
+                    size="small"
+                    :loading="saving"
+                    :disabled="!dirty || !!selected.error"
+                    @click="saveDraft"
+                  >
+                    保存
+                  </a-button>
+                  <a-button size="small" :disabled="!dirty" @click="resetDraft(selected)">
+                    撤销
+                  </a-button>
+                  <span v-if="dirty" class="hint-warn">有未保存的修改</span>
+                  <span v-else-if="!selected.error" class="hint-dim">
+                    保存前会自动备份原件
+                  </span>
+                </a-space>
+              </a-form>
+              <a-divider style="margin: 12px 0" />
+            </template>
             <a-descriptions
               v-if="selected"
               :column="1"
@@ -120,9 +207,6 @@ const close = () => appWindow.close();
               bordered
             >
               <a-descriptions-item label="文件名">{{ selected.fileName }}</a-descriptions-item>
-              <a-descriptions-item label="投影名称">{{ selected.name || "—" }}</a-descriptions-item>
-              <a-descriptions-item label="作者">{{ selected.author || "—" }}</a-descriptions-item>
-              <a-descriptions-item label="描述">{{ selected.description || "—" }}</a-descriptions-item>
               <a-descriptions-item label="制作版本">
                 {{ selected.mcVersionName || "未知" }}（数据版本 {{ selected.dataVersion }}）
               </a-descriptions-item>

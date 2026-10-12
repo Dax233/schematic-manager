@@ -136,3 +136,19 @@ body,
 .arco-table-cell {
   padding: 4px 8px !important;
 }
+
+// 表单状态提示
+.hint-warn {
+  color: rgb(var(--warning-6));
+  font-size: 12px;
+}
+
+.hint-dim {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
+// 详情区允许纵向滚动，表单较长时不会被裁掉
+.detail :deep(.arco-tabs-content) {
+  overflow-y: auto;
+}
