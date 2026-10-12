@@ -34,6 +34,7 @@
 #[path = "../../src-tauri/src/scene.rs"] mod scene;
 #[path = "../../src-tauri/src/transform.rs"] mod transform;
 #[path = "../../src-tauri/src/visibility.rs"] mod visibility;
+#[path = "../../src-tauri/src/zip.rs"] mod zip;
 
 // 待检查的两个文件（生成副本，宏属性已剥离）
 #[path = "generated/dto.rs"] mod dto;

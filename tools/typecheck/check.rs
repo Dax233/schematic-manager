@@ -22,4 +22,5 @@
 #[path = "../../src-tauri/src/scene.rs"] mod scene;
 #[path = "../../src-tauri/src/transform.rs"] mod transform;
 #[path = "../../src-tauri/src/visibility.rs"] mod visibility;
+#[path = "../../src-tauri/src/zip.rs"] mod zip;
 #[path = "../../src-tauri/src/backup.rs"] mod backup;

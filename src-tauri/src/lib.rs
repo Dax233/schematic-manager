@@ -18,6 +18,7 @@ mod replace;
 mod scene;
 mod transform;
 mod visibility;
+mod zip;
 
 /// 应用入口。以库形式导出，便于将来接入移动端入口。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

@@ -28,6 +28,14 @@ pub mod read {
     impl<R: Read> Read for ZlibDecoder<R> {
         fn read(&mut self, _buf: &mut [u8]) -> Result<usize> { Ok(0) }
     }
+    /// raw deflate：zip 条目的压缩形式（无 zlib 头与校验）
+    pub struct DeflateDecoder<R>(pub R);
+    impl<R: Read> DeflateDecoder<R> {
+        pub fn new(r: R) -> Self { DeflateDecoder(r) }
+    }
+    impl<R: Read> Read for DeflateDecoder<R> {
+        fn read(&mut self, _buf: &mut [u8]) -> Result<usize> { Ok(0) }
+    }
 }
 
 pub mod write {
@@ -38,6 +46,16 @@ pub mod write {
         pub fn finish(self) -> Result<W> { Ok(self.0) }
     }
     impl<W: Write> Write for GzEncoder<W> {
+        fn write(&mut self, buf: &[u8]) -> Result<usize> { Ok(buf.len()) }
+        fn flush(&mut self) -> Result<()> { Ok(()) }
+    }
+    /// raw deflate 编码器：zip 条目写测试数据时使用
+    pub struct DeflateEncoder<W>(pub W);
+    impl<W: Write> DeflateEncoder<W> {
+        pub fn new(w: W, _c: Compression) -> Self { DeflateEncoder(w) }
+        pub fn finish(self) -> Result<W> { Ok(self.0) }
+    }
+    impl<W: Write> Write for DeflateEncoder<W> {
         fn write(&mut self, buf: &[u8]) -> Result<usize> { Ok(buf.len()) }
         fn flush(&mut self) -> Result<()> { Ok(()) }
     }
