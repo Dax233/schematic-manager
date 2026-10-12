@@ -12,6 +12,7 @@
 #[path = "../../src-tauri/src/litematic.rs"] mod litematic;
 #[path = "../../src-tauri/src/blockdb.rs"] mod blockdb;
 #[path = "../../src-tauri/src/block_model.rs"] mod block_model;
+#[path = "../../src-tauri/src/block_search.rs"] mod block_search;
 #[path = "../../src-tauri/src/geometry.rs"] mod geometry;
 #[path = "../../src-tauri/src/camera.rs"] mod camera;
 #[path = "../../src-tauri/src/replace.rs"] mod replace;
