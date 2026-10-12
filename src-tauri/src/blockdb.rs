@@ -19,6 +19,10 @@ const MAX_TEXTURES: u32 = 2_000_000;
 const MAX_MODELS: u32 = 5_000_000;
 const MAX_LANGS: u32 = 100_000;
 const MAX_STRINGS: u32 = 20_000_000;
+/// 单版本方块数上限。legacy-cpp 用的是 500000（blockdb.cpp:247），
+/// 与字符串表的 2000 万不是一个量级——误用后者会让损坏文件
+/// 通过校验并触发超大分配。
+const MAX_BLOCKS: u32 = 500_000;
 
 /// 贴图缺失的哨兵值
 pub const NO_TEXTURE: u32 = 0xFFFF_FFFF;
@@ -435,7 +439,7 @@ impl BlockDb {
                 let pool_idx = r.u32()?;
                 texture_by_path.insert(str_at(&strings, path_idx), pool_idx);
             }
-            let block_count = r.count(MAX_STRINGS, "方块")?;
+            let block_count = r.count(MAX_BLOCKS, "方块")?;
             let mut blocks = Vec::with_capacity(block_count.min(65536) as usize);
             for _ in 0..block_count {
                 let block_name = str_at(&strings, r.u32()?);
@@ -520,13 +524,17 @@ impl BlockDb {
         self.pixels.get(start..start + t.len as usize)
     }
 
-    /// 按 dataVersion 选最接近的版本（下标）
+    /// 按 dataVersion 选最接近的版本（下标）。
+    ///
+    /// 差值按 i64 计算：两个 i32 相减可能溢出，极端取值下
+    /// （dataVersion 经截断后接近 i32 边界）会让距离算成负数或 panic。
+    /// legacy-cpp 同样显式提升为 64 位（blockdb.cpp:366）。
     pub fn pick_version(&self, data_version: i32) -> Option<usize> {
         self.versions
             .iter()
             .enumerate()
             .filter(|(_, v)| !v.is_overlay)
-            .min_by_key(|(_, v)| (v.data_version - data_version).abs())
+            .min_by_key(|(_, v)| (v.data_version as i64 - data_version as i64).abs())
             .map(|(i, _)| i)
     }
 }
