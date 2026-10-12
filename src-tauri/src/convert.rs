@@ -493,4 +493,29 @@ mod tests {
         assert_eq!(t[0].name, "b");
         assert_eq!(t[0].data_version, 200);
     }
+
+    /// 没有任何方块被替换时，不应把 blocks_modified 置位。
+    ///
+    /// 该标志只控制是否重编码 BlockStates；仅改版本号时区块数据没变，
+    /// 重编码既慢又可能因编码差异改动原文件。
+    #[test]
+    fn no_replacement_leaves_blocks_modified_false() {
+        let old = version("old", 100, &["minecraft:gone"]);
+        let new = version("new", 200, &["minecraft:stone"]);
+        let db = db_with(vec![old, new]);
+        let mut sc = schematic(vec![BlockState::new("minecraft:gone")], vec![0], 100);
+        // 没有可替换项
+        let out = convert(&mut sc, &db, 0, 1, &[]);
+        assert_eq!(out.replaced_blocks, 0);
+        assert!(
+            !sc.blocks_modified,
+            "未替换任何方块时不应置 blocks_modified"
+        );
+        // 但版本号仍然改写
+        assert_eq!(
+            sc.root.get("MinecraftDataVersion"),
+            Some(&crate::nbt::Value::Int(200))
+        );
+    }
+
 }

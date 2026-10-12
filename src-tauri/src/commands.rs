@@ -426,8 +426,10 @@ pub fn apply_conversion(
         .collect();
 
     let out = crate::convert::convert(&mut sc, db, source_idx, target_index, &items);
-    // 转换后按新版本写回：块数据与调色板都会变
-    sc.blocks_modified = true;
+    // 只有真的替换过方块才需要重编码 BlockStates 与调色板；
+    // 若仅改版本号（方块都没变），save_to 仍会序列化整个 root，
+    // 版本号照样写入，无需无谓地重写全部区域数据。
+    sc.blocks_modified = out.replaced_blocks > 0;
     sc.save_to(&out_path.to_string_lossy()).map_err(|e| e.to_string())?;
 
     let name = out_path
