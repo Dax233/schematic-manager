@@ -42,14 +42,14 @@ if ($missing.Count -gt 0) {
     exit 1
 }
 
-Write-Host "1/3 核对模块登记并编译 flate2 桩…"
+Write-Host "1/5 核对模块登记并编译 flate2 桩…"
 Remove-Item $stub -Force -ErrorAction SilentlyContinue
 # 必须产出真正的 rlib（--emit=link），否则 --extern 会报 archive 无法解析。
 # 用 cmd 重定向，避免 PowerShell 把 rustc 的 stderr 警告当成致命错误。
 & cmd /c "rustc --edition 2021 --crate-type lib --crate-name flate2 --emit=link -o `"$stub`" `"$(Join-Path $here 'flate2.rs')`" 2>nul"
 if (-not (Test-Path $stub)) { Write-Host "  flate2 桩编译失败"; exit 1 }
 
-Write-Host "2/3 类型检查逻辑模块…"
+Write-Host "2/5 类型检查逻辑模块…"
 $serdeJson = Join-Path $here 'libserde_json.rlib'
 $out = & rustc --edition 2021 --crate-type lib --crate-name check --test --emit=metadata `
     --extern "flate2=$stub" --extern "serde_json=$serdeJson" `
@@ -67,7 +67,7 @@ Write-Host ""
 # 命令层与 DTO 单独检查一次：它们依赖 tauri 与 serde 的过程宏，
 # 无法并入上面的检查，但手工核对极易漏错（实测漏过接口名与导入）。
 Write-Host ""
-Write-Host "3/4 检查命令层与 DTO…"
+Write-Host "3/5 检查命令层与 DTO…"
 $cmdsErr = 0
 $py = "C:\Users\hsds\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
 if (-not (Test-Path $py)) { $py = "python" }
@@ -114,7 +114,6 @@ if ($cmdsTestErr -gt 0 -or -not (Test-Path $cmdsExe)) {
     exit $cmdsTestErr
 }
 $cmdsTestOut = & $cmdsExe --test-threads=4 2>&1
-$cmdsTestOut | Where-Object { $_ -match 'test result|^failures:|^    ' } | Select-Object -First 40
 # 受桩限制：DTO 的字段名契约靠 serde 的 `rename_all` 生成，而本地 serde 桩
 # 没有过程宏，`to_value` 只能返回空对象。这些测试因此在本地必然失败，
 # 但**必须保留并运行**：CI 用真实 serde，它们在那里才真正生效；
@@ -127,8 +126,12 @@ if ($cmdsReal.Count -gt 0) {
     $cmdsReal | ForEach-Object { Write-Host "    $_" }
     exit $cmdsReal.Count
 }
-if ($cmdsTestOut | Select-String -Pattern '^test result: FAILED') {
-    Write-Host "  命令层测试：其余失败均因本地 serde 桩不支持字段重命名（CI 覆盖）"
+# 只报告与本步相关的结论，不打印原始失败清单：
+# 那 6 项在本地注定失败，原样铺开会让人以为出了问题
+$cmdsTotal = $cmdsTestOut | Select-String -Pattern 'test result: (ok|FAILED)\. (\d+) passed'
+if ($cmdsTotal) {
+    $n = $cmdsTotal.Matches[0].Groups[2].Value
+    Write-Host "命令层与 DTO -> $n 项通过，$($cmdsFailed.Count) 项受本地 serde 桩限制（CI 覆盖）"
 }
 
 Write-Host "5/5 运行单元测试…"
