@@ -55,8 +55,14 @@ pub fn create(exe_dir: &Path, src: &Path, op: &str) -> AppResult<BackupOutcome> 
 mod tests {
     use super::*;
 
+    /// 测试用临时目录。
+    /// 不用 std::env::temp_dir()：该路径在部分受限环境下不可写，
+    /// 会让测试因环境而失败。放在工程内的 target 下更可控。
     fn temp_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("sm_backup_{tag}_{}", timestamp()));
+        let d = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("testtmp")
+            .join(format!("sm_backup_{tag}_{}", timestamp()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
