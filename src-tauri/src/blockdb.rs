@@ -247,8 +247,8 @@ impl<'a> BinReader<'a> {
 
 /// 整个方块库
 ///
-/// 实现 Debug 是为了让测试能用 unwrap_err() —— 该方法要求 Ok 类型
-/// 实现 Debug。手写实现会打印整个像素池，因此对像素池做省略。
+/// 注意：Debug 是派生实现的，格式化输出会包含整个像素池，
+/// 因此不要在日志里直接打印本类型。
 #[derive(Debug)]
 pub struct BlockDb {
     pub format_version: u32,
