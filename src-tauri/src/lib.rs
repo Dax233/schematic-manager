@@ -22,6 +22,7 @@ mod nbt;
 mod png;
 mod pool;
 mod pack_build;
+mod pack_registry;
 mod replace;
 mod scene;
 mod transform;
@@ -55,6 +56,10 @@ pub fn run() {
             commands::analyze_conversion,
             commands::apply_conversion,
             commands::save_metadata,
+            commands::list_packs,
+            commands::import_jar,
+            commands::set_pack_enabled,
+            commands::delete_pack,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

@@ -38,6 +38,7 @@
 #[path = "../../src-tauri/src/png.rs"] mod png;
 #[path = "../../src-tauri/src/pool.rs"] mod pool;
 #[path = "../../src-tauri/src/pack_build.rs"] mod pack_build;
+#[path = "../../src-tauri/src/pack_registry.rs"] mod pack_registry;
 #[path = "../../src-tauri/src/replace.rs"] mod replace;
 #[path = "../../src-tauri/src/scene.rs"] mod scene;
 #[path = "../../src-tauri/src/transform.rs"] mod transform;

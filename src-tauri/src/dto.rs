@@ -289,3 +289,63 @@ pub struct AnalysisResult {
     pub distinct_block_types: usize,
     pub distinct_states: usize,
 }
+
+/// 一个已导入的资源包
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackEntryDto {
+    /// 资源包文件名（在 packs 目录内）
+    pub file: String,
+    pub name: String,
+    /// 来源 jar 路径
+    pub source: String,
+    /// 类型：0 内置、1 MC 版本包、2 模组包
+    pub kind: i32,
+    /// 类型的中文名，供界面直接显示
+    pub kind_label: String,
+    pub data_version: i32,
+    /// 该数据版本对应的游戏版本名
+    pub mc_version: String,
+    pub enabled: bool,
+    /// 资源包文件大小；文件缺失时为 0
+    pub size: u64,
+    /// 文件是否实际存在。清单可能与磁盘不一致（用户手工删过文件），
+    /// 界面据此提示而不是显示一个点开就报错的条目。
+    pub exists: bool,
+}
+
+/// 导入 jar 的结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportOutcomeDto {
+    /// 落盘的资源包文件名
+    pub file: String,
+    pub name: String,
+    pub kind: i32,
+    pub kind_label: String,
+    pub data_version: i32,
+    pub mc_version: String,
+    /// 产出统计
+    pub blocks: usize,
+    pub models: usize,
+    pub textures: usize,
+    /// 解析失败而被跳过的 blockstate 数
+    pub failed_blockstates: usize,
+    /// 因无法解析模型而被跳过的方块数
+    pub failed_blocks: usize,
+    /// 命名空间数
+    pub namespaces: usize,
+    /// 资源包文件大小
+    pub size: u64,
+}
+
+/// 清单读取结果，含被跳过的行
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackListDto {
+    pub packs: Vec<PackEntryDto>,
+    /// 清单里解析失败而被跳过的行说明。
+    /// 必须上报：用户手工编辑过清单时，静默丢弃会让「导入的包不见了」
+    /// 无从解释。
+    pub skipped: Vec<String>,
+}

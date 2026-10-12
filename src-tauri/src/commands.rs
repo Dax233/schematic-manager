@@ -8,7 +8,7 @@ use crate::error::{AppError, AppResult};
 use crate::dto::{
     AnalysisResult, BackupEntryDto, BlockCount, BlockHitDto, BlockVersionDto,
     ConvertItemDto, ConvertOutcomeDto, ConvertTargetDto, DuplicateGroupDto, DuplicateScanDto,
-    EntityCount,
+    EntityCount, ImportOutcomeDto, PackEntryDto, PackListDto,
     ReplaceOutcomeDto, ReplaceRuleDto, SceneDto, SaveOutcome, ScanResult, SchematicSummary,
     UnreadableFileDto, VersionOptionDto,
 };
@@ -677,4 +677,217 @@ mod tests {
         assert!(!mc_version_name(3465).is_empty());
         assert_eq!(mc_version_name(-1), "");
     }
+}
+
+// ---------------------------------------------------------------- 资源包
+
+/// 资源包目录：`<程序所在目录>/packs`
+///
+/// 与备份目录同样以程序目录为根，与旧版行为一致——用户既有的 packs
+/// 目录无需迁移即可继续使用。
+fn packs_dir() -> PathBuf {
+    exe_dir().join("packs")
+}
+
+fn manifest_path() -> PathBuf {
+    packs_dir().join("packs.tsv")
+}
+
+/// 读取清单。
+///
+/// 清单不存在时视为「尚未导入任何包」，返回空清单而不是报错：
+/// 全新安装就是这种状态。
+fn read_manifest() -> AppResult<(Vec<crate::pack_registry::PackEntry>, Vec<String>)> {
+    let path = manifest_path();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((Vec::new(), Vec::new()))
+        }
+        Err(e) => {
+            return Err(AppError::Parse(format!(
+                "无法读取资源包清单 {}：{e}",
+                path.display()
+            )))
+        }
+    };
+    Ok(crate::pack_registry::parse_with_errors(&text))
+}
+
+/// 写出清单。
+///
+/// 先写临时文件再改名：直接覆盖时若中途失败（磁盘满、进程被杀），
+/// 清单会处于半截状态，用户已导入的包会整批丢失记录。
+fn write_manifest(entries: &[crate::pack_registry::PackEntry]) -> AppResult<()> {
+    let dir = packs_dir();
+    std::fs::create_dir_all(&dir)?;
+    let path = manifest_path();
+    let tmp = dir.join("packs.tsv.tmp");
+    std::fs::write(&tmp, crate::pack_registry::serialize(entries))?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+/// 列出已导入的资源包
+#[tauri::command]
+pub fn list_packs() -> Result<PackListDto, String> {
+    let (entries, skipped) = read_manifest().map_err(|e| e.to_string())?;
+    let dir = packs_dir();
+    let packs = entries
+        .into_iter()
+        .map(|e| {
+            let p = dir.join(&e.file);
+            let (size, exists) = match std::fs::metadata(&p) {
+                Ok(m) => (m.len(), true),
+                Err(_) => (0, false),
+            };
+            PackEntryDto {
+                kind_label: e.kind.label().to_string(),
+                mc_version: crate::mcver::version_name_from_data_version(e.data_version),
+                kind: e.kind.as_i32(),
+                file: e.file,
+                name: e.name,
+                source: e.source,
+                data_version: e.data_version,
+                enabled: e.enabled,
+                size,
+                exists,
+            }
+        })
+        .collect();
+    Ok(PackListDto { packs, skipped })
+}
+
+/// 从 jar 导入资源包。
+///
+/// `kind`：1 = MC 客户端版本包（数据版本取自 jar 内 version.json），
+/// 2 = 模组包（叠加到 `data_version` 指定的版本）。
+///
+/// 命名规则沿用旧版：`name` 为空时取 jar 文件名主干。
+#[tauri::command]
+pub fn import_jar(
+    jar_path: String,
+    name: Option<String>,
+    kind: i32,
+    data_version: i32,
+) -> Result<ImportOutcomeDto, String> {
+    let kind = crate::pack_registry::PackKind::from_i32(kind)
+        .ok_or_else(|| format!("不支持的类型 {kind}（只接受 1=MC 版本包、2=模组包）"))?;
+    if kind == crate::pack_registry::PackKind::Builtin {
+        return Err("内置基础库随程序分发，不能通过导入生成".into());
+    }
+    let src = Path::new(&jar_path);
+    if !src.is_file() {
+        return Err(format!("找不到 jar 文件：{jar_path}"));
+    }
+
+    let pack_name = match name.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
+        Some(v) => v,
+        None => src
+            .file_stem()
+            .map(|v| v.to_string_lossy().into_owned())
+            .ok_or_else(|| format!("无法从路径推出资源包名：{jar_path}"))?,
+    };
+
+    let (mut entries, skipped) = read_manifest().map_err(|e| e.to_string())?;
+    if !skipped.is_empty() {
+        // 清单里有坏行说明状态不可靠：此时追加新项会连同坏行一起被覆盖，
+        // 用户损失的记录无从追回。因此明确拒绝并给出修复指引。
+        return Err(format!(
+            "资源包清单有 {} 行无法解析，请先修复 {} 后再导入：{}",
+            skipped.len(),
+            manifest_path().display(),
+            skipped.join("；")
+        ));
+    }
+
+    let file = crate::pack_registry::pack_file_name(&pack_name, &entries)
+        .map_err(|e| e.to_string())?;
+    let out_path = packs_dir().join(&file);
+    let is_overlay = kind == crate::pack_registry::PackKind::Mod;
+
+    let stats = crate::jar_file::build_pack_to(
+        &jar_path,
+        &out_path.to_string_lossy(),
+        &pack_name,
+        data_version,
+        is_overlay,
+    )
+    .map_err(|e| e.to_string())?;
+
+    // 模组包的 data_version 由调用方指定；版本包以 jar 内的为准，
+    // 这里回读一次拿实际生效的值，避免清单记录与实际不符。
+    let actual_dv = read_pack_data_version(&out_path, is_overlay).unwrap_or(data_version);
+
+    let size = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
+    crate::pack_registry::upsert(
+        &mut entries,
+        crate::pack_registry::PackEntry {
+            file: file.clone(),
+            name: pack_name.clone(),
+            source: jar_path.clone(),
+            kind,
+            data_version: actual_dv,
+            enabled: true,
+        },
+    );
+    write_manifest(&entries).map_err(|e| e.to_string())?;
+
+    Ok(ImportOutcomeDto {
+        file,
+        name: pack_name,
+        kind: kind.as_i32(),
+        kind_label: kind.label().to_string(),
+        data_version: actual_dv,
+        mc_version: crate::mcver::version_name_from_data_version(actual_dv),
+        blocks: stats.blocks,
+        models: stats.models,
+        textures: stats.textures,
+        failed_blockstates: stats.failed_blockstates,
+        failed_blocks: stats.failed_blocks,
+        namespaces: stats.namespaces,
+        size,
+    })
+}
+
+/// 读回资源包实际使用的数据版本
+fn read_pack_data_version(path: &Path, is_overlay: bool) -> Option<i32> {
+    crate::blockdb::BlockDb::load(&path.to_string_lossy(), is_overlay)
+        .ok()
+        .and_then(|db| db.versions.first().map(|v| v.data_version))
+}
+
+/// 启用或停用某个资源包
+#[tauri::command]
+pub fn set_pack_enabled(file: String, enabled: bool) -> Result<(), String> {
+    let (mut entries, _) = read_manifest().map_err(|e| e.to_string())?;
+    if !crate::pack_registry::set_enabled(&mut entries, &file, enabled) {
+        return Err(format!("清单里没有资源包 {file}"));
+    }
+    write_manifest(&entries).map_err(|e| e.to_string())
+}
+
+/// 删除某个资源包：同时移除清单记录与磁盘文件。
+///
+/// 顺序是先删文件再改清单：若反过来，删文件失败会留下一条指向不存在
+/// 文件的记录（界面显示缺失）；而先删文件后写清单失败时，残留的是
+/// 一条 `exists=false` 的记录，重新导入即可修复。
+#[tauri::command]
+pub fn delete_pack(file: String) -> Result<(), String> {
+    // 只接受文件名，不接受路径：清单里的 file 由程序生成，
+    // 但如果被手工改成 `../../x`，拼接后就会删到 packs 目录之外
+    if file.contains('/') || file.contains('\\') || file.contains("..") {
+        return Err(format!("资源包文件名不合法：{file}"));
+    }
+    let (mut entries, _) = read_manifest().map_err(|e| e.to_string())?;
+    let target = packs_dir().join(&file);
+    if target.exists() {
+        std::fs::remove_file(&target).map_err(|e| {
+            format!("无法删除资源包文件 {}：{e}", target.display())
+        })?;
+    }
+    if !crate::pack_registry::remove(&mut entries, &file) {
+        return Err(format!("清单里没有资源包 {file}"));
+    }
+    write_manifest(&entries).map_err(|e| e.to_string())
 }
