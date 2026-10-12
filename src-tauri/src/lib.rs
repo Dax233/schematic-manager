@@ -1,3 +1,5 @@
+mod commands;
+mod dto;
 mod error;
 mod litematic;
 mod mcver;
@@ -9,7 +11,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![greet, app_version])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            app_version,
+            commands::peek_schematic,
+            commands::scan_litematics,
+            commands::analyze_schematic,
+            commands::mc_version_name,
+        ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");
 }

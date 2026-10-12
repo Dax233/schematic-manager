@@ -1,0 +1,183 @@
+//! Tauri 命令层：前端可调用的全部入口。
+//!
+//! 约定：命令只做参数校验、调用解析层、把结果转成 DTO，
+//! 不在这里承载业务规则，便于解析层独立测试。
+
+use crate::dto::{AnalysisResult, BlockCount, EntityCount, SchematicSummary};
+use crate::litematic::{self, Summary};
+use std::path::{Path, PathBuf};
+
+/// 由内部摘要转换为对前端的契约
+fn to_dto(s: Summary) -> SchematicSummary {
+    let p = PathBuf::from(&s.path);
+    SchematicSummary {
+        file_name: p
+            .file_name()
+            .map(|v| v.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        dir_name: p
+            .parent()
+            .map(|v| v.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        path: s.path.clone(),
+        file_size: s.file_size,
+        error: s.error.clone(),
+        format_version: s.format_version,
+        data_version: s.data_version,
+        mc_version_name: s.mc_version_name.clone(),
+        name: s.name.clone(),
+        author: s.author.clone(),
+        description: s.description.clone(),
+        time_created: s.time_created,
+        time_modified: s.time_modified,
+        enclosing: s.enclosing,
+        total_blocks: s.total_blocks,
+        total_volume: s.total_volume,
+        region_count: s.region_count,
+        entity_count: s.entity_count,
+        tile_entity_count: s.tile_entity_count,
+        pending_ticks: s.pending_ticks,
+        has_preview: s.has_preview,
+    }
+}
+
+/// 只读扫描单个投影文件，不解码方块数据。
+#[tauri::command]
+pub fn peek_schematic(path: String) -> SchematicSummary {
+    to_dto(litematic::Schematic::peek(&path))
+}
+
+/// 递归扫描目录下的全部 .litematic 文件。
+///
+/// depth 限制递归层数，避免误选到盘符根目录时遍历整块磁盘。
+#[tauri::command]
+pub fn scan_litematics(dir: String, max_depth: Option<u32>) -> Vec<SchematicSummary> {
+    let depth = max_depth.unwrap_or(6).min(16);
+    let mut found: Vec<PathBuf> = Vec::new();
+    collect_litematics(Path::new(&dir), depth, &mut found);
+    found.sort();
+
+    found
+        .iter()
+        .map(|p| {
+            let path = p.to_string_lossy().into_owned();
+            to_dto(litematic::Schematic::peek(&path))
+        })
+        .collect()
+}
+
+fn collect_litematics(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+    if depth == 0 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let p = e.path();
+        let Ok(ft) = e.file_type() else { continue };
+        if ft.is_dir() {
+            collect_litematics(&p, depth - 1, out);
+        } else if ft.is_file() {
+            let is_ltm = p
+                .extension()
+                .map(|x| x.eq_ignore_ascii_case("litematic"))
+                .unwrap_or(false);
+            if is_ltm {
+                out.push(p);
+            }
+        }
+    }
+}
+
+/// 完整分析：解码全部方块并统计。
+#[tauri::command]
+pub fn analyze_schematic(path: String) -> Result<AnalysisResult, String> {
+    let sc = litematic::Schematic::load(&path).map_err(|e| e.to_string())?;
+    let a = sc.analyze();
+
+    let mut blocks: Vec<BlockCount> = a
+        .blocks_by_state
+        .iter()
+        .map(|(state, count)| {
+            // 按名称聚合的计数用于展示，状态串用于区分具体朝向等
+            let name = state.split('[').next().unwrap_or(state).to_string();
+            BlockCount { name, state: state.clone(), count: *count }
+        })
+        .collect();
+    blocks.sort_by(|x, y| y.count.cmp(&x.count).then_with(|| x.state.cmp(&y.state)));
+
+    let mut entities: Vec<EntityCount> = a
+        .entities_by_id
+        .iter()
+        .map(|(id, count)| EntityCount { id: id.clone(), count: *count })
+        .collect();
+    entities.sort_by(|x, y| y.count.cmp(&x.count).then_with(|| x.id.cmp(&y.id)));
+
+    let mut tiles: Vec<EntityCount> = a
+        .tile_entities_by_id
+        .iter()
+        .map(|(id, count)| EntityCount { id: id.clone(), count: *count })
+        .collect();
+    tiles.sort_by(|x, y| y.count.cmp(&x.count).then_with(|| x.id.cmp(&y.id)));
+
+    let mut types = std::collections::BTreeSet::new();
+    for b in &blocks {
+        types.insert(b.name.clone());
+    }
+
+    Ok(AnalysisResult {
+        distinct_block_types: types.len(),
+        distinct_states: blocks.len(),
+        blocks,
+        entities,
+        tile_entities: tiles,
+        non_air_total: a.non_air_total,
+        air_total: a.air_total,
+    })
+}
+
+/// 查询 dataVersion 对应的游戏版本名。
+#[tauri::command]
+pub fn mc_version_name(data_version: i32) -> String {
+    crate::mcver::version_name_from_data_version(data_version)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scan_missing_dir_returns_empty() {
+        let r = scan_litematics("Z:\__not_exist__".into(), Some(2));
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn peek_missing_file_reports_error() {
+        let s = peek_schematic("Z:\__not_exist__.litematic".into());
+        assert!(!s.error.is_empty());
+        assert_eq!(s.file_name, "__not_exist__.litematic");
+    }
+
+    #[test]
+    fn scan_finds_litematic_files_only() {
+        let dir = std::env::temp_dir().join("sm_scan_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.litematic"), b"x").unwrap();
+        std::fs::write(dir.join("b.txt"), b"x").unwrap();
+        std::fs::write(dir.join("sub/c.LITEMATIC"), b"x").unwrap();
+
+        let r = scan_litematics(dir.to_string_lossy().into_owned(), Some(4));
+        let names: Vec<&str> = r.iter().map(|s| s.file_name.as_str()).collect();
+        assert_eq!(names.len(), 2, "应只收录 .litematic，实际 {names:?}");
+        assert!(names.contains(&"a.litematic"));
+        assert!(names.contains(&"c.LITEMATIC"), "扩展名匹配应忽略大小写");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mc_version_command_proxies_table() {
+        assert!(!mc_version_name(3465).is_empty());
+        assert_eq!(mc_version_name(-1), "");
+    }
+}
