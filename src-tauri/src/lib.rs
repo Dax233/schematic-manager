@@ -27,6 +27,7 @@ pub fn run() {
             commands::scan_litematics,
             commands::analyze_schematic,
             commands::mc_version_name,
+            commands::build_scene,
             commands::save_metadata,
         ])
         .run(tauri::generate_context!())

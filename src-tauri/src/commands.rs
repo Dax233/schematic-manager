@@ -4,7 +4,10 @@
 //! 不在这里承载业务规则，便于解析层独立测试。
 
 use crate::backup;
-use crate::dto::{AnalysisResult, BlockCount, EntityCount, SaveOutcome, ScanResult, SchematicSummary};
+use crate::dto::{
+    AnalysisResult, BlockCount, EntityCount, SceneDto, SaveOutcome, ScanResult,
+    SchematicSummary,
+};
 use crate::litematic::{self, Summary};
 use std::path::{Path, PathBuf};
 
@@ -184,6 +187,17 @@ pub fn analyze_schematic(path: String) -> Result<AnalysisResult, String> {
         non_air_total: a.non_air_total,
         air_total: a.air_total,
     })
+}
+
+/// 组装前端 Three.js 渲染所需的场景。
+///
+/// db_path 为方块库文件（blocks.dat 的 zlib 压缩形式）的路径。
+/// 逻辑全在 scene 模块，这里只做错误类型的转换。
+#[tauri::command]
+pub fn build_scene(schematic_path: String, db_path: String) -> Result<SceneDto, String> {
+    crate::scene::build(&schematic_path, &db_path)
+        .map(SceneDto::from)
+        .map_err(|e| e.to_string())
 }
 
 /// 保存元数据（投影名称 / 作者 / 描述）。

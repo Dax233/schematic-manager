@@ -68,6 +68,63 @@ pub struct ScanResult {
     pub skipped_paths: Vec<String>,
 }
 
+/// 场景批次：供前端一个材质使用
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneBatchDto {
+    pub texture: u32,
+    pub positions: Vec<f32>,
+    pub uvs: Vec<f32>,
+    pub shades: Vec<f32>,
+    pub indices: Vec<u32>,
+    pub texture_width: u16,
+    pub texture_height: u16,
+    /// RGBA8888 像素；前端用 DataTexture 直接建纹理
+    pub texture_rgba: Vec<u8>,
+}
+
+/// 前端渲染所需的完整场景
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneDto {
+    pub batches: Vec<SceneBatchDto>,
+    pub total_vertices: usize,
+    pub total_triangles: usize,
+    pub enclosing: [i32; 3],
+    pub origin: [i32; 3],
+    pub mc_version_name: String,
+    pub data_version: i32,
+    pub unresolved_blocks: usize,
+}
+
+impl From<crate::scene::SceneData> for SceneDto {
+    fn from(s: crate::scene::SceneData) -> Self {
+        Self {
+            batches: s
+                .batches
+                .into_iter()
+                .map(|b| SceneBatchDto {
+                    texture: b.texture,
+                    positions: b.positions,
+                    uvs: b.uvs,
+                    shades: b.shades,
+                    indices: b.indices,
+                    texture_width: b.texture_width,
+                    texture_height: b.texture_height,
+                    texture_rgba: b.texture_rgba,
+                })
+                .collect(),
+            total_vertices: s.total_vertices,
+            total_triangles: s.total_triangles,
+            enclosing: s.enclosing,
+            origin: s.origin,
+            mc_version_name: s.mc_version_name,
+            data_version: s.data_version,
+            unresolved_blocks: s.unresolved_blocks,
+        }
+    }
+}
+
 /// 保存操作的结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

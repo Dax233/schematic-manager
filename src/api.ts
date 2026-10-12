@@ -1,6 +1,12 @@
 // Rust 命令的类型化封装，避免各组件直接拼命令名与参数。
 import { invoke } from "@tauri-apps/api/core";
-import type { AnalysisResult, SaveOutcome, ScanResult, SchematicSummary } from "./types";
+import type {
+  AnalysisResult,
+  SaveOutcome,
+  ScanResult,
+  SceneData,
+  SchematicSummary,
+} from "./types";
 
 /** 只读扫描单个投影文件（不解码方块） */
 export function peekSchematic(path: string): Promise<SchematicSummary> {
@@ -26,6 +32,14 @@ export function saveMetadata(
   fields: { name?: string; author?: string; description?: string },
 ): Promise<SaveOutcome> {
   return invoke<SaveOutcome>("save_metadata", { path, ...fields });
+}
+
+/**
+ * 组装前端渲染所需的场景。
+ * dbPath 为方块库文件（blocks.dat 的 zlib 压缩形式）的路径。
+ */
+export function buildScene(schematicPath: string, dbPath: string): Promise<SceneData> {
+  return invoke<SceneData>("build_scene", { schematicPath, dbPath });
 }
 
 /** dataVersion 对应的游戏版本名 */

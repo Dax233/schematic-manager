@@ -45,6 +45,32 @@ export interface ScanResult {
   skippedPaths: string[];
 }
 
+/** 场景批次：一个批次对应一张贴图 */
+export interface SceneBatch {
+  texture: number;
+  positions: number[];
+  uvs: number[];
+  shades: number[];
+  indices: number[];
+  textureWidth: number;
+  textureHeight: number;
+  /** RGBA8888 像素 */
+  textureRgba: number[];
+}
+
+/** 前端渲染所需的完整场景 */
+export interface SceneData {
+  batches: SceneBatch[];
+  totalVertices: number;
+  totalTriangles: number;
+  enclosing: [number, number, number];
+  origin: [number, number, number];
+  mcVersionName: string;
+  dataVersion: number;
+  /** 该版本方块库中查不到定义的方块种类数 */
+  unresolvedBlocks: number;
+}
+
 /** 保存操作的结果 */
 export interface SaveOutcome {
   path: string;
