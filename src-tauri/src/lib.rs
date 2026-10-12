@@ -2,6 +2,7 @@ mod backup;
 mod block_model;
 mod block_search;
 mod blockstate;
+mod blockstate_chain;
 mod blockdb;
 mod camera;
 mod convert;

@@ -21,6 +21,7 @@
 #[path = "../../src-tauri/src/block_model.rs"] mod block_model;
 #[path = "../../src-tauri/src/block_search.rs"] mod block_search;
 #[path = "../../src-tauri/src/blockstate.rs"] mod blockstate;
+#[path = "../../src-tauri/src/blockstate_chain.rs"] mod blockstate_chain;
 #[path = "../../src-tauri/src/blockdb.rs"] mod blockdb;
 #[path = "../../src-tauri/src/camera.rs"] mod camera;
 #[path = "../../src-tauri/src/convert.rs"] mod convert;
