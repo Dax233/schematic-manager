@@ -7,6 +7,9 @@ import type { TableColumnData, TableData } from "@arco-design/web-vue";
 import { Message } from "@arco-design/web-vue";
 import {
   analyzeSchematic,
+  applyReplace,
+  listBlockVersions,
+  previewReplace,
   buildScene,
   deleteBackup,
   listBackups,
@@ -14,9 +17,19 @@ import {
   restoreBackup,
   saveMetadata,
   scanLitematics,
+  searchBlocks,
 } from "./api";
 import SceneViewer from "./components/SceneViewer.vue";
-import type { AnalysisResult, BackupEntry, SceneData, SchematicSummary } from "./types";
+import type {
+  AnalysisResult,
+  BackupEntry,
+  BlockCount,
+  BlockHit,
+  ReplaceRule,
+  SceneData,
+  SchematicSummary,
+  VersionOption,
+} from "./types";
 import { formatDims, formatSize, formatStacks } from "./utils/format";
 
 const appWindow = getCurrentWindow();
@@ -29,6 +42,7 @@ const saving = ref(false);
 // 元数据编辑草稿。选中文件时用文件中的值填充
 const draft = ref({ name: "", author: "", description: "" });
 const dirty = ref(false);
+const activeBlock = ref<{ name: string } | null>(null);
 
 // 3D 预览
 const viewer = ref<InstanceType<typeof SceneViewer> | null>(null);
@@ -46,6 +60,143 @@ const backups = ref<BackupEntry[]>([]);
 const backupLoading = ref(false);
 const logs = ref<string[]>([]);
 const logLoading = ref(false);
+
+// 方块替换
+const replaceOpen = ref(false);
+const replaceBusy = ref(false);
+const blockHits = ref<BlockHit[]>([]);
+const blockSearching = ref(false);
+const blockVersions = ref<VersionOption[]>([]);
+const replaceForm = ref({
+  fromName: "",
+  fromPropsText: "",
+  toName: "",
+  toPropsText: "",
+  inheritProps: true,
+  keepUnknownProps: false,
+});
+const replacePreview = ref<number | null>(null);
+
+/** 解析 "key=value,key2=value2" 形式的属性限定；空串表示不限定 */
+function parseProps(text: string): [string, string][] {
+  const out: [string, string][] = [];
+  for (const seg of text.split(",")) {
+    const t = seg.trim();
+    if (!t) continue;
+    const i = t.indexOf("=");
+    if (i <= 0) continue;
+    out.push([t.slice(0, i).trim(), t.slice(i + 1).trim()]);
+  }
+  return out;
+}
+
+function currentRule(): ReplaceRule {
+  const f = replaceForm.value;
+  return {
+    fromName: f.fromName.trim(),
+    fromProps: parseProps(f.fromPropsText),
+    toName: f.toName.trim(),
+    toProps: parseProps(f.toPropsText),
+    inheritProps: f.inheritProps,
+    keepUnknownProps: f.keepUnknownProps,
+  };
+}
+
+async function onBlockSearch(text: string) {
+  const q = text.trim();
+  if (!q) {
+    blockHits.value = [];
+    return;
+  }
+  blockSearching.value = true;
+  try {
+    blockHits.value = await searchBlocks(q, 200);
+  } catch (e) {
+    Message.error(`检索方块失败：${e}`);
+  } finally {
+    blockSearching.value = false;
+  }
+}
+
+function onBlockRowClick(raw: TableData) {
+  const rec = raw as unknown as BlockCount;
+  activeBlock.value = { name: rec.name };
+  replaceForm.value.fromName = rec.name;
+  // 状态串形如 minecraft:oak_stairs[facing=east,half=top]，
+  // 方括号内的部分正好可以直接作为源属性限定
+  const m = /\[(.+)\]$/.exec(rec.state ?? "");
+  replaceForm.value.fromPropsText = m ? m[1] : "";
+  Message.info(`已设为替换源：${rec.name}`);
+}
+
+async function openReplace() {
+  replaceOpen.value = true;
+  replacePreview.value = null;
+  blockHits.value = [];
+  // 源方块默认取当前选中的方块，省去用户重打一遍
+  if (!replaceForm.value.fromName && activeBlock.value) {
+    replaceForm.value.fromName = activeBlock.value.name;
+  }
+  if (blockVersions.value.length === 0) {
+    try {
+      blockVersions.value = await listBlockVersions();
+    } catch (e) {
+      Message.error(`读取版本列表失败：${e}`);
+    }
+  }
+}
+
+async function doPreview() {
+  const cur = selected.value;
+  if (!cur) return;
+  const rule = currentRule();
+  if (!rule.fromName || !rule.toName) {
+    Message.warning("源方块与目标方块都不能为空");
+    return;
+  }
+  replaceBusy.value = true;
+  try {
+    const r = await previewReplace(cur.path, rule);
+    replacePreview.value = r.replaced;
+  } catch (e) {
+    Message.error(`预览失败：${e}`);
+  } finally {
+    replaceBusy.value = false;
+  }
+}
+
+async function doReplace() {
+  const cur = selected.value;
+  if (!cur) return;
+  const rule = currentRule();
+  if (!rule.fromName || !rule.toName) {
+    Message.warning("源方块与目标方块都不能为空");
+    return;
+  }
+  replaceBusy.value = true;
+  try {
+    const r = await applyReplace(cur.path, rule);
+    if (r.replaced === 0) {
+      Message.info("没有方块需要替换");
+    } else {
+      Message.success(`已替换 ${r.replaced} 个方块（改动前已备份）`);
+      replaceOpen.value = false;
+      const res = await scanLitematics(cur.dirName, 1);
+      const hit = res.items.find((f) => f.path === cur.path);
+      if (hit) {
+        selected.value = hit;
+        resetDraft(hit);
+        const idx = files.value.findIndex((f) => f.path === hit.path);
+        if (idx >= 0) files.value[idx] = hit;
+        void loadScene(hit);
+      }
+    }
+  } catch (e) {
+    Message.error(`替换失败：${e}`);
+  } finally {
+    replaceBusy.value = false;
+  }
+}
 const sceneInfo = computed(() => {
   if (!scene.value) return "";
   const s = scene.value;
@@ -462,12 +613,16 @@ const close = () => appWindow.close();
                   <span>方块种类：<b>{{ analysis.distinctBlockTypes }}</b></span>
                   <span>状态种类：<b>{{ analysis.distinctStates }}</b></span>
                 </a-space>
+                <div class="hint-dim" style="margin-bottom: 6px">
+                  点击任意行可以把它设为方块替换的源方块
+                </div>
                 <a-table
                   :columns="blockColumns"
                   :data="analysis.blocks"
                   :pagination="{ pageSize: 20 }"
                   row-key="state"
                   size="small"
+                  @row-click="onBlockRowClick"
                   :scroll="{ y: 360 }"
                 >
                   <template #stacks="{ record }">{{ formatStacks(record.count) }}</template>
@@ -496,6 +651,87 @@ const close = () => appWindow.close();
         </a-tabs>
       </div>
     </div>
+
+    <a-modal
+      v-model:visible="replaceOpen"
+      title="方块替换"
+      :width="640"
+      :ok-loading="replaceBusy"
+      ok-text="执行替换"
+      :ok-button-props="{ disabled: !selected }"
+      @ok="doReplace"
+    >
+      <a-alert v-if="!selected" type="warning" style="margin-bottom: 12px">
+        请先在左侧选择一个投影文件
+      </a-alert>
+      <a-form :model="replaceForm" layout="vertical" size="small">
+        <a-form-item label="源方块（要替换掉的）">
+          <a-input v-model="replaceForm.fromName" placeholder="例如 minecraft:oak_stairs" allow-clear />
+          <div class="hint-dim">
+            在「方块」页签点击任意行可直接填入，属性限定也会一并带入
+          </div>
+        </a-form-item>
+        <a-form-item label="源属性限定（可留空）">
+          <a-input
+            v-model="replaceForm.fromPropsText"
+            placeholder="例如 facing=east,half=top"
+            allow-clear
+          />
+        </a-form-item>
+
+        <a-form-item label="目标方块">
+          <a-select
+            v-model="replaceForm.toName"
+            placeholder="输入中文名、英文名或方块 ID 搜索"
+            allow-search
+            allow-clear
+            :filter-option="false"
+            :loading="blockSearching"
+            @search="onBlockSearch"
+          >
+            <a-option v-for="h in blockHits" :key="h.name" :value="h.name">
+              <span>{{ h.zh || h.en || h.name }}</span>
+              <span class="hint-dim" style="margin-left: 8px">{{ h.name }}</span>
+              <span v-if="h.versions.length > 1" class="hint-dim" style="margin-left: 8px">
+                {{ h.versions.length }} 个版本
+              </span>
+            </a-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="目标属性覆盖（可选）">
+          <a-input
+            v-model="replaceForm.toPropsText"
+            placeholder="例如 facing=west"
+            allow-clear
+          />
+        </a-form-item>
+
+        <a-form-item label="属性处理">
+          <a-space direction="vertical" :size="4">
+            <a-checkbox v-model="replaceForm.inheritProps">
+              继承源方块中目标也支持的属性
+            </a-checkbox>
+            <a-checkbox v-model="replaceForm.keepUnknownProps">
+              保留目标不支持的属性（通常不应勾选，游戏会读不出该状态）
+            </a-checkbox>
+          </a-space>
+        </a-form-item>
+
+        <a-form-item>
+          <a-space>
+            <a-button :loading="replaceBusy" :disabled="!selected" @click="doPreview">
+              预计替换数量
+            </a-button>
+            <span v-if="replacePreview !== null" class="preview__info">
+              将替换 <b>{{ replacePreview.toLocaleString() }}</b> 个方块
+            </span>
+          </a-space>
+        </a-form-item>
+        <div class="hint-dim">
+          方块库共 {{ blockVersions.length }} 个版本可选；替换前会自动备份，可在「备份管理」中还原。
+        </div>
+      </a-form>
+    </a-modal>
 
     <a-drawer
       v-model:visible="backupOpen"

@@ -45,6 +45,47 @@ export interface ScanResult {
   skippedPaths: string[];
 }
 
+/** 方块替换规则 */
+export interface ReplaceRule {
+  fromName: string;
+  fromProps: [string, string][];
+  toName: string;
+  toProps: [string, string][];
+  /** 是否继承源方块中目标也支持的属性 */
+  inheritProps: boolean;
+  /** 目标不支持的属性是否保留 */
+  keepUnknownProps: boolean;
+}
+
+/** 方块替换结果 */
+export interface ReplaceOutcome {
+  replaced: number;
+  paletteChanged: number;
+}
+
+/** 方块所在的版本 */
+export interface BlockVersion {
+  index: number;
+  dataVersion: number;
+}
+
+/** 方块检索结果 */
+export interface BlockHit {
+  name: string;
+  zh: string;
+  en: string;
+  versions: BlockVersion[];
+}
+
+/** 方块库中的版本选项 */
+export interface VersionOption {
+  index: number;
+  name: string;
+  dataVersion: number;
+  isOverlay: boolean;
+  blockCount: number;
+}
+
 /** 一条备份记录 */
 export interface BackupEntry {
   path: string;

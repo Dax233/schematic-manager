@@ -3,10 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AnalysisResult,
   BackupEntry,
+  BlockHit,
   SaveOutcome,
   ScanResult,
+  ReplaceOutcome,
+  ReplaceRule,
   SceneData,
   SchematicSummary,
+  VersionOption,
 } from "./types";
 
 /** 只读扫描单个投影文件（不解码方块） */
@@ -41,6 +45,26 @@ export function saveMetadata(
  */
 export function buildScene(schematicPath: string): Promise<SceneData> {
   return invoke<SceneData>("build_scene", { schematicPath });
+}
+
+/** 跨版本检索方块 */
+export function searchBlocks(query: string, limit = 200): Promise<BlockHit[]> {
+  return invoke<BlockHit[]>("search_blocks", { query, limit });
+}
+
+/** 列出方块库中的全部版本 */
+export function listBlockVersions(): Promise<VersionOption[]> {
+  return invoke<VersionOption[]>("list_block_versions");
+}
+
+/** 预计会被替换的方块数量，不写入文件 */
+export function previewReplace(schematicPath: string, rule: ReplaceRule): Promise<ReplaceOutcome> {
+  return invoke<ReplaceOutcome>("preview_replace", { schematicPath, rule });
+}
+
+/** 执行替换并写回文件；后端会先备份 */
+export function applyReplace(schematicPath: string, rule: ReplaceRule): Promise<ReplaceOutcome> {
+  return invoke<ReplaceOutcome>("apply_replace", { schematicPath, rule });
 }
 
 /** 列出备份；传 stem 时只返回该文件的备份 */
