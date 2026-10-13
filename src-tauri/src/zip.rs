@@ -194,6 +194,26 @@ pub fn crc32(data: &[u8]) -> u32 {
     crc ^ 0xFFFF_FFFF
 }
 
+/// 解压 raw deflate 数据，最多读取 `declared` + 1 字节。
+///
+/// 为什么需要上限：`declared` 来自文件（中央目录里的 uncompressed_size），
+/// 是不可信输入，解压展开比同样由文件决定。一个声明 1 KB、实际能展开
+/// 数 GB 的条目若直接 `read_to_end`，会先把内存吃光，之后再报「长度不符」
+/// 已经晚了——内存已经分配掉了。
+///
+/// 多读 1 字节（而不是恰好 `declared`）是为了区分两种情况：
+///   - 读满 `declared + 1` 字节 => 实际比声明长，调用方比对长度时会判为损坏
+///   - 读到的少于 `declared + 1` => 实际就是那么多，交给调用方比对
+/// 若恰好读 `declared` 就停，就无法区分「正好相等」与「还有更多」。
+fn inflate_limited(raw: &[u8], declared: usize) -> AppResult<Vec<u8>> {
+    let limit = declared.saturating_add(1) as u64;
+    let mut d = flate2::read::DeflateDecoder::new(raw).take(limit);
+    let mut out = Vec::with_capacity(declared.min(64 * 1024 * 1024));
+    // 解压本身出错必须向上传播：静默返回半截数据会让人误以为是长度不符
+    d.read_to_end(&mut out)?;
+    Ok(out)
+}
+
 /// 取出某个条目的原始内容。
 ///
 /// 先读本地文件头以取得数据区的真实起点：本地头中的名称与扩展字段长度
@@ -218,13 +238,18 @@ pub fn read(data: &[u8], e: &Entry) -> AppResult<Vec<u8>> {
     let raw = &data[ds..de];
 
     let out = match e.method {
-        Method::Stored => raw.to_vec(),
-        Method::Deflate => {
-            let mut d = flate2::read::DeflateDecoder::new(raw);
-            let mut out = Vec::with_capacity(e.uncompressed_size.min(64 * 1024 * 1024) as usize);
-            d.read_to_end(&mut out)?;
-            out
+        Method::Stored => {
+            if raw.len() as u64 != e.uncompressed_size {
+                return Err(AppError::Corrupt(format!(
+                    "条目 {} 的存储长度 {} 与记录的 {} 不符",
+                    e.name,
+                    raw.len(),
+                    e.uncompressed_size
+                )));
+            }
+            raw.to_vec()
         }
+        Method::Deflate => inflate_limited(raw, e.uncompressed_size as usize)?,
     };
 
     if out.len() as u64 != e.uncompressed_size {
@@ -373,19 +398,171 @@ mod tests {
         assert_eq!(got, content, "解压结果必须与原文一致");
     }
 
-    /// 声明的原始长度与实际不符时必须报错，而不是给出截断/多余的内容。
+    /// 解压必须在「声明的量」处停下，而不是读完全部再比对长度。
+    ///
+    /// 声明长度与解压展开比都取自文件，是不可信输入。原先 `.min(64 MiB)`
+    /// 只限制预分配容量、不限制增长，长度校验又排在 `read_to_end` 之后，
+    /// 于是一个「声明很小、实际能展开极大」的条目会先把内存吃光。
+    ///
+    /// 这条直接调用 `inflate_limited` 并断言读到的字节数——内存边界因此
+    /// 可以被观测。仅断言「报错」是不够的：先解压后比对同样会报错。
+    ///
+    /// 输入用手工构造的固定 Huffman deflate 流，而不是用配套的编码器：
+    /// 离线验证脚本里的 flate2 是桩，其**编码端只产出 stored 块**（不压缩），
+    /// 用它生成的流长度与原文相同，「解压后远大于输入」这个前提就不成立。
+    /// 手工构造的流在任何实现下都解出同一段内容（此处为 1 MB 全零）。
     #[test]
-    fn deflate_length_mismatch_is_rejected() {
-        let content = b"hello deflate world";
+    fn inflate_limited_stops_at_declared_size() {
+        let total = 1024 * 1024;
+        let raw = zero_run_stream(total);
+        // 前提校验：必须真的远小于解压结果，否则这条测试测不到展开攻击
+        assert!(
+            raw.len() < 64 * 1024,
+            "该流应远小于解压结果，实际 {} 字节",
+            raw.len()
+        );
+
+        let declared = 1024usize;
+        let got = inflate_limited(&raw, declared).expect("解压应成功");
+        assert_eq!(
+            got.len(),
+            declared + 1,
+            "应恰好读到声明长度 + 1 字节就停下，而不是读完 {total} 字节"
+        );
+
+        // 对照：不限流时会读出完整内容，说明上面的上限确实起了作用
+        use std::io::Read;
+        let mut full = Vec::new();
+        flate2::read::DeflateDecoder::new(&raw[..])
+            .read_to_end(&mut full)
+            .unwrap();
+        assert_eq!(full.len(), total, "无限流时应解出完整 {total} 字节");
+        assert!(
+            full.len() > declared + 1,
+            "两者差异必须显著，否则测试无意义"
+        );
+        assert!(full.iter().all(|&b| b == 0), "解出的内容应全是 0");
+    }
+
+    /// 构造一段解出 `total` 个 0x00 的固定 Huffman deflate 流。
+    ///
+    /// 结构：块头（BFINAL=1、BTYPE=01 固定 Huffman）→ 一个字面量 0
+    /// → 反复「长度 258、距离 1」的匹配 → 块结束码。
+    /// 距离 1 的匹配会自我重叠复制，因此 1 MB 的零只需约 7 KB 的输入。
+    fn zero_run_stream(total: usize) -> Vec<u8> {
+        /// deflate 的位打包：Huffman 码按 MSB 先写，头部字段按 LSB 先写
+        struct Bits {
+            out: Vec<u8>,
+            cur: u8,
+            n: u8,
+        }
+        impl Bits {
+            fn bit(&mut self, b: u8) {
+                self.cur |= (b & 1) << self.n;
+                self.n += 1;
+                if self.n == 8 {
+                    self.out.push(self.cur);
+                    self.cur = 0;
+                    self.n = 0;
+                }
+            }
+            /// Huffman 码：高位先写
+            fn code(&mut self, value: u32, len: u8) {
+                for i in (0..len).rev() {
+                    self.bit(((value >> i) & 1) as u8);
+                }
+            }
+            /// 头部字段：低位先写
+            fn field(&mut self, value: u32, len: u8) {
+                for i in 0..len {
+                    self.bit(((value >> i) & 1) as u8);
+                }
+            }
+            fn finish(mut self) -> Vec<u8> {
+                if self.n > 0 {
+                    self.out.push(self.cur);
+                }
+                self.out
+            }
+        }
+
+        let mut b = Bits { out: Vec::new(), cur: 0, n: 0 };
+        // 块头：BFINAL=1；BTYPE=01（固定 Huffman），按 LSB 先写
+        b.field(1, 1);
+        b.field(1, 2);
+        // 固定 Huffman 中字面量 0 的码是 0x30（8 位）
+        b.code(0x30, 8);
+        let mut produced = 1usize;
+        // 长度码 285 = 258 字节；距离码 0 = 距离 1
+        while produced + 258 <= total {
+            b.code(0xC5, 8); // 长度码 285
+            b.code(0x00, 5); // 距离码 0
+            produced += 258;
+        }
+        // 剩余不足 258 的用字面量补齐
+        while produced < total {
+            b.code(0x30, 8);
+            produced += 1;
+        }
+        // 块结束码 256 = 0x00（7 位）
+        b.code(0x00, 7);
+        b.finish()
+    }
+
+    /// 声明长度恰好等于实际内容时，应完整拿到内容。
+    #[test]
+    fn inflate_limited_returns_exact_content_when_declared_matches() {
+        let content = b"hello deflate world".repeat(100);
+        let raw = deflate(&content);
+        let got = inflate_limited(&raw, content.len()).expect("解压应成功");
+        assert_eq!(got.len(), content.len(), "声明正确时应拿到完整内容");
+        assert_eq!(got, content);
+    }
+
+    /// 声明长度远大于实际内容时，应只拿到实际那么多（由调用方报长度不符）。
+    #[test]
+    fn inflate_limited_returns_actual_when_declared_is_larger() {
+        let content = b"short";
         let raw = deflate(content);
+        let got = inflate_limited(&raw, 4096).expect("解压应成功");
+        assert_eq!(got, content, "不应填充到声明长度，只返回真实解出的内容");
+    }
+
+    /// 声明长度与解压结果不符时必须报错。
+    ///
+    /// 与上一条的区别：上一条验证「只读到声明的量」（内存边界），
+    /// 这一条验证「不符时报错」（正确性）。两者都要有。
+    #[test]
+    fn deflate_declared_size_mismatch_is_rejected() {
+        let content = vec![b'x'; 2 * 1024 * 1024];
+        let raw = deflate(&content);
         let mut b = ZipBuilder::new();
-        // 故意把记录的原始长度写错
-        b.raw_entry("bad.txt", 8, &raw, content.len() as u32 + 5, crc32(content));
+        b.raw_entry("bomb.bin", 8, &raw, 1024, crc32(&content));
+        let zip = b.finish();
+
+        let a = open(&zip).expect("解析失败");
+        let e = a.find("bomb.bin").expect("应找到该条目");
+        assert_eq!(e.uncompressed_size, 1024, "声明值应保持为 1 KB");
+
+        let err = read(&zip, e).expect_err("超出声明长度应报错");
+        assert!(
+            err.to_string().contains("不符"),
+            "错误信息应说明长度不符，实际：{err}"
+        );
+    }
+
+    /// 存储方式也要校验长度：声明与实长不一致时不能放过。
+    #[test]
+    fn stored_length_mismatch_is_rejected() {
+        let content = b"hello stored world";
+        let mut b = ZipBuilder::new();
+        // method 0（stored），但声明长度比实际多 3
+        b.raw_entry("bad.txt", 0, content, content.len() as u32 + 3, crc32(content));
         let zip = b.finish();
 
         let a = open(&zip).expect("解析失败");
         let e = a.find("bad.txt").expect("应找到该条目");
-        let err = read(&zip, e).expect_err("长度不符应报错");
+        let err = read(&zip, e).expect_err("存储长度不符应报错");
         assert!(
             err.to_string().contains("不符"),
             "错误信息应说明长度不符，实际：{err}"

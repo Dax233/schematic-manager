@@ -702,11 +702,27 @@ fn str_at(strings: &[String], idx: u32) -> String {
     strings.get(idx as usize).cloned().unwrap_or_default()
 }
 
+/// 解压 zlib 数据，并校验解压结果恰好等于声明的长度。
+///
+/// `expect` 来自文件里记录的原始长度，是**不可信输入**：解压展开比同样由
+/// 文件决定。若先解压再比对，一个声明很小、实际能展开数 GB 的段会直接把
+/// 内存吃光——原先的 `.min(64 MiB)` 只限制预分配容量，不限制增长。
+///
+/// 这里用 take 限流：最多读 expect + 1 字节，多出的 1 字节用于区分
+/// 「恰好符合声明」与「超出声明」。
 fn decompress(data: &[u8], expect: usize) -> AppResult<Vec<u8>> {
     use std::io::Read;
-    let mut d = flate2::read::ZlibDecoder::new(data);
+    let limit = expect.saturating_add(1) as u64;
+    let mut d = flate2::read::ZlibDecoder::new(data).take(limit);
     let mut out = Vec::with_capacity(expect.min(64 * 1024 * 1024));
     d.read_to_end(&mut out)?;
+    if out.len() != expect {
+        return Err(AppError::Corrupt(format!(
+            "解压后长度 {} 与声明的 {} 不符",
+            out.len(),
+            expect
+        )));
+    }
     Ok(out)
 }
 

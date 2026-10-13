@@ -12,7 +12,7 @@
 //! 一个容易搞错的点：文件头里的 langCount 是**语言表个数**（不是条目数），
 //! 段内先写一个与它相等的重复计数，再逐表写条目数。
 
-use crate::blockdb::{BlockDb, LangEntry, Model, ModelElement, TextureInfo};
+use crate::blockdb::{BlockDb, LangEntry, Model, ModelElement};
 use crate::error::{AppError, AppResult};
 
 /// 小端写入辅助。
@@ -325,7 +325,7 @@ fn compress_zlib(data: &[u8]) -> AppResult<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blockdb::{BlockDef, ModelFace, Variant, VersionDef};
+    use crate::blockdb::{BlockDef, ModelFace, TextureInfo, Variant, VersionDef};
 
     fn face(texture: u32) -> ModelFace {
         ModelFace {
