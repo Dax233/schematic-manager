@@ -1005,6 +1005,106 @@ mod tests {
         assert_eq!(parsed.indices.len(), 2560);
     }
 
+    // ---- region_from_nbt 的错误分支 ----
+    //
+    // 这些分支此前全部没有测试：唯一触及该函数的用例走的是正常路径。
+    // 畸形文件是必须处理的输入——.litematic 可能被截断、被别的工具改写，
+    // 也可能根本是另一种格式的文件被误当成投影打开。
+
+    /// 从 fixture 中删掉指定字段，构造缺字段的区域
+    fn region_without(drop: &str) -> Value {
+        let longs = (16usize * 10 * 16 * 2).div_ceil(64);
+        match region_fixture([0, 0, 0], [16, 10, 16], longs) {
+            Value::Compound(fields) => Value::Compound(
+                fields.into_iter().filter(|(k, _)| k != drop).collect(),
+            ),
+            other => other,
+        }
+    }
+
+    #[test]
+    fn region_without_position_is_rejected() {
+        let err = region_from_nbt("r", &region_without("Position"))
+            .expect_err("缺少 Position 应报错");
+        assert!(
+            err.to_string().contains("Position"),
+            "错误信息应指出缺少 Position，实际：{err}"
+        );
+    }
+
+    #[test]
+    fn region_without_size_is_rejected() {
+        let err =
+            region_from_nbt("r", &region_without("Size")).expect_err("缺少 Size 应报错");
+        assert!(
+            err.to_string().contains("Size"),
+            "错误信息应指出缺少 Size，实际：{err}"
+        );
+    }
+
+    #[test]
+    fn region_without_palette_is_rejected() {
+        let err = region_from_nbt("r", &region_without("BlockStatePalette"))
+            .expect_err("缺少调色板应报错");
+        assert!(
+            err.to_string().contains("调色板"),
+            "错误信息应指出缺少调色板，实际：{err}"
+        );
+    }
+
+    /// 调色板字段存在但类型不对（这里是字符串而非列表）也要报错。
+    #[test]
+    fn region_with_non_list_palette_is_rejected() {
+        let longs = (16usize * 10 * 16 * 2).div_ceil(64);
+        let v = match region_fixture([0, 0, 0], [16, 10, 16], longs) {
+            Value::Compound(mut fields) => {
+                for (k, val) in fields.iter_mut() {
+                    if k == "BlockStatePalette" {
+                        *val = Value::String("not a list".into());
+                    }
+                }
+                Value::Compound(fields)
+            }
+            other => other,
+        };
+        let err = region_from_nbt("r", &v).expect_err("调色板类型不对应报错");
+        assert!(
+            err.to_string().contains("不是列表"),
+            "错误信息应指出类型不对，实际：{err}"
+        );
+    }
+
+    /// BlockStates 长度不足时必须报错，而不是当成「全是空气」静默通过。
+    ///
+    /// 这是本项目特意加的守卫：read_bits 在数组偏短时一律返回 0，
+    /// 而索引 0 通常是空气，于是统计结果会静默偏小——用户看到一个
+    /// 「看起来正常但数字是错的」投影，比直接报错更难发现。
+    #[test]
+    fn region_with_short_blockstates_is_rejected() {
+        let need = (16usize * 10 * 16 * 2).div_ceil(64);
+        // 少给一个 long
+        let v = region_fixture([0, 0, 0], [16, 10, 16], need - 1);
+        let err = region_from_nbt("r", &v).expect_err("BlockStates 偏短应报错");
+        assert!(
+            err.to_string().contains("长度不足"),
+            "错误信息应指出长度不足，实际：{err}"
+        );
+    }
+
+    /// 缺少 BlockStates 字段时应视为空区域（全为索引 0），而不是报错。
+    ///
+    /// 这与上一条的区别：字段缺失是合法的（空区域），长度不足才是损坏。
+    #[test]
+    fn region_without_blockstates_is_all_air() {
+        let v = region_without("BlockStates");
+        let r = region_from_nbt("r", &v).expect("缺少 BlockStates 应可解析为空区域");
+        assert_eq!(r.volume, 2560);
+        assert!(
+            r.indices.iter().all(|&i| i == 0),
+            "缺少 BlockStates 时全部索引应为 0"
+        );
+    }
+
     #[test]
     fn block_state_key_and_props() {
         let mut b = BlockState::new("minecraft:oak_stairs");
