@@ -128,6 +128,26 @@ pub fn delete_to_trash(files: &[CheckedFile]) -> AppResult<()> {
     }
 }
 
+/// 构造在资源管理器中定位文件所需的命令行（Windows）。
+///
+/// 单独抽出来是为了**能测**：`/select,` 与路径必须作为两个独立参数。
+/// 写成 `.arg(format!("/select,{}", path))` 时，含空格的路径会被 Rust 的
+/// 引号规则包成**一个** token：
+///   `"/select,C:\我的 目录\a.litematic"`
+/// 而分开传得到的是 explorer 认识的形式：
+///   `/select, "C:\我的 目录\a.litematic"`
+/// 前者 explorer 会忽略——进程照常启动、不报错，但窗口不出现也不选中
+/// 任何文件，表现就是「点了没反应」。
+///
+/// 返回 (命令, 参数列表)，调用方直接交给 Command。
+#[cfg(windows)]
+pub fn reveal_command(path: &Path) -> (&'static str, Vec<std::ffi::OsString>) {
+    (
+        "explorer.exe",
+        vec!["/select,".into(), path.as_os_str().to_os_string()],
+    )
+}
+
 /// 在资源管理器里定位到一个文件（打开其所在目录并选中它）。
 pub fn reveal_in_file_manager(path: &Path) -> AppResult<()> {
     if !path.exists() {
@@ -135,20 +155,11 @@ pub fn reveal_in_file_manager(path: &Path) -> AppResult<()> {
     }
     #[cfg(windows)]
     {
-        // `/select,` 与路径必须是**两个参数**。
-        //
-        // 写成 `.arg(format!("/select,{}", path))` 时，含空格的路径会让整串被
-        // 引号包成一个 token：`"/select,C:\我的 目录\a.litematic"`。
-        // explorer 对参数的解析很特别，这种形式会被它忽略——进程正常启动、
-        // 不报错，但窗口不出现也不选中任何文件，表现就是「点了没反应」。
-        // 分开传时 Rust 只给路径加引号，得到 `/select, "C:\..."`，这是
-        // explorer 认识的形式。
-        //
-        // 另外 explorer.exe 的返回码不可靠（成功也常返回 1），
+        // explorer.exe 的返回码不可靠（成功也常返回 1），
         // 因此只判断能否启动，不判断退出码，避免报假错。
-        std::process::Command::new("explorer.exe")
-            .arg("/select,")
-            .arg(path)
+        let (exe, args) = reveal_command(path);
+        std::process::Command::new(exe)
+            .args(args)
             .spawn()
             .map_err(|e| AppError::Parse(format!("无法打开资源管理器：{e}")))?;
         Ok(())
@@ -605,5 +616,52 @@ mod tests {
             .to_string();
         assert!(e.contains("不存在"), "{e}");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 定位文件时传给 explorer 的必须是**两个**参数。
+    ///
+    /// 这条防的是「点了没反应」：路径含空格时，若 `/select,` 与路径被合成
+    /// 一个参数，Rust 会给整串加引号，
+    ///   "/select,C:\我的 目录\a.litematic"
+    /// explorer 会忽略它——进程正常启动、不报错、但没有窗口出现。
+    /// 因此这里不看「能否启动」（错误形式同样能启动），而是直接检查
+    /// Command 实际会收到的参数个数与内容。
+    #[cfg(windows)]
+    #[test]
+    fn reveal_passes_select_and_path_as_two_arguments() {
+        use std::process::Command;
+
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("testtmp")
+            .join("sm reveal 空格");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a b.litematic");
+        std::fs::write(&file, b"x").unwrap();
+
+        let (exe, args) = reveal_command(&file);
+        assert_eq!(exe, "explorer.exe");
+        assert_eq!(args.len(), 2, "必须是两个参数：{args:?}");
+        assert_eq!(args[0], "/select,");
+        assert_eq!(Path::new(&args[1]), file);
+
+        // 用 Command 自己的转义结果再核一次：调用方用的就是这条路。
+        // get_args() 给出 Windows 下实际拼给进程的命令行，含空格的路径
+        // 必须带引号、且引号只包住路径这一部分。
+        let cmd = Command::new(exe)
+            .args(&args)
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(cmd.len(), 2);
+        assert_eq!(cmd[0], "/select,");
+        assert!(
+            !cmd[0].contains("a b.litematic"),
+            "路径不能并入第一个参数，否则 explorer 会忽略：{cmd:?}"
+        );
+        assert_eq!(Path::new(&cmd[1]), file);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
