@@ -150,11 +150,10 @@ jobs:
       # 但它在发布任务里排在**全部六个平台构建之后**才生成：
       # 表格一旦写错，要等整轮多平台构建跑完才会暴露，重来一次代价很高。
       # 这里提前几秒验证一遍。
-      # 该脚本会调用 GitHub API 查对比范围，因此需要 token 以免匿名限流误报失败。
+      # 该脚本自带一个假的 GitHub API，不联网、不需要 token，
+      # 因此不受仓库当前 Release 状态与 API 限流影响。
       - name: Release 说明格式检查
         run: pnpm check:notes
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # 覆盖各功能发出的命令名与参数，以及界面挂载与主要交互流程。
       - name: 前端单元测试
@@ -214,8 +213,14 @@ jobs:
         include:
           - { runner: windows-latest,   target: x86_64-pc-windows-msvc,    platform: windows, arch: x86_64, bundles: nsis }
           - { runner: windows-11-arm,   target: aarch64-pc-windows-msvc,   platform: windows, arch: arm64,  bundles: nsis }
-          - { runner: ubuntu-22.04,     target: x86_64-unknown-linux-gnu,  platform: linux,   arch: x86_64, bundles: deb,appimage }
-          - { runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, platform: linux,   arch: arm64,  bundles: deb,appimage }
+          # Linux 只出 deb。
+          # 曾经写成 `bundles: deb,appimage`，但矩阵是 YAML 流式映射（花括号内），
+          # 逗号会被当作条目分隔符，于是它解析成 `bundles: deb` 加一个多余的
+          # `appimage: null`——AppImage 从未被真正请求（CI 日志里没有任何
+          # appimage 打包记录）。若要同时出 AppImage，必须写成带引号的
+          # `bundles: "deb,appimage"`。
+          - { runner: ubuntu-22.04,     target: x86_64-unknown-linux-gnu,  platform: linux,   arch: x86_64, bundles: deb }
+          - { runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, platform: linux,   arch: arm64,  bundles: deb }
           # macos-13 已被 GitHub 弃用：实测该标签的任务永远停在 queued，
           # 会连带让整个运行无法结束（日志也因此无法下载）。改用 macos-15-intel。
           - { runner: macos-15-intel,   target: x86_64-apple-darwin,      platform: macos,   arch: x86_64, bundles: dmg }

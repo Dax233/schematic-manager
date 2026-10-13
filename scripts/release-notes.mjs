@@ -21,6 +21,9 @@
  *   PRERELEASE                可选，'true' 表示预发布
  *   ASSETS_JSON               可选，资产文件名的 JSON 数组（形如 ["a.zip", ...]）
  *   OUTPUT                    可选，输出文件路径，默认 release-notes.md
+ *   GITHUB_API_BASE           可选，API 根地址，默认 https://api.github.com。
+ *                             自建 GitHub Enterprise 需要改这个值；
+ *                             本地校验也用它指向一个假的 API，从而不联网。
  */
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 
@@ -42,7 +45,7 @@ if (!REPO || !TAG) {
   process.exit(1);
 }
 
-const API = "https://api.github.com";
+const API = (process.env.GITHUB_API_BASE || "https://api.github.com").replace(/\/+$/, "");
 const headers = {
   Accept: "application/vnd.github+json",
   "X-GitHub-Api-Version": "2022-11-28",
