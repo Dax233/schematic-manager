@@ -13,6 +13,7 @@
 //! 报告里会显示为通过，看不出其实一次都没跑。标了 ignore 会如实显示为
 //! 「未运行」，需要跑时用 `--ignored` 显式调用。
 
+use crate::litematic::BlockState;
 use std::path::{Path, PathBuf};
 
 /// 递归收集目录下的 `.litematic`
@@ -254,7 +255,201 @@ fn real_project_tinted_blocks_actually_get_colored() {
     assert!(wrong.is_empty(), "以下染色方块未正确上色：\n{}", wrong.join("\n"));
 }
 
-/// 每个真实投影：用随包方块库构建 3D 场景，且必须真的产出网格。
+/// 活塞的邻面剔除必须守住所依赖的**几何不变量**。
+///
+/// 对应界面上的「活塞有时候会缺面」：「有时候」是关键词——同一个活塞，
+/// 周围有没有实心方块会改变结果，因此这里把邻居场景也当作输入维度。
+///
+/// 只在会**误判**的方向上断言，不自己重算一遍剔除逻辑（重算等于把被测
+/// 逻辑抄一遍，抄错了两边一起错）。这里守两条与旋转无关的不变量：
+///
+/// 1. 邻居越少，可见面不可能更多。孤立时必须 >= 任意有邻居的场景。
+/// 2. 带 cullface=none 的面在任何邻居配置下都必须保留。
+///    伸出活塞的正面就是这种（活塞杆靠它显示），
+///    若它被当成可剔除，活塞就会「缺一块」。
+///
+/// 另外验证「六面围石头」时可见面确实变少——若剔除完全失效，
+/// 这条会失败，说明本用例不是空转。
+#[test]
+#[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
+fn real_project_piston_culling_respects_geometry() {
+    let db = bundled_db();
+    let vi = db.pick_version(3465).expect("内置库缺少 1.20.1");
+
+    let mut states: Vec<(String, String)> = Vec::new();
+    for facing in ["north", "south", "east", "west", "up", "down"] {
+        for extended in ["false", "true"] {
+            for name in ["minecraft:piston", "minecraft:sticky_piston"] {
+                states.push((name.to_string(), format!("extended={extended},facing={facing}")));
+            }
+        }
+    }
+
+    // 邻居一律用**绝对坐标**写出来，避免偏移与下标互转时出错。
+    // 活塞恒在 (1,1,1)。
+    let scenarios: [(&str, Vec<[i32; 3]>); 3] = [
+        ("孤立", vec![]),
+        (
+            "六面围石头",
+            vec![
+                [0, 1, 1],
+                [2, 1, 1],
+                [1, 0, 1],
+                [1, 2, 1],
+                [1, 1, 0],
+                [1, 1, 2],
+            ],
+        ),
+        ("上方压石头", vec![[1, 2, 1]]),
+    ];
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut shrank_somewhere = false;
+    let mut checked = 0usize;
+
+    for (name, propstr) in &states {
+        let props: Vec<(String, String)> = propstr
+            .split(',')
+            .map(|kv| {
+                let mut it = kv.splitn(2, '=');
+                (it.next().unwrap().into(), it.next().unwrap_or("").into())
+            })
+            .collect();
+        let st = BlockState { name: name.clone(), props: props.clone() };
+
+        // 该方块模型里 cullface=none 的面有几个（这些面永远不该被剔除）
+        let models = crate::block_model::resolve_models(&db, &db.versions[vi], &st);
+        let mut no_cull_faces = 0usize;
+        let mut total_faces = 0usize;
+        for rm in &models {
+            let Some(m) = db.models.get(rm.model_idx as usize) else { continue };
+            for elem in &m.elements {
+                for f in 0..6u8 {
+                    if elem.face_mask & (1u8 << f) == 0 {
+                        continue;
+                    }
+                    total_faces += 1;
+                    let fe = match f {
+                        0 => crate::blockdb::Face::Down,
+                        1 => crate::blockdb::Face::Up,
+                        2 => crate::blockdb::Face::North,
+                        3 => crate::blockdb::Face::South,
+                        4 => crate::blockdb::Face::West,
+                        _ => crate::blockdb::Face::East,
+                    };
+                    if elem.face(fe).map(|mf| mf.cullface == 0xFF).unwrap_or(false) {
+                        no_cull_faces += 1;
+                    }
+                }
+            }
+        }
+
+        let mut per_scenario: Vec<(&str, usize)> = Vec::new();
+        for (sname, neighbours) in &scenarios {
+            // 用 Region::index 自己算下标：索引顺序是 X 最快、Z 次之、Y 最慢，
+            // 手算 x*9+y*3+z 会错位（我在写这条用例时正是这样错过一次）。
+            let size = [3usize, 3, 3];
+            let mut palette = vec![st.clone()];
+            let mut indices = vec![0i32; 27];
+            for n in neighbours {
+                let stone = BlockState::new("minecraft:stone");
+                let pi = match palette
+                    .iter()
+                    .position(|s| s.name == stone.name && s.props == stone.props)
+                {
+                    Some(x) => x,
+                    None => {
+                        palette.push(stone);
+                        palette.len() - 1
+                    }
+                };
+                let idx = n[0] as usize
+                    + n[2] as usize * size[0]
+                    + n[1] as usize * size[0] * size[2];
+                indices[idx] = pi as i32;
+            }
+            let air = BlockState::new("minecraft:air");
+            let air_pi = {
+                palette.push(air);
+                palette.len() - 1
+            };
+            for i in 0..indices.len() {
+                let x = (i % size[0]) as i32;
+                let z = ((i / size[0]) % size[2]) as i32;
+                let y = (i / (size[0] * size[2])) as i32;
+                if [x, y, z] == [1, 1, 1]
+                    || neighbours.iter().any(|n| n[0] == x && n[1] == y && n[2] == z)
+                {
+                    continue;
+                }
+                indices[i] = air_pi as i32;
+            }
+
+            let sc = crate::litematic::Schematic {
+                root: crate::nbt::Value::Compound(vec![]),
+                regions: vec![crate::litematic::Region {
+                    name: "r".into(),
+                    pos: [0, 0, 0],
+                    size: [3, 3, 3],
+                    volume: 27,
+                    bits: 5,
+                    palette,
+                    indices,
+                    ..Default::default()
+                }],
+                path: String::new(),
+                meta_modified: false,
+                blocks_modified: false,
+            };
+
+            let quads = crate::visibility::collect_quads(&sc, &db, vi);
+            let got = quads.iter().filter(|q| q.block_pos == [1, 1, 1]).count();
+            checked += 1;
+            per_scenario.push((sname, got));
+
+            // 不变量 2：cullface=none 的面必须全都在
+            if got < no_cull_faces {
+                failures.push(format!(
+                    "{name} [{propstr}] 场景「{sname}」：只产出 {got} 个面，\
+                     但仅 cullface=none 的面就有 {no_cull_faces} 个——不可剔除的面被剔掉了"
+                ));
+            }
+            // 可见面不可能超过模型总面数
+            if got > total_faces {
+                failures.push(format!(
+                    "{name} [{propstr}] 场景「{sname}」：产出 {got} 个面，超过模型总面数 {total_faces}"
+                ));
+            }
+        }
+
+        // 不变量 1：邻居越少，可见面不可能更少
+        let isolated = per_scenario[0].1;
+        for (sname, got) in &per_scenario[1..] {
+            if *got > isolated {
+                failures.push(format!(
+                    "{name} [{propstr}]：场景「{sname}」产出 {got} 个面，\
+                     多于完全孤立时的 {isolated} 个——邻居变多反而看到更多面，剔除方向反了"
+                ));
+            }
+            if *got < isolated {
+                shrank_somewhere = true;
+            }
+        }
+    }
+
+    assert!(checked > 0, "没有验证到任何活塞状态");
+    assert!(
+        shrank_somewhere,
+        "所有场景的可见面数都相同，说明剔除根本没生效——本用例在空转"
+    );
+    assert!(
+        failures.is_empty(),
+        "活塞剔除违反几何不变量：\n{}",
+        failures.join("\n")
+    );
+    println!("  已核对 {checked} 个「活塞状态 × 邻居场景」组合，剔除符合几何不变量");
+}
+
 /// 真实投影里活塞与红石类方块的状态必须都能解析出模型。
 ///
 /// 对应界面上的「活塞有时候会缺面」：活塞是**按状态切换模型**的方块
@@ -318,7 +513,7 @@ fn real_project_piston_states_all_resolve() {
             broken.push(format!("{name}: 方块库里查不到定义"));
             continue;
         }
-        let st = crate::litematic::BlockState { name: name.clone(), props: props.clone() };
+        let st = BlockState { name: name.clone(), props: props.clone() };
         let models = crate::block_model::resolve_models(&db, &db.versions[vi], &st);
         if models.is_empty() {
             broken.push(format!("{name} [{propstr}]（{cnt} 次）解析出 0 个模型"));
