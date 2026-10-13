@@ -92,6 +92,10 @@ SHIM = r"""
     // 目录选择框：点击「添加目录」后前端会调它，必须回一个字符串路径，
     // 否则 typeof dir !== "string" 直接 return，列表永远是空的
     if (String(cmd).indexOf("dialog") >= 0) return Promise.resolve("C:/测试目录");
+    // 系统主题：App.vue 走的是 `invoke("plugin:window|theme")`，
+    // 不是 window.__TAURI__.window。这里显式回一个值，让它走正常路径，
+    // 而不是每次渲染都落进「读不到主题」的兜底分支。
+    if (cmd === "plugin:window|theme") return Promise.resolve("light");
     switch (cmd) {
       case "scan_litematics":
         return Promise.resolve({ items: [summary], skippedDirs: 0, skippedPaths: [] });
