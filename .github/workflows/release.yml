@@ -416,7 +416,10 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          node scripts/bump-version.mjs --next
+          # 以 **tag 的版本**为基准推下一 PATCH，而不是仓库当前版本：
+          # 若打的 tag 与仓库版本不同（例如直接发 2.0.0 而仓库仍是 1.0.1），
+          # 按仓库版本推会得到 1.0.2，比已发布的版本还旧。
+          node scripts/bump-version.mjs --next-of "${{ needs.prepare.outputs.version }}"
           next="$(node -p "require('./package.json').version")"
           git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json src-tauri/Cargo.lock
           git commit -m "chore: 版本号递增到 ${next} [skip ci]"

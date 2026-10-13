@@ -9,8 +9,10 @@
  *   4. src-tauri/Cargo.lock       -> 本包（name = "schematic-manager"）的 version
  *
  * 用法：
- *   node scripts/bump-version.mjs 1.0.1        # 指定版本
- *   node scripts/bump-version.mjs --next       # 当前版本 PATCH + 1
+ *   node scripts/bump-version.mjs 1.0.1              # 指定版本
+ *   node scripts/bump-version.mjs --next             # 仓库当前版本 PATCH + 1
+ *   node scripts/bump-version.mjs --next-of 2.0.0    # 指定版本 PATCH + 1
+ *                                                    # （正式发布用 tag 的版本作基准）
  */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 
@@ -104,7 +106,38 @@ function apply(v) {
 const isCli = process.argv[1] && process.argv[1].replace(/\\/g, "/").endsWith("scripts/bump-version.mjs");
 if (isCli) {
   const arg = process.argv[2] || "--next";
-  const v = arg === "--next" ? nextPatch(currentVersion()) : arg;
+  // 先定出「基准版本」，再由它推下一个 PATCH；直接给版本号时不推
+  let base = null;
+  let v = null;
+  if (arg === "--next") {
+    base = currentVersion();
+  } else if (arg === "--next-of") {
+    // 从**指定的**版本推下一个 PATCH，而不是从仓库当前版本推。
+    //
+    // 正式发布时必须以 tag 的版本为基准：需求规定「把仓库内各版本号 dump 到
+    // <MAJOR>.<MINOR>.<PATCH+1>」，其中的 MAJOR/MINOR/PATCH 来自 tag。
+    // 若按仓库当前版本推，打一个与仓库版本不同的 tag（例如直接发 2.0.0，
+    // 而仓库里还是 1.0.1）就会算成 1.0.2——版本号在已发布的 2.0.0 之后
+    // 反而**倒退**，之后所有快照的版本号也跟着乱。
+    base = process.argv[3];
+    if (!base) {
+      console.error("--next-of 需要给出基准版本号，例如 --next-of 2.0.0");
+      process.exit(1);
+    }
+  } else {
+    v = arg;
+  }
+
+  if (v === null) {
+    try {
+      v = nextPatch(base);
+    } catch (e) {
+      // 基准版本号本身格式不对（含 package.json 损坏的情形）：
+      // 给出可读的一句话，而不是把 JS 堆栈甩给使用者
+      console.error(`无法从 ${base} 推算下一版本号：${e.message}`);
+      process.exit(1);
+    }
+  }
   if (!/^\d+\.\d+\.\d+$/.test(v)) {
     console.error(`版本号必须是 <MAJOR>.<MINOR>.<PATCH> 形式，收到: ${v}`);
     process.exit(1);
