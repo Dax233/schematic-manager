@@ -228,7 +228,7 @@ pub fn to_rgba(
         }
     }
 
-    // tRNS 对 8 位灰度与 RGB 表示「哪一个采样值视为全透明」
+    // tRNS 对灰度与 RGB 表示「哪一个采样值视为全透明」
     if let Some(t) = transparency {
         match (color_type, bit_depth) {
             (0, 8) => {
@@ -236,6 +236,24 @@ pub fn to_rgba(
                 for i in 0..w * h {
                     if raw[i] == key {
                         out[i * 4 + 3] = 0;
+                    }
+                }
+            }
+            // 低位深灰度：tRNS 里的透明键仍是 2 字节大端，采样值放在低字节，
+            // 解析时已取 body[1]（见 tRNS 分支），因此它就是 0..2^位深-1
+            // 范围的**原始采样值**，不与 0..255 的缩放值比较。
+            //
+            // 这一段原先落在 `_ => {}` 上被静默忽略：同一张 PNG 在 8 位灰度
+            // 下有透明、换成 1/2/4 位灰度就没有透明，而这种差异只表现为
+            // 「贴图该透的地方不透」，很难追查。
+            (0, 4) | (0, 2) | (0, 1) => {
+                let key = t[0][0];
+                for y in 0..h {
+                    let row = &raw[y * stride..(y + 1) * stride];
+                    for x in 0..w {
+                        if sub_byte_index(row, x, bit_depth) == key {
+                            out[(y * w + x) * 4 + 3] = 0;
+                        }
                     }
                 }
             }
@@ -251,6 +269,9 @@ pub fn to_rgba(
                     }
                 }
             }
+            // 其余组合不会带透明键：调色板的透明度走 palette.alpha
+            // （解析 tRNS 时就分流了），灰度+alpha 与 RGBA 自带 alpha 通道，
+            // 而 16 位等未支持的组合在进入本函数前就被拒绝了。
             _ => {}
         }
     }
@@ -502,6 +523,105 @@ mod tests {
         let got = to_rgba(&raw, 2, 1, 2, 8, &Palette::default(), Some(&key)).unwrap();
         assert_eq!(got[3], 0, "与透明键相符的像素 alpha 应为 0");
         assert_eq!(got[7], 255, "其余像素保持不透明");
+    }
+
+    /// 1 位灰度的透明键也要生效（按原始采样值比较，不与 0..255 的缩放值比）。
+    #[test]
+    fn gray1_transparency_key_applies() {
+        // 4 个 1 位样本打包成一字节 0b1010_0000：样本依次为 1、0、1、0
+        let raw = vec![0b1010_0000u8];
+        // 透明键取采样值 1
+        let key = [[1u8, 0, 0]];
+        let got = to_rgba(&raw, 4, 1, 0, 1, &Palette::default(), Some(&key)).unwrap();
+
+        // 采样值 1 -> 灰 255 且全透明；采样值 0 -> 灰 0 且不透明
+        assert_eq!(&got[0..4], &[255, 255, 255, 0], "第 1 个样本为 1，应透明");
+        assert_eq!(&got[4..8], &[0, 0, 0, 255], "第 2 个样本为 0，应不透明");
+        assert_eq!(&got[8..12], &[255, 255, 255, 0], "第 3 个样本为 1，应透明");
+        assert_eq!(&got[12..16], &[0, 0, 0, 255], "第 4 个样本为 0，应不透明");
+    }
+
+    /// 4 位灰度的透明键同样按原始采样值比较。
+    #[test]
+    fn gray4_transparency_key_applies() {
+        // 两个 4 位样本打包：0x0F -> 样本 0 与 15
+        let raw = vec![0x0Fu8];
+        let key = [[15u8, 0, 0]];
+        let got = to_rgba(&raw, 2, 1, 0, 4, &Palette::default(), Some(&key)).unwrap();
+        assert_eq!(got[3], 255, "采样值 0 不匹配透明键，应不透明");
+        assert_eq!(got[7], 0, "采样值 15 匹配透明键，应全透明");
+    }
+
+    /// 组装一张最小 PNG：IHDR + 可选 tRNS + IDAT + IEND。
+    ///
+    /// 块尾的 CRC 填 0：本模块的解码只负责取出像素，不做 CRC 校验，
+    /// 因此测试不必真实计算校验和。
+    fn build_png(
+        width: u32,
+        height: u32,
+        color_type: u8,
+        bit_depth: u8,
+        trns: Option<&[u8]>,
+        filtered_rows: &[u8],
+    ) -> Vec<u8> {
+        fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], body: &[u8]) {
+            out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            out.extend_from_slice(kind);
+            out.extend_from_slice(body);
+            out.extend_from_slice(&[0, 0, 0, 0]); // CRC 占位
+        }
+        use std::io::Write;
+
+        let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.push(bit_depth);
+        ihdr.push(color_type);
+        ihdr.extend_from_slice(&[0, 0, 0]); // 压缩方式/滤波方式/隔行
+        chunk(&mut out, b"IHDR", &ihdr);
+        if let Some(t) = trns {
+            chunk(&mut out, b"tRNS", t);
+        }
+        let mut enc =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(filtered_rows).unwrap();
+        let comp = enc.finish().unwrap();
+        chunk(&mut out, b"IDAT", &comp);
+        chunk(&mut out, b"IEND", &[]);
+        out
+    }
+
+    /// 走完整解码路径验证低位深透明键：tRNS 是 2 字节大端，
+    /// 采样值在高字节为 0 的低字节里。这条能发现解析时取错字节
+    /// （例如误取高字节 body[0]，那会得到恒定 0）。
+    #[test]
+    fn decode_applies_gray1_transparency_key_from_chunk() {
+        // 1 位灰度、宽 4 高 1：滤波字节 0 + 数据字节 0b1010_0000
+        let rows = vec![0u8, 0b1010_0000];
+        // tRNS：大端 0x0001，即透明键为采样值 1
+        let png = build_png(4, 1, 0, 1, Some(&[0x00, 0x01]), &rows);
+
+        let img = decode(&png).expect("应能解码");
+        assert_eq!((img.width, img.height), (4, 1));
+        assert_eq!(img.rgba.len(), 16);
+        assert_eq!(img.rgba[3], 0, "第 1 个样本为 1，应透明");
+        assert_eq!(img.rgba[7], 255, "第 2 个样本为 0，应不透明");
+        assert_eq!(img.rgba[11], 0, "第 3 个样本为 1，应透明");
+        assert_eq!(img.rgba[15], 255, "第 4 个样本为 0，应不透明");
+    }
+
+    /// 对照：不写 tRNS 块时整张图都应不透明。
+    ///
+    /// 与上一条成对，确认「透明」确实来自 tRNS，而不是位深处理本身有别的错。
+    #[test]
+    fn decode_without_trns_leaves_gray1_opaque() {
+        let rows = vec![0u8, 0b1010_0000];
+        let png = build_png(4, 1, 0, 1, None, &rows);
+        let img = decode(&png).expect("应能解码");
+        for i in 0..4 {
+            assert_eq!(img.rgba[i * 4 + 3], 255, "第 {} 个像素应不透明", i + 1);
+        }
     }
 
     #[test]
