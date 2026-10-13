@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "app:build": "tauri build --bundles nsis",
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

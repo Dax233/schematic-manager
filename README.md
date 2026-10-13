@@ -105,9 +105,22 @@
 
 ```bash
 pnpm install
-pnpm tauri dev      # 开发
-pnpm tauri build    # 打包
+pnpm tauri dev        # 开发（起 dev server + 应用窗口）
+pnpm app:build        # 出 Windows 安装包（与 CI 一致，用 nsis）
+pnpm tauri build      # 按 tauri.conf.json 的 targets 打包
 ```
+
+**`pnpm app:build` 而不是 `cargo build --release`。** 后者只编译 Rust，
+**不会嵌入前端**：`dist/` 没被打进去，产物里留着 `devUrl`
+（`http://localhost:1420`），双击后 WebView2 去连一个并不存在的开发服务器，
+界面显示 `ERR_CONNECTION_REFUSED`。需要嵌入前端时必须经 Tauri CLI 构建，
+它会在编译前先跑 `beforeBuildCommand`（`pnpm build`）并把 `frontendDist`
+打进二进制。这是我实际踩过的坑。
+
+另外 `pnpm tauri build` 会按 `targets: "all"` 试所有格式，其中 **MSI 在
+中文 `productName` 下必然失败**：MSI 数据库代码页默认 1252（en-US），
+写不进中文，WiX 报 `LGHT0311`。CI 只用 `nsis`，因此正式发布不受影响；
+本地要出包就走 `pnpm app:build`（等价于 `tauri build --bundles nsis`）。
 
 前端类型检查、单元测试与构建：
 
