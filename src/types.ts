@@ -154,6 +154,8 @@ export interface SceneBatch {
   uvs: number[];
   /** 每顶点颜色系数，RGB 三通道，已含明暗与染色 */
   colors: number[];
+  /** 贴图透明类型。决定前端如何绘制该批次 */
+  alphaMode: "opaque" | "cutout" | "translucent";
   indices: number[];
   textureWidth: number;
   textureHeight: number;

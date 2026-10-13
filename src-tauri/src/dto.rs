@@ -224,6 +224,8 @@ pub struct SceneBatchDto {
     pub texture_height: u16,
     /// RGBA8888 像素；前端用 DataTexture 直接建纹理
     pub texture_rgba: Vec<u8>,
+    /// 贴图透明类型："opaque" / "cutout" / "translucent"
+    pub alpha_mode: String,
 }
 
 /// 前端渲染所需的完整场景
@@ -255,6 +257,12 @@ impl From<crate::scene::SceneData> for SceneDto {
                     texture_width: b.texture_width,
                     texture_height: b.texture_height,
                     texture_rgba: b.texture_rgba,
+            alpha_mode: match b.alpha_mode {
+                crate::scene::AlphaMode::Opaque => "opaque",
+                crate::scene::AlphaMode::Cutout => "cutout",
+                crate::scene::AlphaMode::Translucent => "translucent",
+            }
+            .to_string(),
                 })
                 .collect(),
             total_vertices: s.total_vertices,

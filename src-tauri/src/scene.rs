@@ -10,6 +10,51 @@ use crate::litematic::Schematic;
 use crate::mesh;
 use crate::visibility;
 
+/// 一个批次的贴图透明类型。
+///
+/// 必须区分，因为三种类型要用不同的绘制方式：
+/// - `Opaque`：全不透明，画的时候可以写深度，正常遮挡。
+/// - `Cutout`：只有全透明与全不透明两种像素（树叶、草、藤蔓）。
+///   全透明像素不能画出来，但**画出来的部分必须写深度**，
+///   否则后面的方块会从叶子缝隙里透出来。
+/// - `Translucent`：含真正的半透明像素（染色玻璃、水）。
+///   必须做混合，且不能写深度，否则半透明的面会挡掉后面的几何。
+///
+/// 一开始只用一个布尔 `has_alpha`，无法区分后两者：按 Cutout 处理会让玻璃
+/// 变硬、按 Translucent 处理会让树叶互相透视。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlphaMode {
+    Opaque,
+    Cutout,
+    Translucent,
+}
+
+/// 由贴图像素判定透明类型。
+///
+/// 判据只看 alpha 通道：
+/// - 全部 255 -> Opaque
+/// - 只有 0 与 255 -> Cutout
+/// - 存在 1..=254 -> Translucent
+pub fn classify_alpha(rgba: &[u8]) -> AlphaMode {
+    let mut saw_zero = false;
+    let mut saw_partial = false;
+    for px in rgba.chunks_exact(4) {
+        match px[3] {
+            0 => saw_zero = true,
+            255 => {}
+            _ => saw_partial = true,
+        }
+        if saw_partial {
+            return AlphaMode::Translucent;
+        }
+    }
+    if saw_zero {
+        AlphaMode::Cutout
+    } else {
+        AlphaMode::Opaque
+    }
+}
+
 /// 一个批次 = 一张贴图 = 前端一个材质
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneBatch {
@@ -27,6 +72,8 @@ pub struct SceneBatch {
     pub texture_height: u16,
     /// 贴图像素，RGBA8888，长度 = 宽 * 高 * 4
     pub texture_rgba: Vec<u8>,
+    /// 该批次贴图的透明类型，决定前端如何绘制
+    pub alpha_mode: AlphaMode,
 }
 
 /// 完整场景
@@ -102,6 +149,7 @@ pub fn build_from(sc: &Schematic, db: &BlockDb) -> AppResult<SceneData> {
             // 反而掩盖真实问题，不如不画。
             continue;
         };
+        let alpha_mode = classify_alpha(&rgba);
         batches.push(SceneBatch {
             texture: b.texture,
             positions: b.positions,
@@ -111,6 +159,7 @@ pub fn build_from(sc: &Schematic, db: &BlockDb) -> AppResult<SceneData> {
             texture_width: t.w,
             texture_height: t.h,
             texture_rgba: rgba,
+            alpha_mode,
         });
     }
 
@@ -159,6 +208,79 @@ mod tests {
     use crate::blockdb::{BlockDef, Model, ModelElement, ModelFace, Variant, VersionDef};
     use crate::litematic::{BlockState, Region};
     use std::collections::HashMap;
+
+    /// 透明类型必须把「只有 0/255」与「含中间值」分开。
+    ///
+    /// 这个区分不是分类爱好：前端对 cutout 用 alphaTest（丢弃全透明像素、
+    /// 其余照常写深度），对 translucent 用混合且不写深度。
+    /// 若把染色玻璃误判成 cutout，它的半透明像素会被 alphaTest 挖成窟窿；
+    /// 若把树叶误判成 translucent，叶子之间会互相透视。
+    #[test]
+    fn classify_alpha_separates_cutout_from_translucent() {
+        // 全不透明
+        let opaque: Vec<u8> = (0..4).flat_map(|_| [10u8, 20, 30, 255]).collect();
+        assert_eq!(classify_alpha(&opaque), AlphaMode::Opaque);
+
+        // 只有 0 与 255：树叶/草这类镂空贴图
+        let cutout = vec![10, 20, 30, 255, 10, 20, 30, 0, 40, 50, 60, 255];
+        assert_eq!(classify_alpha(&cutout), AlphaMode::Cutout);
+
+        // 有 1..254 之间的值：染色玻璃/水
+        let translucent = vec![10, 20, 30, 255, 10, 20, 30, 163, 10, 20, 30, 0];
+        assert_eq!(classify_alpha(&translucent), AlphaMode::Translucent);
+
+        // 全透明：没有可见像素，但也不是半透明
+        let all_clear = vec![0u8; 8];
+        assert_eq!(classify_alpha(&all_clear), AlphaMode::Cutout);
+    }
+
+    /// 只要**存在一个**半透明像素就必须判成 translucent。
+    ///
+    /// 判据不能按比例写：染色玻璃里半透明像素是少数（191/256），
+    /// 按「多数」判断会漏判，玻璃照样被挖窟窿。
+    #[test]
+    fn a_single_translucent_pixel_is_enough() {
+        let mut px = vec![255u8; 16];
+        px[3] = 1; // 唯一一个半透明像素
+        assert_eq!(
+            classify_alpha(&px),
+            AlphaMode::Translucent,
+            "哪怕只有一个半透明像素也必须走混合，否则它会被 alphaTest 丢掉"
+        );
+    }
+
+    /// 真实染色玻璃的 alpha 分布必须判成 translucent。
+    #[test]
+    fn stained_glass_like_pixels_are_translucent() {
+        // 16x16 里 191 个 alpha=163、其余 65 个 alpha=255，
+        // 与内置库 block/white_stained_glass 的实测分布一致
+        let mut px = Vec::with_capacity(16 * 16 * 4);
+        for i in 0..16 * 16 {
+            let a = if i < 191 { 163u8 } else { 255u8 };
+            px.extend_from_slice(&[200, 200, 200, a]);
+        }
+        assert_eq!(classify_alpha(&px), AlphaMode::Translucent);
+    }
+
+    /// 批次带上的透明类型，必须与它自己的贴图像素一致。
+    ///
+    /// 断言「等于 classify_alpha(自己的像素)」而不是写死某个值：
+    /// 写死值只是在核对测试夹具的内容，而这里要守的是**传递关系**——
+    /// 组装时把透明类型算错或传丢，前端就会用错绘制方式。
+    #[test]
+    fn batch_alpha_mode_matches_its_own_pixels() {
+        let db = test_db();
+        let sc = test_schematic();
+        let data = build_from(&sc, &db).expect("build 失败");
+        assert!(!data.batches.is_empty(), "样本应产出至少一个批次");
+        for b in &data.batches {
+            assert_eq!(
+                b.alpha_mode,
+                classify_alpha(&b.texture_rgba),
+                "批次的透明类型与它自己的贴图像素不一致"
+            );
+        }
+    }
 
     /// 造一个方块库：单个版本，一个完整不透明立方体方块
     fn test_db() -> BlockDb {

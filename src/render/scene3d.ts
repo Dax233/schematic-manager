@@ -71,23 +71,28 @@ export function buildSceneGroup(data: SceneData): SceneGroup {
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.needsUpdate = true;
 
+    // 按贴图的透明类型决定绘制方式。三者必须分开：
+    //
+    // - opaque：全不透明，正常写深度，正常互相遮挡。
+    // - cutout：只有全透明与全不透明像素（树叶、草、藤蔓）。
+    //   用 alphaTest 恰好合适——它把全透明像素丢掉，画出来的部分照常写深度。
+    //   若改用混合，树叶之间会互相透视，看着像半透明的塑料片。
+    //   阈值取 0.5：贴图只有 0 与 255，取任何 0..1 之间的值结果都一样。
+    // - translucent：含真正的半透明像素（染色玻璃、水）。**不能用 alphaTest**：
+    //   实测白色/黄色染色玻璃的贴图各有 191 个像素的 alpha 落在 1..127，
+    //   它们会被整片丢弃，玻璃上出现窟窿。必须混合，并且不写深度，
+    //   否则半透明的面会把后面的几何挡掉。
+    const isCutout = batch.alphaMode === "cutout";
+    const isTranslucent = batch.alphaMode === "translucent";
     const mat = new THREE.MeshBasicMaterial({
       map: tex,
       vertexColors: true,
       // 后端给出的三角形绕序已使其法线朝外，因此正面渲染即可。
       // 用 DoubleSide 会同时画出方块内部的面，透视效果反而不对。
       side: THREE.FrontSide,
-      transparent: true,
-      // **不要**设 alphaTest。
-      //
-      // 染色玻璃这类贴图的 alpha 是半透明的（实测白色/黄色染色玻璃各 16×16
-      // 里有 191 个像素的 alpha 落在 1..127），原本按逐方块取的第一张玻璃贴图
-      // 首像素 alpha 为 163。alphaTest 会直接**丢弃**低于阈值的像素，
-      // 而这些像素本应作为半透明画出来——结果是玻璃上被挖出大片窟窿/缺面。
-      //
-      // 完全透明的像素（alpha=0）由 transparent + 普通混合处理，
-      // 不需要 alphaTest 也看不见，因此去掉它没有副作用。
-      depthWrite: false,
+      transparent: isTranslucent,
+      alphaTest: isCutout ? 0.5 : 0,
+      depthWrite: !isTranslucent,
     });
 
     const mesh = new THREE.Mesh(geo, mat);

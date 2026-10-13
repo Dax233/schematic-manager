@@ -44,6 +44,7 @@ function cubeScene(): SceneData {
         textureWidth: 2,
         textureHeight: 2,
         textureRgba: new Array(2 * 2 * 4).fill(255),
+        alphaMode: "opaque" as const,
       },
     ],
     totalVertices: positions.length / 3,
@@ -69,6 +70,59 @@ function triNormal(geo: THREE.BufferGeometry, i0: number, i1: number, i2: number
   const p2 = new THREE.Vector3(...vertex(geo, i2));
   return new THREE.Vector3().subVectors(p1, p0).cross(new THREE.Vector3().subVectors(p2, p0));
 }
+
+
+/** 透明类型必须决定材质参数，否则染色玻璃会被 alphaTest 挖出窟窿。
+ *
+ * 三种类型的差别不是风格问题：
+ * - opaque 不透明，正常写深度；
+ * - cutout（树叶/草）用 alphaTest 丢掉全透明像素，其余照常写深度；
+ * - translucent（染色玻璃/水）必须混合且不写深度，**不能用 alphaTest**，
+ *   否则它的半透明像素会被整片丢弃。
+ */
+describe("按透明类型选择材质", () => {
+  /** 造一个只有单批次、指定透明类型的场景 */
+  function sceneWith(alphaMode: "opaque" | "cutout" | "translucent"): SceneData {
+    const s = cubeScene();
+    s.batches[0].alphaMode = alphaMode;
+    return s;
+  }
+
+  function materialOf(alphaMode: "opaque" | "cutout" | "translucent"): THREE.MeshBasicMaterial {
+    const { group, dispose } = buildSceneGroup(sceneWith(alphaMode));
+    const mesh = group.children[0] as THREE.Mesh;
+    const mat = mesh.material as THREE.MeshBasicMaterial;
+    // 断言后再释放，避免 WebGL 资源泄漏
+    const snapshot = {
+      transparent: mat.transparent,
+      alphaTest: mat.alphaTest,
+      depthWrite: mat.depthWrite,
+    };
+    dispose();
+    // 用副本返回，避免调用方拿着已释放的材质
+    return snapshot as unknown as THREE.MeshBasicMaterial;
+  }
+
+  it("染色玻璃等半透明贴图必须用混合，不能被 alphaTest 丢弃像素", () => {
+    const m = materialOf("translucent");
+    expect(m.transparent, "半透明贴图必须开启混合").toBe(true);
+    expect(m.alphaTest, "半透明贴图不能用 alphaTest，否则半透明像素被丢弃").toBe(0);
+    expect(m.depthWrite, "半透明面不应写深度，否则会挡掉后面的几何").toBe(false);
+  });
+
+  it("树叶等镂空贴图用 alphaTest，并保留深度写入", () => {
+    const m = materialOf("cutout");
+    expect(m.alphaTest, "镂空贴图应丢弃全透明像素").toBe(0.5);
+    expect(m.depthWrite, "镂空部分必须写深度，否则后面的方块会透出来").toBe(true);
+  });
+
+  it("不透明贴图既不用混合也不用 alphaTest", () => {
+    const m = materialOf("opaque");
+    expect(m.transparent).toBe(false);
+    expect(m.alphaTest).toBe(0);
+    expect(m.depthWrite, "不透明方块必须写深度才能正确互相遮挡").toBe(true);
+  });
+});
 
 describe("scene3d 网格构建", () => {
   it("每个方块面都朝向外部", () => {
