@@ -322,6 +322,30 @@ describe("重新扫描后的选中项", () => {
   });
 });
 
+describe("对话框失败时的提示", () => {
+  it("打开目录选择框失败时给出提示，而不是静默无反应", async () => {
+    // 这条防的是：pickDirectory 把 `await open(...)` 放在 try 之外，
+    // 插件报错时这个 Promise 会静默 reject——用户点了「添加目录」
+    // 却什么都没发生，也收不到任何提示。
+    stubInvoke();
+    mockOpen.mockRejectedValue(new Error("对话框不可用"));
+    const w = mountApp();
+
+    const btn = w.findAll("button").find((b) => b.text().includes("添加目录"));
+    expect(btn, "应能定位到「添加目录」按钮").toBeTruthy();
+    await btn!.trigger("click");
+    await flushPromises();
+
+    expect(
+      document.body.textContent,
+      "应提示选择框打开失败，实际正文：" + (document.body.textContent ?? "").slice(0, 200),
+    ).toContain("打开目录选择框失败");
+    // 失败时不应误报正在扫描
+    expect(w.text(), "不应进入扫描状态").not.toContain("正在扫描");
+    w.unmount();
+  });
+});
+
 describe("重复文件筛查", () => {
   /** 在整份文档里按文案找按钮。
    *

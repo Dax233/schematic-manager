@@ -432,7 +432,17 @@ function syncSelection(items: SchematicSummary[]) {
 }
 
 async function pickDirectory() {
-  const dir = await open({ directory: true, multiple: false, title: "选择投影目录" });
+  // 对话框调用本身也可能失败（插件未就绪、系统对话框不可用）。
+  // 放在 try 之外会让这个 Promise 静默 reject：用户点了「添加目录」
+  // 却什么都没发生，也收不到任何提示。其余对话框调用都在 try 内，
+  // 这里保持一致。
+  let dir: unknown;
+  try {
+    dir = await open({ directory: true, multiple: false, title: "选择投影目录" });
+  } catch (e) {
+    Message.error(`打开目录选择框失败：${e}`);
+    return;
+  }
   if (typeof dir !== "string") return;
   status.value = "正在扫描…";
   try {
@@ -823,11 +833,19 @@ async function exportPreview() {
   if (!cur || !scene.value) return;
   const size = exportSize.value;
   const stem = cur.fileName.replace(/\.litematic$/i, "");
-  const target = await save({
-    title: "导出预览图",
-    defaultPath: `${stem}_preview_${size}.png`,
-    filters: [{ name: "PNG 图片", extensions: ["png"] }],
-  });
+  // 同 pickDirectory：保存对话框失败时必须给出提示，
+  // 放在 try 外会让这个 Promise 静默 reject，用户点了导出却没反应
+  let target: unknown;
+  try {
+    target = await save({
+      title: "导出预览图",
+      defaultPath: `${stem}_preview_${size}.png`,
+      filters: [{ name: "PNG 图片", extensions: ["png"] }],
+    });
+  } catch (e) {
+    Message.error(`打开保存对话框失败：${e}`);
+    return;
+  }
   if (typeof target !== "string") return;
 
   exporting.value = true;
