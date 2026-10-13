@@ -118,7 +118,19 @@ SHIM = r"""
     if (cmd === "plugin:window|theme") return Promise.resolve("light");
     switch (cmd) {
       case "scan_litematics":
-        return Promise.resolve({ items: [summary], skippedDirs: 0, skippedPaths: [] });
+        // 返回多条：列表能否出现纵向滚动条取决于内容是否超出可视高度，
+        // 只给一条时永远测不出滚动（表格内部高度足够容纳一行）。
+        // 标题里的「28速单区块简单熔炉」仍是第一条，后续断言依赖它。
+        var many = [summary];
+        for (var i = 1; i <= 40; i++) {
+          var s2 = {};
+          for (var k in summary) s2[k] = summary[k];
+          s2.fileName = "填充投影" + i + ".litematic";
+          s2.path = "C:/测试目录/填充投影" + i + ".litematic";
+          s2.name = "填充投影" + i;
+          many.push(s2);
+        }
+        return Promise.resolve({ items: many, skippedDirs: 0, skippedPaths: [] });
       case "peek_schematic": return Promise.resolve(summary);
       case "analyze_schematic": return Promise.resolve(analysis);
       case "build_scene": return Promise.resolve(scene);
@@ -167,9 +179,87 @@ SHIM = r"""
   // Arco 的空状态也渲染成一个 tr，用它会误判成「已有数据」而停止，
   // 结果一次都不点（上面这两个判据是实测踩出来的）。
   var tries = 0, state = "wait", clicked = false;
+
+  // 布局几何：确认左侧目录栏撑到底、表格内部可滚动、拖动条存在。
+  //
+  // 为什么必须量几何而不是看源码：这三个问题（底部留白、无滚动条、
+  // 拖动条不可用）在「构建成功、界面也渲染出来了」的情况下全都照样存在，
+  // 只有真实浏览器里的盒子尺寸能判定。
+  function measureLayout() {
+    var q = function (s) { return document.querySelector(s); };
+    var sb = q(".sidebar"), wb = q(".workbench"), sp = q(".splitter"), dt = q(".detail");
+    if (!sb || !wb || !sp || !dt) return "LAYOUT:missing";
+    var rSb = sb.getBoundingClientRect(), rWb = wb.getBoundingClientRect();
+    var rDt = dt.getBoundingClientRect();
+    // 表格滚动容器：Arco 的纵向滚动落在 .arco-table-body 上
+    var sc = sb.querySelector(".arco-table-body") || sb.querySelector(".arco-table-container");
+    var canScroll = sc ? (sc.scrollHeight > sc.clientHeight + 1) : false;
+    var scCls = sc ? String(sc.className).split(" ")[0] : "none";
+    // 目录栏底边与工作区/详情栏底边之差：应为 0
+    var gapWb = Math.round(rWb.bottom - rSb.bottom);
+    var gapDt = Math.round(rDt.bottom - rSb.bottom);
+    // 目录栏宽度，供拖动测试比对
+    var wBefore = Math.round(rSb.width);
+    return "LAYOUT:"
+      + "gapWb=" + gapWb
+      + ",gapDt=" + gapDt
+      + ",canScroll=" + canScroll
+      + ",scCls=" + scCls
+      + ",w=" + wBefore
+      + ",spW=" + Math.round(sp.getBoundingClientRect().width)
+      + ",spCursor=" + window.getComputedStyle(sp).cursor
+      + ",spRole=" + (sp.getAttribute("role") || "-")
+      + ",spTab=" + (sp.getAttribute("tabindex") || "-");
+  }
+
+  var layoutResult = "";
+  var dragState = null;
+
+  // 用真实指针事件拖动分隔条，确认宽度确实随之改变。
+  //
+  // 分两拍：pointerup 之后不能立刻量宽度。Vue 对 ref 的 DOM 更新是异步的，
+  // 同一次任务里读到的仍是改动前的宽度（第一版就是这样量出 Δ0 的假失败）。
+  function startDrag(dx) {
+    var sp = document.querySelector(".splitter");
+    var sb = document.querySelector(".sidebar");
+    if (!sp || !sb) { dragState = "none"; return; }
+    var before = Math.round(sb.getBoundingClientRect().width);
+    var box = sp.getBoundingClientRect();
+    var x = box.left + box.width / 2, y = box.top + 40;
+    var mk = function (type, cx) {
+      return new PointerEvent(type, {
+        bubbles: true, cancelable: true, composed: true,
+        pointerId: 1, pointerType: "mouse", isPrimary: true,
+        button: type === "pointerdown" ? 0 : -1, buttons: type === "pointerup" ? 0 : 1,
+        clientX: cx, clientY: y
+      });
+    };
+    sp.dispatchEvent(mk("pointerdown", x));
+    // 移到 window 上：实现把 pointermove 挂在 window，
+    // 这条路径同时验证了「拖出窄条后仍继续」这一要点
+    window.dispatchEvent(mk("pointermove", x + dx));
+    window.dispatchEvent(mk("pointerup", x + dx));
+    // 拖动应已结束：再发一次移动不应继续改变宽度
+    window.dispatchEvent(mk("pointermove", x + dx + 200));
+    dragState = { before: before, x: x };
+  }
+
+  // 下一拍量结果
+  function finishDrag() {
+    var sb = document.querySelector(".sidebar");
+    if (!sb || !dragState || dragState === "none") return "DRAG:none";
+    var after = Math.round(sb.getBoundingClientRect().width);
+    var r = "DRAG:before=" + dragState.before + ",after=" + after
+          + ",delta=" + (after - dragState.before)
+          + ",movedAfterUp=" + dragState.movedAfterUp;
+    dragState = null;
+    return r;
+  }
+
   function status() {
     document.title = "CALLS:" + CALLS.join("|")
-      + " SCAN:" + state + " DIALOGS:" + DIALOGS.join(",") + " tries=" + tries;
+      + " SCAN:" + state + " DIALOGS:" + DIALOGS.join(",") + " tries=" + tries
+      + " " + (layoutResult || "LAYOUT:pending");
   }
   status();
   var timer = setInterval(function () {
@@ -238,8 +328,11 @@ SHIM = r"""
       if (!pending) {
         dialogsDone = true;
         state = "dialog-checked";
+        // 对话框全部核对完，主界面已稳定：此时量布局最可靠
+        layoutResult = measureLayout();
+        // 拖动分两拍：这一拍发起，下一拍量结果
+        startDrag(120);
         status();
-        clearInterval(timer);
         return;
       }
       dialogTried.push(pending);
@@ -258,6 +351,12 @@ SHIM = r"""
       dlg.click();
       pendingCheck = pending;
       status();
+    } else if (dragState) {
+      // 上一拍完成了对话框核对并发起了拖动：现在量结果。
+      // 多等一拍是必须的——Vue 的 DOM 更新在微任务里，同拍读到的是旧宽度。
+      layoutResult += " " + finishDrag();
+      status();
+      clearInterval(timer);
     } else {
       clearInterval(timer);
     }
@@ -325,14 +424,18 @@ def main():
             "--virtual-time-budget=9000",
         ]
         os.makedirs(os.path.dirname(SHOT), exist_ok=True)
+        # 窗口尺寸取用户实际使用的大小（1827x1190）：目录栏需要「撑到底」与
+        # 「出现滚动条」这两点都和可视高度直接相关，用偏小的窗口量不出真实表现。
         shot = subprocess.run(
-            common + ["--hide-scrollbars", "--window-size=1400,900",
+            common + ["--hide-scrollbars", "--window-size=1827,1190",
                       f"--screenshot={SHOT}", url],
             capture_output=True, timeout=180,
         )
         print(f"截图退出码 {shot.returncode}")
 
-        dump = subprocess.run(common + ["--dump-dom", url],
+        # 尺寸必须与截图一致：布局几何是在这一趟里量的，
+        # 用默认的 800x600 会让「撑到底」「出现滚动条」都量成错的
+        dump = subprocess.run(common + ["--window-size=1827,1190", "--dump-dom", url],
                               capture_output=True, timeout=180)
         dom = dump.stdout.decode("utf-8", "replace")
         dom_path = os.path.join(os.path.dirname(SHOT), "render_dom.html")
@@ -391,6 +494,54 @@ def main():
             gone = kw not in visible
             results.append(gone)
             print(f"  {'不应再出现：' + kw:<24} {'仍在（错误）' if not gone else '已消失（正确）'}")
+
+        # ---- 布局几何：左侧目录栏的撑高、滚动与拖动 ----
+        print("\n=== 左侧目录栏布局 ===")
+        lay = re.search(r"LAYOUT:([^\s<]*)", visible)
+        dra = re.search(r"DRAG:([^\s<]*)", visible)
+        layout_ok = True
+
+        def claim(label, cond, detail=""):
+            nonlocal layout_ok
+            layout_ok = layout_ok and cond
+            print(f"  {label:<34} {'是' if cond else '否'}{detail}")
+
+        if not lay or lay.group(1) == "pending" or lay.group(1) == "missing":
+            print(f"  未能取到布局数据：{lay.group(1) if lay else '(无)'}")
+            layout_ok = False
+        else:
+            fields = {}
+            for part in lay.group(1).split(","):
+                k, _, v = part.partition("=")
+                fields[k] = v
+            gap_wb = int(fields.get("gapWb", "9999"))
+            gap_dt = int(fields.get("gapDt", "9999"))
+            # 目录栏底边应与工作区/详情栏底边齐平（容 1px 边框取整误差）
+            claim("目录栏延伸到底部（无空白）", abs(gap_wb) <= 1, f"  与工作区差 {gap_wb}px")
+            claim("目录栏与右侧栏等高", abs(gap_dt) <= 1, f"  与详情栏差 {gap_dt}px")
+            claim("表格内部出现纵向滚动", fields.get("canScroll") == "true",
+                  f"  容器 {fields.get('scCls')}")
+            claim("拖动条存在且有宽度", int(fields.get("spW", "0")) > 0,
+                  f"  宽 {fields.get('spW')}px")
+            claim("拖动条光标为 col-resize", fields.get("spCursor") == "col-resize")
+            claim("拖动条可聚焦（键盘可用）", fields.get("spTab") == "0",
+                  f"  role={fields.get('spRole')} tabindex={fields.get('spTab')}")
+            print(f"  目录栏宽度 {fields.get('w')}px")
+
+        if not dra or dra.group(1) == "none":
+            print("  未能取到拖动结果")
+            layout_ok = False
+        else:
+            df = {}
+            for part in dra.group(1).split(","):
+                k, _, v = part.partition("=")
+                df[k] = v
+            delta = int(df.get("delta", "0"))
+            # 向右拖 120px，宽度应确实增加（夹取范围内应接近 120）
+            claim("拖动能改变目录栏宽度", delta > 50,
+                  f"  {df.get('before')}px -> {df.get('after')}px（Δ{delta}）")
+
+        results.append(layout_ok)
 
         ok = all(results) and all(dlg_extra)
         size = os.path.getsize(SHOT) if os.path.exists(SHOT) else 0

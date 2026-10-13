@@ -644,3 +644,119 @@ describe("版本转换", () => {
   });
 });
 
+/** 左侧目录栏的宽度调整。
+ *
+ * 这类「看得见的布局」问题（宽度不可调、拖动没反应、窄窗口下右侧被挤没）
+ * 都不会让构建失败，也不会让别的测试失败，因此单独覆盖。
+ */
+describe("目录栏宽度调整", () => {
+  /** 取拖动条的当前宽度（由组件内联样式设置） */
+  function sidebarWidth(w: ReturnType<typeof mountApp>): number {
+    const el = w.find(".sidebar").element as HTMLElement;
+    return parseFloat(el.style.width || "0");
+  }
+
+  it("默认宽度与最窄宽度都在合理范围内", async () => {
+    const w = mountApp();
+    await flushPromises();
+    const def = sidebarWidth(w);
+    expect(def, "默认宽度应够放下三列").toBeGreaterThanOrEqual(320);
+    expect(def, "默认宽度不应把右侧挤没").toBeLessThanOrEqual(1200);
+
+    const splitter = w.find(".splitter");
+    expect(splitter.exists(), "应有拖动条").toBe(true);
+    // 可聚焦与 role 是键盘可用的前提
+    expect(splitter.attributes("role")).toBe("separator");
+    expect(splitter.attributes("tabindex")).toBe("0");
+    w.unmount();
+  });
+
+  it("拖动会改变宽度，且 pointerup 之后不再跟随", async () => {
+    const w = mountApp();
+    await flushPromises();
+    const before = sidebarWidth(w);
+
+    const splitter = w.find(".splitter").element as HTMLElement;
+    // 真实触发 pointerdown，再由 window 收 pointermove：
+    // 实现把监听挂在 window 上，正是为了让指针移出窄条后仍能继续拖动
+    splitter.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: before }),
+    );
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: before + 120 }));
+    await flushPromises();
+    const during = sidebarWidth(w);
+    expect(during, "拖动应加宽目录栏").toBeGreaterThan(before);
+
+    window.dispatchEvent(new PointerEvent("pointerup", { clientX: before + 120 }));
+    await flushPromises();
+    const settled = sidebarWidth(w);
+
+    // 松开之后再移动不应继续改宽度——否则拖动条会「粘住」
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: before + 400 }));
+    await flushPromises();
+    expect(sidebarWidth(w), "pointerup 之后不能再跟随指针").toBe(settled);
+    w.unmount();
+  });
+
+  it("宽度被夹在上下限内，不会拖到不可用", async () => {
+    const w = mountApp();
+    await flushPromises();
+    const splitter = w.find(".splitter").element as HTMLElement;
+
+    const dragTo = async (clientX: number) => {
+      splitter.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 0 }),
+      );
+      window.dispatchEvent(new PointerEvent("pointermove", { clientX }));
+      window.dispatchEvent(new PointerEvent("pointerup", { clientX }));
+      await flushPromises();
+    };
+
+    // 往左拖到负数：不能出现 0 或负宽度
+    await dragTo(-500);
+    expect(sidebarWidth(w), "向左拖到底应停在下限").toBeGreaterThanOrEqual(320);
+
+    // 往右拖到很远：不能把右侧详情区挤没
+    await dragTo(99999);
+    expect(sidebarWidth(w), "向右拖到底应停在上限之内").toBeLessThanOrEqual(1200);
+    w.unmount();
+  });
+
+  it("键盘左右方向键可调整宽度", async () => {
+    const w = mountApp();
+    await flushPromises();
+    const splitter = w.find(".splitter");
+    const before = sidebarWidth(w);
+
+    await splitter.trigger("keydown", { key: "ArrowRight" });
+    await flushPromises();
+    expect(sidebarWidth(w), "右方向键应加宽").toBeGreaterThan(before);
+
+    const widened = sidebarWidth(w);
+    await splitter.trigger("keydown", { key: "ArrowLeft" });
+    await flushPromises();
+    expect(sidebarWidth(w), "左方向键应收窄").toBeLessThan(widened);
+
+    await splitter.trigger("keydown", { key: "Home" });
+    await flushPromises();
+    expect(sidebarWidth(w), "Home 应回到最窄").toBe(320);
+    w.unmount();
+  });
+
+  it("双击拖动条在默认宽度与最窄宽度之间切换", async () => {
+    const w = mountApp();
+    await flushPromises();
+    const splitter = w.find(".splitter");
+    expect(sidebarWidth(w)).toBe(560);
+
+    await splitter.trigger("dblclick");
+    await flushPromises();
+    expect(sidebarWidth(w), "双击应收起到最窄").toBe(320);
+
+    await splitter.trigger("dblclick");
+    await flushPromises();
+    expect(sidebarWidth(w), "再次双击应回到默认宽度").toBe(560);
+    w.unmount();
+  });
+});
+

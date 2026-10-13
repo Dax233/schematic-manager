@@ -87,15 +87,68 @@ body,
   flex: 1 1 auto;
   display: flex;
   min-height: 0;
+
+  // 拖动分隔条期间：屏蔽文本选择，否则会把表格里的文字一起选中
+  &.is-resizing {
+    user-select: none;
+    cursor: col-resize;
+  }
 }
 
+// 左侧目录栏：高度撑满 workbench，底部不留空白。
+//
+// 宽度由 App.vue 内联给出（sidebarWidth），因为用户可以拖动调整。
+// 这里只给收缩下限，避免窄窗口下把右侧挤没。
 .sidebar {
-  width: 560px;
-  min-width: 360px;
-  border-right: 1px solid var(--color-border-1);
+  flex: 0 0 auto;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  border-right: 1px solid var(--color-border-1);
+
+  // 表格占满整个高度，内部滚动条由 a-table 的 :scroll="{ y: '100%' }" 提供。
+  // 关键点：这里必须是 min-height:0 + flex:1，否则表格会按内容高度撑开，
+  // 既撑不满底部，也不会出现纵向滚动条。
+  > .arco-table {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  // 表格滚动容器承接纵向滚动，并让表头固定
+  .arco-table-container {
+    height: 100%;
+  }
+}
+
+// 拖动条：视觉上是一条细窄的分隔线，命中区域比看起来宽，便于抓取
+.splitter {
+  flex: 0 0 auto;
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 2;
+  // 触屏与精细指针都能用
+  touch-action: none;
+
+  // 命中区域向两侧各扩 2px，避免要精确对准 5px 的窄条
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0 -2px;
+  }
+
+  &:hover,
+  &:focus-visible {
+    background: rgb(var(--primary-6));
+    outline: none;
+  }
+
+  &:focus-visible {
+    // 键盘聚焦时给一条可见的提示，颜色交给主题变量
+    box-shadow: 0 0 0 2px rgb(var(--primary-3));
+  }
 }
 
 .detail {

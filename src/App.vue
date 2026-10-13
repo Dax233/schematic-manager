@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { ImportOutcome, PackEntry, PackLoadFailure } from "./types";
@@ -81,6 +81,103 @@ const saving = ref(false);
 const draft = ref({ name: "", author: "", description: "" });
 const dirty = ref(false);
 const searchText = ref("");
+
+/** 左侧目录栏宽度（像素）。
+ *
+ * 用户可以拖动中间的拖动条调整，因此不写死在样式里。
+ * 取值同时受 MIN/MAX 约束：太窄会让「名称/制作版本/尺寸」三列挤在一起、
+ * 太宽则把右侧预览与详情压得过小。
+ */
+const SIDEBAR_MIN_W = 320;
+const SIDEBAR_MAX_W = 1200;
+const sidebarWidth = ref(560);
+/** 是否正在拖动分隔条。拖动期间禁用过渡并屏蔽文本选择 */
+const resizing = ref(false);
+
+/// 夹到合法区间，避免拖动或窗口变化后得到不可用宽度
+function clampSidebar(w: number): number {
+  const maxByWindow = Math.max(SIDEBAR_MIN_W, window.innerWidth - 360);
+  return Math.min(Math.max(Math.round(w), SIDEBAR_MIN_W),
+    Math.min(SIDEBAR_MAX_W, maxByWindow));
+}
+
+/// 从指针事件取横坐标并更新宽度
+function resizeTo(clientX: number) {
+  sidebarWidth.value = clampSidebar(clientX);
+}
+
+function onSplitterMove(e: PointerEvent) {
+  if (!resizing.value) return;
+  resizeTo(e.clientX);
+}
+
+function stopResize() {
+  if (!resizing.value) return;
+  resizing.value = false;
+  window.removeEventListener("pointermove", onSplitterMove);
+  window.removeEventListener("pointerup", stopResize);
+  window.removeEventListener("pointercancel", stopResize);
+}
+
+/** 开始拖动分隔条。
+ *
+ * 监听挂在 window 上而不是分隔条自身：指针移出那条 5px 宽的窄条后
+ * 事件仍会继续送到 window，拖动才不会中途断掉。
+ */
+function startResize(e: PointerEvent) {
+  // 只响应左键，避免右键菜单等操作把界面拖乱
+  if (e.button !== 0) return;
+  e.preventDefault();
+  resizing.value = true;
+  window.addEventListener("pointermove", onSplitterMove);
+  window.addEventListener("pointerup", stopResize);
+  window.addEventListener("pointercancel", stopResize);
+}
+
+/** 双击分隔条：在默认宽度与最窄宽度之间切换，便于快速让出空间 */
+function toggleSidebarWidth() {
+  sidebarWidth.value = sidebarWidth.value <= SIDEBAR_MIN_W + 8
+    ? clampSidebar(560)
+    : SIDEBAR_MIN_W;
+}
+
+/** 键盘可用的分隔条：左右方向键调整宽度。
+ *
+ * 分隔条是 role="separator" 的可聚焦元素，必须能用键盘操作，
+ * 只支持鼠标拖动会让键盘用户无法调整布局。
+ */
+function onSplitterKey(e: KeyboardEvent) {
+  const step = e.shiftKey ? 40 : 8;
+  if (e.key === "ArrowLeft") {
+    sidebarWidth.value = clampSidebar(sidebarWidth.value - step);
+  } else if (e.key === "ArrowRight") {
+    sidebarWidth.value = clampSidebar(sidebarWidth.value + step);
+  } else if (e.key === "Home") {
+    sidebarWidth.value = SIDEBAR_MIN_W;
+  } else if (e.key === "End") {
+    sidebarWidth.value = clampSidebar(SIDEBAR_MAX_W);
+  } else {
+    return;
+  }
+  e.preventDefault();
+}
+
+/** 窗口变窄时把过宽的目录栏收回来，否则右侧会被挤没 */
+function onWindowResize() {
+  const clamped = clampSidebar(sidebarWidth.value);
+  if (clamped !== sidebarWidth.value) sidebarWidth.value = clamped;
+}
+
+onMounted(() => {
+  window.addEventListener("resize", onWindowResize);
+  onWindowResize();
+});
+
+// 组件卸载时摘掉 window 上的监听，避免拖动中关闭窗口而留下悬挂的监听
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", onWindowResize);
+  stopResize();
+});
 
 // 版本转换
 const convOpen = ref(false);
@@ -944,8 +1041,8 @@ void followSystemTheme();
       </span>
     </div>
 
-    <div class="workbench">
-      <div class="sidebar">
+    <div class="workbench" :class="{ 'is-resizing': resizing }">
+      <div class="sidebar" :style="{ width: sidebarWidth + 'px' }">
         <a-table
           :columns="columns"
           :data="filteredFiles"
@@ -962,6 +1059,22 @@ void followSystemTheme();
           </template>
         </a-table>
       </div>
+
+      <!-- 拖动条：调整左侧目录栏宽度 -->
+      <div
+        class="splitter"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整目录栏宽度"
+        :aria-valuenow="sidebarWidth"
+        :aria-valuemin="SIDEBAR_MIN_W"
+        :aria-valuemax="SIDEBAR_MAX_W"
+        tabindex="0"
+        title="拖动调整宽度，双击复位"
+        @pointerdown="startResize"
+        @dblclick="toggleSidebarWidth"
+        @keydown="onSplitterKey"
+      />
 
       <div class="detail">
         <div class="preview">
