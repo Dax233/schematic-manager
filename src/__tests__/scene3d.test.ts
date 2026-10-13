@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { applyPreset, buildSceneGroup, EXPORT_SIZES, VIEW_PRESETS } from "../render/scene3d";
+import {
+  applyPreset,
+  buildSceneGroup,
+  EXPORT_SIZES,
+  fitCamera,
+  VIEW_PRESETS,
+} from "../render/scene3d";
 import type { SceneData } from "../types";
 
 /** 一个 1×1×1 的立方体场景，六面齐全。
@@ -265,5 +271,82 @@ describe("相机取景", () => {
 describe("导出尺寸", () => {
   it("提供 512 / 1024 / 2048 / 3072 四档", () => {
     expect([...EXPORT_SIZES]).toEqual([512, 1024, 2048, 3072]);
+  });
+});
+
+/** 相机必须对准结构中心，否则取景会偏、旋转也会绕错点。 */
+describe("相机取景", () => {
+  /** 造一个偏移到指定位置的立方体，用来验证取景是否跟着结构走 */
+  function cubeAt(x: number, y: number, z: number): THREE.Group {
+    const { group } = buildSceneGroup(cubeScene());
+    group.position.set(x, y, z);
+    group.updateMatrixWorld(true);
+    return group;
+  }
+
+  function newCamera(): THREE.PerspectiveCamera {
+    const cam = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+    cam.updateMatrixWorld(true);
+    return cam;
+  }
+
+  it("取景后相机朝向结构中心", () => {
+    const group = cubeAt(100, 200, 300);
+    const cam = newCamera();
+    fitCamera(cam, group);
+
+    const box = new THREE.Box3().setFromObject(group);
+    const center = box.getCenter(new THREE.Vector3());
+    // lookAt 已把朝向设好，但方向要在 updateMatrixWorld 之后才反映到矩阵里
+    cam.updateMatrixWorld(true);
+    const dir = cam.getWorldDirection(new THREE.Vector3());
+    const toCenter = center.clone().sub(cam.position).normalize();
+    expect(
+      dir.dot(toCenter),
+      "相机朝向应与「相机 -> 结构中心」几乎一致；偏差大说明取景没对准结构",
+    ).toBeGreaterThan(0.999);
+  });
+
+  it("结构离原点越远，相机就跟着移到越远", () => {
+    // 这条防的是「只在原点取景」：那样结构放在远处时会飞出画面
+    const near = cubeAt(0, 0, 0);
+    const far = cubeAt(500, 500, 500);
+    const camNear = newCamera();
+    const camFar = newCamera();
+    fitCamera(camNear, near);
+    fitCamera(camFar, far);
+
+    expect(
+      camFar.position.length(),
+      "结构移到 (500,500,500) 后相机也必须跟着移过去",
+    ).toBeGreaterThan(camNear.position.length() + 100);
+  });
+
+  it("四个预设视角都对准结构中心", () => {
+    const group = cubeAt(20, 30, 40);
+    const box = new THREE.Box3().setFromObject(group);
+    const center = box.getCenter(new THREE.Vector3());
+
+    for (const name of Object.keys(VIEW_PRESETS)) {
+      const cam = newCamera();
+      applyPreset(cam, group, name);
+      cam.updateMatrixWorld(true);
+      const dir = cam.getWorldDirection(new THREE.Vector3());
+      const toCenter = center.clone().sub(cam.position).normalize();
+      expect(
+        dir.dot(toCenter),
+        `预设视角「${name}」没有对准结构中心`,
+      ).toBeGreaterThan(0.999);
+    }
+  });
+
+  it("空结构不会把相机弄成 NaN", () => {
+    const empty = new THREE.Group();
+    const cam = newCamera();
+    fitCamera(cam, empty);
+    // Box3 为空时若不特判，radius/dist 会变成 NaN 并把相机弄坏
+    expect(Number.isFinite(cam.position.x), "相机位置不应为 NaN").toBe(true);
+    expect(Number.isFinite(cam.position.y)).toBe(true);
+    expect(Number.isFinite(cam.position.z)).toBe(true);
   });
 });
