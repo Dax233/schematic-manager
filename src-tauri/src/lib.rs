@@ -1,4 +1,4 @@
-﻿mod backup;
+mod backup;
 mod block_model;
 mod block_search;
 mod blockstate;
@@ -23,6 +23,9 @@ mod pool;
 mod pack_build;
 mod pack_registry;
 mod replace;
+// 针对任意真实投影集合的端到端核对，按需运行（标了 #[ignore]）
+#[cfg(test)]
+mod real_project;
 mod scene;
 mod startup;
 mod transform;

@@ -33,3 +33,6 @@
 #[path = "../../src-tauri/src/zip.rs"] mod zip;
 #[path = "../../src-tauri/src/backup.rs"] mod backup;
 #[path = "../../src-tauri/src/startup.rs"] mod startup;
+// 真实投影的端到端核验。用例都标了 #[ignore]，这里的价值是把它们**编译**
+// 一遍：写错字段名或签名时，离线也能发现，不必等有 cargo 依赖时才暴露。
+#[path = "../../src-tauri/src/real_project.rs"] mod real_project;

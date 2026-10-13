@@ -135,15 +135,21 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 ```
 
 仓库内只随源码分发一个小体积样本（见 `src-tauri/tests/data/README.md`）。
-若要拿自己收藏的真实投影核验解析与 3D 预览的覆盖面，用这两个按需运行的用例：
+若要拿自己收藏的真实投影核验各功能的覆盖面，用这几个按需运行的用例：
 
 ```bash
 SM_REAL_DIR=/path/to/projects \
   cargo test --manifest-path src-tauri/Cargo.toml --lib -- --ignored --nocapture
 ```
 
-前者逐个核对「载入 → 区域结构 → NBT 往返零损失 → 方块统计」，
-后者用随包分发的方块库为每个投影构建 3D 场景，并报出未能解析的方块数。
+对目录下每个真实投影依次核对：
+
+- 载入、区域结构自检、NBT 往返零信息损失、方块统计
+- 用随包分发的方块库构建 3D 场景，并报出未能解析的方块数
+- 方块替换：替换 → 写出 → 读回，核对体积与方块总数不变
+- 版本转换：转换 → 写出 → 读回，核对 dataVersion 已改写且体积不变
+- 查重：副本被判为重复、内容不同的文件不被误判
+
 未设置 `SM_REAL_DIR` 时会直接失败，不会静默跳过。
 
 界面渲染检查（需先 `pnpm build`，且本机装有 Chrome / Edge / Chromium）：
