@@ -2,20 +2,22 @@
 /**
  * 把仓库内的版本号统一改写为指定版本。
  *
- * 涉及三处，必须保持一致：
- *   1. package.json          -> "version"
- *   2. src-tauri/Cargo.toml  -> [package] version
- *   3. src-tauri/tauri.conf.json -> "version"
+ * 涉及四处，必须保持一致：
+ *   1. package.json               -> "version"
+ *   2. src-tauri/Cargo.toml       -> [package] version
+ *   3. src-tauri/tauri.conf.json  -> "version"
+ *   4. src-tauri/Cargo.lock       -> 本包（name = "schematic-manager"）的 version
  *
  * 用法：
  *   node scripts/bump-version.mjs 1.0.1        # 指定版本
  *   node scripts/bump-version.mjs --next       # 当前版本 PATCH + 1
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 
 const PKG = "package.json";
 const CARGO = "src-tauri/Cargo.toml";
 const CONF = "src-tauri/tauri.conf.json";
+const LOCK = "src-tauri/Cargo.lock";
 
 function readJson(p) { return JSON.parse(readFileSync(p, "utf8")); }
 
@@ -56,10 +58,35 @@ function setConf(v) {
   writeFileSync(CONF, JSON.stringify(j, null, 2) + "\n", "utf8");
 }
 
+/**
+ * 同步 Cargo.lock 里本包的版本号。
+ *
+ * 锁文件里也有一份本包版本（`[[package]]` 下的 `name` / `version`）。
+ * 不改它的话，正式发布后 Cargo.toml 与 Cargo.lock 会长期不一致——
+ * 构建时 cargo 会改写锁文件，但那发生在工作区里，不会提交回仓库，
+ * 于是仓库永远停在旧版本上（用 `--locked` 构建时会直接失败）。
+ *
+ * 只改本包那一条，依赖项的版本保持原样：用 `name` 紧邻的前缀锚定，
+ * 避免误伤同名的依赖或其它条目。
+ */
+function setLock(v) {
+  // 锁文件还没生成时（例如刚克隆后未构建）跳过，不算错误
+  if (!existsSync(LOCK)) return;
+  const src = readFileSync(LOCK, "utf8");
+  const re = /(\[\[package\]\]\nname = "schematic-manager"\nversion = )"[^"]*"/;
+  const out = src.replace(re, `$1"${v}"`);
+  const already = src.includes(`name = "schematic-manager"\nversion = "${v}"`);
+  if (out === src && !already) {
+    throw new Error("在 Cargo.lock 中未找到本包的 version 字段");
+  }
+  writeFileSync(LOCK, out, "utf8");
+}
+
 function apply(v) {
   setPackage(v);
   setCargo(v);
   setConf(v);
+  setLock(v);
   console.log(`版本号已统一为 ${v}`);
 }
 

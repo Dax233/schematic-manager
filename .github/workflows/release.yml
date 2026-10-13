@@ -251,9 +251,11 @@ jobs:
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
             libgtk-3-dev patchelf
 
-      - name: 统一三处版本号为 ${{ needs.prepare.outputs.version }}
+      - name: 统一仓库内版本号为 ${{ needs.prepare.outputs.version }}
         # 程序内置版本号取自 Cargo.toml，安装包文件名取自 tauri.conf.json，
-        # 两者与 package.json 必须一致，否则「装的版本」与「显示的版本」会对不上
+        # 两者与 package.json 必须一致，否则「装的版本」与「显示的版本」会对不上。
+        # Cargo.lock 里的本包版本也一并同步：它虽然会被 cargo 自动改写，
+        # 但那是工作区内的改动，不提交就会让仓库长期停在旧版本上。
         run: node scripts/bump-version.mjs ${{ needs.prepare.outputs.version }}
 
       - name: 环境诊断
@@ -411,7 +413,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           node scripts/bump-version.mjs --next
           next="$(node -p "require('./package.json').version")"
-          git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
+          git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json src-tauri/Cargo.lock
           git commit -m "chore: 版本号递增到 ${next} [skip ci]"
           git push origin HEAD:${{ github.event.repository.default_branch }}
           echo "已将版本号递增到 ${next}"
