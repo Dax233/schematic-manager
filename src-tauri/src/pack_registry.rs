@@ -110,7 +110,8 @@ fn unescape(s: &str) -> String {
 ///
 /// 单行解析失败时跳过该行而不是整体失败：清单由程序写出，
 /// 但用户可能手工编辑；一行有误不应让其余已导入的包全部不可用。
-/// 跳过的行数由调用方通过返回值判断（见 `load_with_errors`）。
+/// 跳过的行数由调用方通过返回值判断（见 `parse_with_errors`）。
+#[cfg(test)]
 pub fn parse(text: &str) -> Vec<PackEntry> {
     parse_with_errors(text).0
 }
@@ -233,7 +234,6 @@ pub fn set_enabled(entries: &mut [PackEntry], file: &str, enabled: bool) -> bool
 /// 避免各处写法不一致——「是否为叠加包」直接决定合并时如何处理版本。
 pub struct LoadItem {
     pub file: String,
-    pub name: String,
     pub is_overlay: bool,
 }
 
@@ -247,7 +247,6 @@ pub fn enabled_for_load(entries: &[PackEntry]) -> Vec<LoadItem> {
         .filter(|e| e.enabled)
         .map(|e| LoadItem {
             file: e.file.clone(),
-            name: e.name.clone(),
             // 只有模组包是叠加层；MC 版本包是独立的基础版本
             is_overlay: e.kind == PackKind::Mod,
         })
@@ -255,6 +254,7 @@ pub fn enabled_for_load(entries: &[PackEntry]) -> Vec<LoadItem> {
 }
 
 /// 已导入包涉及的数据版本（去重、升序）。用于判断「该版本的贴图是否已具备」。
+#[cfg(test)]
 pub fn imported_data_versions(entries: &[PackEntry]) -> Vec<i32> {
     let mut v: Vec<i32> = entries.iter().map(|e| e.data_version).collect();
     v.sort_unstable();

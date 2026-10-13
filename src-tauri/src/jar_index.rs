@@ -8,7 +8,9 @@
 //!
 //! 纯字符串处理，不涉及文件 IO，因此可完整测试。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::BTreeSet;
 
 /// assets 下的固定子目录名
 const DIR_BLOCKSTATES: &str = "blockstates";
@@ -123,6 +125,7 @@ pub fn build(entries: &[String]) -> JarIndex {
 ///
 /// blockstate 与 model 里引用贴图用的就是这个形式，例如
 /// `assets/minecraft/textures/block/stone.png` -> `block/stone`。
+#[cfg(test)]
 pub fn texture_path(entry: &str) -> Option<String> {
     let ns = namespace_of(entry)?;
     let prefix = format!("assets/{ns}/textures/");
@@ -155,6 +158,7 @@ pub fn qualify(reference: &str, cur_ns: &str) -> Option<String> {
 }
 
 /// 收集全部命名空间（含只有贴图没有 blockstates 的）
+#[cfg(test)]
 pub fn namespaces(entries: &[String]) -> BTreeSet<String> {
     entries.iter().filter_map(|e| namespace_of(e)).map(|s| s.to_string()).collect()
 }

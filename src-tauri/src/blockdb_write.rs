@@ -396,7 +396,6 @@ mod tests {
             is_overlay: false,
         };
         BlockDb {
-            format_version: 3,
             strings,
             langs: vec![vec![LangEntry {
                 block_name: "minecraft:stone".into(),
@@ -419,7 +418,6 @@ mod tests {
         let bytes = serialize(&db).expect("序列化失败");
         let back = BlockDb::load_from_bytes(&bytes, false).expect("读回失败");
 
-        assert_eq!(back.format_version, FORMAT_VERSION);
         assert_eq!(back.versions.len(), 1);
         let v = &back.versions[0];
         assert_eq!(v.name, "1.20.1");

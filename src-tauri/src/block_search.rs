@@ -193,7 +193,6 @@ mod tests {
 
     fn db_with(versions: Vec<VersionDef>) -> BlockDb {
         BlockDb {
-            format_version: 3,
             strings: Vec::new(),
             langs: Vec::new(),
             textures: Vec::new(),

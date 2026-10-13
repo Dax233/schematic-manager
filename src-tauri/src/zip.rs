@@ -63,11 +63,13 @@ impl Archive {
     }
 
     /// 按前缀列出条目名（Minecraft 资源常按目录组织）
+    #[cfg(test)]
     pub fn list_prefix<'a>(&'a self, prefix: &'a str) -> Vec<&'a Entry> {
         self.entries.iter().filter(|e| e.name.starts_with(prefix)).collect()
     }
 
     /// 全部条目名
+    #[cfg(test)]
     pub fn names(&self) -> Vec<&str> {
         self.entries.iter().map(|e| e.name.as_str()).collect()
     }

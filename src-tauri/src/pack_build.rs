@@ -270,7 +270,6 @@ where
 
 
     let db = BlockDb {
-        format_version: 3,
         strings: strings.items.clone(),
         langs: vec![Vec::<LangEntry>::new()],
         textures: tex_infos,

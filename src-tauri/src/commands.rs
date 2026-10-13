@@ -898,7 +898,6 @@ mod tests {
             is_overlay: false,
         };
         BlockDb {
-            format_version: 3,
             strings,
             langs: vec![vec![LangEntry {
                 block_name: block.into(),

@@ -84,6 +84,7 @@ impl<T> ContentPool<T> {
         self.items.len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
@@ -92,11 +93,13 @@ impl<T> ContentPool<T> {
         &self.items
     }
 
+    #[cfg(test)]
     pub fn get(&self, i: usize) -> Option<&T> {
         self.items.get(i)
     }
 
     /// 内容对应的下标（只查不建）
+    #[cfg(test)]
     pub fn find(&self, key: &[u8]) -> Option<usize> {
         let h = fingerprint(key);
         let cands = self.by_hash.get(&h)?;
@@ -104,6 +107,7 @@ impl<T> ContentPool<T> {
     }
 
     /// 池中全部内容的总字节数，供调用方判断体积
+    #[cfg(test)]
     pub fn total_key_bytes(&self) -> usize {
         self.keys.iter().map(|k| k.len()).sum()
     }

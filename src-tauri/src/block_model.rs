@@ -233,7 +233,6 @@ mod tests {
 
     fn db_with(block: BlockDef, version_name: &str, data_version: i32) -> BlockDb {
         BlockDb {
-            format_version: 3,
             strings: Vec::new(),
             langs: Vec::new(),
             textures: vec![TextureInfo { w: 1, h: 1, offset: 0, len: 4, has_alpha: false }],

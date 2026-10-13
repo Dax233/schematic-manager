@@ -46,6 +46,7 @@ pub struct SceneData {
 }
 
 impl SceneData {
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.batches.is_empty()
     }
@@ -151,12 +152,6 @@ pub fn build_with_db(schematic_path: &str, db: &BlockDb) -> AppResult<SceneData>
     build_from(&sc, db)
 }
 
-/// 从文件载入并组装场景。
-pub fn build(schematic_path: &str, db_path: &str) -> AppResult<SceneData> {
-    let db = BlockDb::load(db_path, false)?;
-    build_with_db(schematic_path, &db)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,7 +213,6 @@ mod tests {
             is_overlay: false,
         };
         BlockDb {
-            format_version: 3,
             strings: vec!["block/test".to_string()],
             langs: Vec::new(),
             // 池下标 1 才是该方块要用的贴图；池下标 0 是干扰项，
@@ -262,7 +256,6 @@ mod tests {
                 ..Default::default()
             }],
             path: String::new(),
-            loaded: true,
             meta_modified: false,
             blocks_modified: false,
         }

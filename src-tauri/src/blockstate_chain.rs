@@ -62,6 +62,7 @@ pub fn resolve_model_id(raw: &str, cur_ns: &str) -> Option<String> {
 }
 
 /// 模型 id 对应的 jar 内条目路径
+#[cfg(test)]
 pub fn model_entry_path(id: &str) -> Option<String> {
     let (ns, path) = id.split_once(':')?;
     if ns.is_empty() || path.is_empty() {

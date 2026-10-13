@@ -15,6 +15,7 @@
 use crate::blockdb::{Model, ModelElement, ModelFace};
 use crate::blockstate::{ModelDef, ModelElementDef};
 use crate::blockstate_chain::{is_force_translucent, resolve_tex_ref, Chain};
+#[cfg(test)]
 use std::collections::HashMap;
 
 /// 六个面名，下标即面序号（与 blockdb::Face 一致）
@@ -260,6 +261,7 @@ pub fn resolve_face_texture_path(chain: &Chain, raw: &str, cur_ns: &str) -> Opti
 /// 解析部分（变量链、命名空间规范化）**委托给 `resolve_face_texture_path`**，
 /// 只额外做一次字符串池查表。两份实现各写一遍时，测试覆盖的是测试专用的
 /// 那一份，产品实际走的那份反而没有直接覆盖——这里保持单一实现。
+#[cfg(test)]
 pub fn resolve_face_texture(
     chain: &Chain,
     raw: &str,

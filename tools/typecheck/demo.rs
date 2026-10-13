@@ -156,7 +156,7 @@ fn main() {
     out!("  压缩后大小：{} 字节", db_bytes.len());
     // 走产品同一条载入路径（按容器魔数自动解压）
     let db = crate::blockdb::BlockDb::load(&dbz, false).expect("加载失败");
-    out!("  格式版本：{}", db.format_version);
+    out!("  格式版本：{}", crate::blockdb::FORMAT_VERSION);
     out!("  字符串表：{} 条", db.strings.len());
     out!("  贴图：{} 张", db.textures.len());
     out!("  模型：{} 个", db.models.len());

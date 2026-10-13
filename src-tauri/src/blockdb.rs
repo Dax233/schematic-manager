@@ -10,7 +10,12 @@ use crate::error::{AppError, AppResult};
 use std::collections::HashMap;
 
 const MAGIC: &[u8; 7] = b"PMBLKDB";
-const FORMAT_VERSION: u32 = 3;
+
+/// 本程序支持的方块库格式版本。
+///
+/// 载入时用它校验文件头；对外公开是为了让诊断工具能报告「读到的格式版本」，
+/// 而无需在 `BlockDb` 里再存一份与常量重复的副本。
+pub const FORMAT_VERSION: u32 = 3;
 
 /// 各段的数量上限，用于拒绝异常或损坏的文件。
 /// 取值与 legacy-cpp 的读取实现一致。
@@ -148,6 +153,7 @@ pub struct VersionDef {
 
 impl VersionDef {
     /// 按方块名查中文名，找不到时回退到英文名，再回退到方块名本身
+    #[cfg(test)]
     pub fn display_name(&self, block_name: &str) -> String {
         for e in &self.langs {
             if e.block_name == block_name {
@@ -263,7 +269,6 @@ impl<'a> BinReader<'a> {
 /// 因此不要在日志里直接打印本类型。
 #[derive(Debug)]
 pub struct BlockDb {
-    pub format_version: u32,
     pub strings: Vec<String>,
     pub langs: Vec<Vec<LangEntry>>,
     pub textures: Vec<TextureInfo>,
@@ -495,7 +500,7 @@ impl BlockDb {
             }
         }
 
-        Ok(Self { format_version, strings, langs, textures, models, versions, pixels })
+        Ok(Self { strings, langs, textures, models, versions, pixels })
     }
 
     /// 从 pack 文件载入。
@@ -702,6 +707,7 @@ impl BlockDb {
     }
 
     /// 取某个贴图的像素切片
+    #[cfg(test)]
     pub fn texture_pixels(&self, idx: usize) -> Option<&[u8]> {
         let t = self.textures.get(idx)?;
         let start = t.offset as usize;
@@ -879,7 +885,6 @@ mod tests {
     #[test]
     fn parses_minimal_pack() {
         let db = BlockDb::load_from_bytes(&build_minimal_pack(), false).expect("解析失败");
-        assert_eq!(db.format_version, 3);
         assert_eq!(db.versions.len(), 1);
         assert_eq!(db.models.len(), 1);
         assert_eq!(db.textures.len(), 1);
@@ -1050,7 +1055,6 @@ mod tests {
         let db = BlockDb::load(path.to_str().unwrap(), false)
             .unwrap_or_else(|e| panic!("内置方块库 {} 无法载入：{e}", path.display()));
 
-        assert_eq!(db.format_version, FORMAT_VERSION);
         assert!(!db.versions.is_empty(), "应含版本");
         assert!(!db.textures.is_empty(), "应含贴图");
         assert!(!db.models.is_empty(), "应含模型");
@@ -1217,7 +1221,6 @@ mod tests {
             is_overlay: false,
         };
         BlockDb {
-            format_version: 3,
             strings,
             langs: vec![vec![LangEntry {
                 block_name: block.into(),

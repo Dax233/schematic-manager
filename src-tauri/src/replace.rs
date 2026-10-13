@@ -240,7 +240,6 @@ mod tests {
                 ..Default::default()
             }],
             path: String::new(),
-            loaded: true,
             meta_modified: false,
             blocks_modified: false,
         }

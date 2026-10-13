@@ -289,7 +289,6 @@ mod tests {
             is_overlay: false,
         };
         let db = BlockDb {
-            format_version: 3,
             strings: vec!["block/stone".to_string()],
             langs: Vec::new(),
             textures: vec![ti],
@@ -321,7 +320,6 @@ mod tests {
                 ..Default::default()
             }],
             path: String::new(),
-            loaded: true,
             meta_modified: false,
             blocks_modified: false,
         };
@@ -369,7 +367,6 @@ mod tests {
                 ..Default::default()
             }],
             path: String::new(),
-            loaded: true,
             meta_modified: false,
             blocks_modified: false,
         };
@@ -427,7 +424,6 @@ mod tests {
         let mut textures = vec![ti.clone(); 6];
         textures[5] = ti;
         let db = BlockDb {
-            format_version: 3,
             // 下标 1 是路径，下标 0 留空以便越界时报错
             strings: vec![String::new(), "block/stone".to_string()],
             langs: Vec::new(),
@@ -449,7 +445,6 @@ mod tests {
                 ..Default::default()
             }],
             path: String::new(),
-            loaded: true,
             meta_modified: false,
             blocks_modified: false,
         };
@@ -539,7 +534,6 @@ mod tests {
                 ..Default::default()
             }],
             path: String::new(),
-            loaded: true,
             meta_modified: false,
             blocks_modified: false,
         };

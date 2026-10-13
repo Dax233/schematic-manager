@@ -62,6 +62,7 @@ impl BlockState {
     }
 
     /// 去掉命名空间前缀
+    #[cfg(test)]
     pub fn display_name(&self) -> &str {
         self.name.split_once(':').map(|(_, n)| n).unwrap_or(&self.name)
     }
@@ -464,7 +465,6 @@ pub struct Schematic {
     pub root: Value,
     pub regions: Vec<Region>,
     pub path: String,
-    pub loaded: bool,
     /// 元数据（名称/作者/描述/数据版本）被改动
     pub meta_modified: bool,
     /// 方块索引被改动。只有它为真时才需要重新编码 BlockStates，
@@ -481,7 +481,6 @@ impl Schematic {
             root,
             regions: Vec::new(),
             path: path.to_string(),
-            loaded: true,
             meta_modified: false,
             blocks_modified: false,
         };
@@ -706,7 +705,6 @@ mod tests {
                 ..Default::default()
             }],
             path: String::new(),
-            loaded: true,
             meta_modified: false,
             blocks_modified: false,
         };

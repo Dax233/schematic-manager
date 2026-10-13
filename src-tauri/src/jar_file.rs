@@ -85,6 +85,7 @@ impl JarFile {
     }
 
     /// 条目总数
+    #[cfg(test)]
     pub fn entry_count(&self) -> usize {
         self.archive.entries.len()
     }
