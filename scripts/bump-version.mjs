@@ -68,14 +68,24 @@ function setConf(v) {
  *
  * 只改本包那一条，依赖项的版本保持原样：用 `name` 紧邻的前缀锚定，
  * 避免误伤同名的依赖或其它条目。
+ *
+ * 行尾用 `\r?\n`：Windows 上 `core.autocrlf=true`（Git for Windows 安装时的
+ * 默认选项之一）会把检出的锁文件变成 CRLF，而 Cargo.toml 那条正则因为有
+ * `[\s\S]*?` 兜着、不受影响。若这里写死 `\n`，本地执行会以一个看不出原因的
+ * 「未找到 version 字段」失败——文件里明明有。
  */
 function setLock(v) {
   // 锁文件还没生成时（例如刚克隆后未构建）跳过，不算错误
   if (!existsSync(LOCK)) return;
   const src = readFileSync(LOCK, "utf8");
-  const re = /(\[\[package\]\]\nname = "schematic-manager"\nversion = )"[^"]*"/;
-  const out = src.replace(re, `$1"${v}"`);
-  const already = src.includes(`name = "schematic-manager"\nversion = "${v}"`);
+  const out = src.replace(
+    /(\[\[package\]\]\r?\nname = "schematic-manager"\r?\nversion = )"[^"]*"/,
+    `$1"${v}"`,
+  );
+  // 已经是目标版本时替换不会生效，这属于幂等的情形，不能当成「找不到字段」
+  const already = src
+    .replace(/\r\n/g, "\n")
+    .includes(`name = "schematic-manager"\nversion = "${v}"`);
   if (out === src && !already) {
     throw new Error("在 Cargo.lock 中未找到本包的 version 字段");
   }
