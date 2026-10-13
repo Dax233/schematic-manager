@@ -15,8 +15,9 @@ pub struct TextureBatch {
     pub positions: Vec<f32>,
     /// 顶点 UV，每 2 个 f32 为一个顶点
     pub uvs: Vec<f32>,
-    /// 每顶点的明暗系数（由面朝向决定，用于表现立体感）
-    pub shades: Vec<f32>,
+    /// 每顶点的颜色系数（RGB 三通道，各 0..1）。
+    /// 已把「面明暗」与「方块染色」乘在一起，前端直接作为顶点色使用。
+    pub colors: Vec<f32>,
     /// 三角形索引，每 3 个构成一个三角形
     pub indices: Vec<u32>,
 }
@@ -62,7 +63,7 @@ pub fn build(quads: &[Quad]) -> MeshData {
                     texture: q.texture,
                     positions: Vec::new(),
                     uvs: Vec::new(),
-                    shades: Vec::new(),
+                    colors: Vec::new(),
                     indices: Vec::new(),
                 });
                 let i = batches.len() - 1;
@@ -77,7 +78,11 @@ pub fn build(quads: &[Quad]) -> MeshData {
             let p = &q.corners[k];
             batch.positions.extend_from_slice(p);
             batch.uvs.extend_from_slice(&q.uv[k]);
-            batch.shades.push(q.shade);
+            // 明暗与染色合成逐顶点颜色：贴图是灰度时染色才看得出效果，
+            // 而明暗也要一起带上，否则旋转过的面会失去立体感
+            for ch in 0..3 {
+                batch.colors.push(q.shade * q.tint[ch]);
+            }
         }
         // 四边形按 0-2-1、0-3-2 拆成两个三角形。
         //
@@ -111,6 +116,11 @@ mod tests {
     use super::*;
 
     fn quad(texture: u32, shade: f32) -> Quad {
+        quad_tinted(texture, shade, [1.0, 1.0, 1.0])
+    }
+
+    /// 带染色的四边形，用于验证「明暗 × 染色」的合成
+    fn quad_tinted(texture: u32, shade: f32, tint: [f32; 3]) -> Quad {
         Quad {
             corners: [
                 [0.0, 0.0, 0.0],
@@ -121,6 +131,7 @@ mod tests {
             uv: [[0.0, 0.0], [16.0, 0.0], [16.0, 16.0], [0.0, 16.0]],
             texture,
             shade,
+            tint,
             block_pos: [0, 0, 0],
         }
     }
@@ -134,7 +145,8 @@ mod tests {
         assert_eq!(b.triangle_count(), 2);
         assert_eq!(b.positions.len(), 12);
         assert_eq!(b.uvs.len(), 8);
-        assert_eq!(b.shades.len(), 4);
+        // 颜色为逐顶点 3 通道
+        assert_eq!(b.colors.len(), 4 * 3);
         assert_eq!(b.indices, vec![0, 2, 1, 0, 3, 2]);
         assert_eq!(m.total_vertices, 4);
         assert_eq!(m.total_triangles, 2);
@@ -175,6 +187,7 @@ mod tests {
                     uv: c.uv,
                     texture: 1,
                     shade: 1.0,
+                    tint: [1.0, 1.0, 1.0],
                     block_pos: [0, 0, 0],
                 }
             })
@@ -240,12 +253,30 @@ mod tests {
     }
 
     #[test]
-    fn shade_is_per_vertex_and_matches_quad() {
+    fn color_is_per_vertex_and_combines_shade_with_tint() {
         let m = build(&[quad(1, 0.55), quad(1, 0.85)]);
-        let s = &m.batches[0].shades;
-        assert_eq!(s.len(), 8);
-        assert!(s[..4].iter().all(|v| (*v - 0.55).abs() < 1e-6));
-        assert!(s[4..].iter().all(|v| (*v - 0.85).abs() < 1e-6));
+        let c = &m.batches[0].colors;
+        // 4 个顶点 × 3 通道
+        assert_eq!(c.len(), 8 * 3);
+        // 无染色时三个通道都等于明暗系数
+        assert!(c[..12].iter().all(|v| (*v - 0.55).abs() < 1e-6));
+        assert!(c[12..].iter().all(|v| (*v - 0.85).abs() < 1e-6));
+    }
+
+    /// 染色必须按通道乘进去：树叶/红石这类灰度贴图靠它上色，
+    /// 若只乘明暗（三通道相同），贴图就永远是灰的。
+    #[test]
+    fn tint_is_applied_per_channel() {
+        let m = build(&[quad_tinted(1, 0.5, [0.25, 0.5, 1.0])]);
+        let c = &m.batches[0].colors;
+        assert_eq!(c.len(), 12);
+        for v in c.chunks(3) {
+            assert!((v[0] - 0.125).abs() < 1e-6, "红通道 {v:?}");
+            assert!((v[1] - 0.25).abs() < 1e-6, "绿通道 {v:?}");
+            assert!((v[2] - 0.5).abs() < 1e-6, "蓝通道 {v:?}");
+        }
+        // 三通道必须不同，否则染色没生效
+        assert!(c[0] != c[2], "染色未按通道生效");
     }
 
     #[test]

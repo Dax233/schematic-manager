@@ -19,8 +19,8 @@ pub struct SceneBatch {
     pub positions: Vec<f32>,
     /// 顶点 UV，取值 0..16，前端除以 16 归一化
     pub uvs: Vec<f32>,
-    /// 每顶点明暗系数
-    pub shades: Vec<f32>,
+    /// 每顶点颜色系数（RGB 三通道，已含明暗与染色）
+    pub colors: Vec<f32>,
     /// 三角形索引
     pub indices: Vec<u32>,
     pub texture_width: u16,
@@ -106,7 +106,7 @@ pub fn build_from(sc: &Schematic, db: &BlockDb) -> AppResult<SceneData> {
             texture: b.texture,
             positions: b.positions,
             uvs: b.uvs,
-            shades: b.shades,
+            colors: b.colors,
             indices: b.indices,
             texture_width: t.w,
             texture_height: t.h,

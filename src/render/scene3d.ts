@@ -49,15 +49,12 @@ export function buildSceneGroup(data: SceneData): SceneGroup {
     for (let i = 0; i < uvRaw.length; i++) uv[i] = uvRaw[i] / 16;
     geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
 
-    // 明暗系数写进顶点颜色：材质不参与光照计算，立体感全部来自这里
-    const shade = new Float32Array(batch.shades);
-    const color = new Float32Array(shade.length * 3);
-    for (let i = 0; i < shade.length; i++) {
-      color[i * 3] = shade[i];
-      color[i * 3 + 1] = shade[i];
-      color[i * 3 + 2] = shade[i];
-    }
-    geo.setAttribute("color", new THREE.BufferAttribute(color, 3));
+    // 顶点颜色直接来自后端：它已经把「面明暗」与「方块染色」乘好。
+    // 材质不参与光照计算，立体感与染色全部由这里承载。
+    geo.setAttribute(
+      "color",
+      new THREE.BufferAttribute(new Float32Array(batch.colors), 3),
+    );
     geo.setIndex(new THREE.BufferAttribute(new Uint32Array(batch.indices), 1));
     geo.computeBoundingBox();
 

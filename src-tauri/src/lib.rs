@@ -28,6 +28,7 @@ mod replace;
 #[cfg(test)]
 mod real_project;
 mod scene;
+mod tint;
 mod startup;
 mod transform;
 mod visibility;

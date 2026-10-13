@@ -21,14 +21,14 @@ function cubeScene(): SceneData {
   ];
   const positions: number[] = [];
   const uvs: number[] = [];
-  const shades: number[] = [];
+  const colors: number[] = [];
   const indices: number[] = [];
   for (const f of faces) {
     const base = positions.length / 3;
     f.forEach((p, k) => {
       positions.push(p[0], p[1], p[2]);
       uvs.push(k === 0 || k === 3 ? 0 : 16, k < 2 ? 0 : 16);
-      shades.push(1);
+      colors.push(1, 1, 1);
     });
     // 与后端 mesh::build 相同的规则：0-2-1 / 0-3-2
     indices.push(base, base + 2, base + 1, base, base + 3, base + 2);
@@ -39,7 +39,7 @@ function cubeScene(): SceneData {
         texture: 0,
         positions,
         uvs,
-        shades,
+        colors,
         indices,
         textureWidth: 2,
         textureHeight: 2,

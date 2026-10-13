@@ -106,7 +106,7 @@ SHIM = r"""
     for (var k = 0; k < 4; k++) {
       pos.push(v[k][0], v[k][1], v[k][2]);
       uv.push(k === 0 || k === 3 ? 0 : 16, k < 2 ? 0 : 16);
-      sh.push(1.0);
+      sh.push(1.0, 1.0, 1.0);
     }
     // 与后端 mesh::build 相同的索引规则
     idx.push(0, 2, 1, 0, 3, 2);
@@ -116,7 +116,7 @@ SHIM = r"""
     return {
       batches: [{
         texture: 0,
-        positions: pos, uvs: uv, shades: sh, indices: idx,
+        positions: pos, uvs: uv, colors: sh, indices: idx,
         textureWidth: 4, textureHeight: 4, textureRgba: rgba
       }],
       totalVertices: 4,

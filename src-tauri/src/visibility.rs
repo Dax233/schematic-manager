@@ -73,8 +73,10 @@ pub struct Quad {
     pub uv: [[f32; 2]; 4],
     /// 贴图池下标（已由字符串表下标解析而来）
     pub texture: u32,
-    /// 该面的明暗系数
+    /// 该面的明暗系数（已含世界法线方向光）
     pub shade: f32,
+    /// 该面的染色系数（RGB，各 0..1）。无染色时为全 1。
+    pub tint: [f32; 3],
     /// 该四边形所属方块在区域内的坐标
     pub block_pos: [i32; 3],
 }
@@ -214,7 +216,10 @@ pub fn collect_quads(sc: &Schematic, db: &BlockDb, ver_idx: usize) -> Vec<Quad> 
                             // 文件里的贴图字段是字符串表下标，必须按版本
                             // 解析成贴图池下标后才能给下游取像素
                             texture: db.texture_pool_index(ver_idx, mf.texture),
-                            shade: face_shade(face),
+                            shade: shade_for(face, &world),
+                            // 染色按方块名决定：同一个 tintindex 在草方块与
+                            // 红石线上含义不同（见 tint 模块）
+                            tint: crate::tint::tint_color(&state.name, &state.props, mf.tintindex),
                             block_pos: bp,
                         });
                     }
@@ -225,8 +230,50 @@ pub fn collect_quads(sc: &Schematic, db: &BlockDb, ver_idx: usize) -> Vec<Quad> 
     out
 }
 
-fn cullface_to_face(v: u8) -> Face {
-    match v {
+/// 求一个面的明暗系数。
+///
+/// 底数是该面在**模型空间**的固定系数（顶面最亮、底面最暗），
+/// 再乘一个按**世界空间法线**算的方向光——后者不能省：
+///
+/// 模型空间的面号在方块被变体旋转后已不再对应该面的实际朝向。
+/// 例如活塞 `facing=up` 时绕 X 转 270°，模型的「顶面」在世界里朝下；
+/// 若仍按模型面号取系数，就会把朝下的面照成最亮、朝上的面照成最暗——
+/// 观感上就是「旋转过的方块明暗不对」。对照 legacy-cpp/render.cpp 的
+/// emitQuad，它同样在 FaceShade 之上再乘一次按几何法线的 lambert。
+fn shade_for(face: Face, corners: &[[f32; 3]; 4]) -> f32 {
+    let base = face_shade(face);
+    let Some(n) = face_normal(corners) else {
+        return base;
+    };
+    // 方向光：与 legacy 保持一致，让结构有稳定的立体感
+    let lambert = 0.62
+        + 0.38 * (-n[1] * 0.65 + n[2] * 0.25 - n[0] * 0.2 + 0.5).max(0.0);
+    base * lambert.clamp(0.6, 1.15)
+}
+
+/// 由四个角点求面的单位法线（前三点构成三角形）。
+///
+/// 退化三角形（面积为 0）返回 None，由调用方退回按面号取系数——
+/// 这类面本身不可见，不值得为它编一个方向。
+fn face_normal(corners: &[[f32; 3]; 4]) -> Option<[f32; 3]> {
+    let a = corners[0];
+    let b = corners[1];
+    let c = corners[2];
+    let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let n = [
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0],
+    ];
+    let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+    if len < 1e-9 {
+        return None;
+    }
+    Some([n[0] / len, n[1] / len, n[2] / len])
+}
+
+fn cullface_to_face(v: u8) -> Face {    match v {
         0 => Face::Down,
         1 => Face::Up,
         2 => Face::North,

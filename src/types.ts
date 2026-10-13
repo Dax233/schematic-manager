@@ -152,7 +152,8 @@ export interface SceneBatch {
   texture: number;
   positions: number[];
   uvs: number[];
-  shades: number[];
+  /** 每顶点颜色系数，RGB 三通道，已含明暗与染色 */
+  colors: number[];
   indices: number[];
   textureWidth: number;
   textureHeight: number;
