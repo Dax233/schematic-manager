@@ -114,8 +114,12 @@ pnpm tauri build    # 打包
 pnpm typecheck      # vue-tsc
 pnpm test           # vitest：API 契约 + 界面挂载与交互流程
 pnpm check:ipc      # 前后端命令名与参数名的一致性检查
+pnpm check:notes    # Release 说明的格式（文件表与下载链接）
 pnpm build          # vite build
 ```
+
+`pnpm check:notes` 自带一个假的 GitHub API，不联网、也不受仓库当前
+Release 状态影响，可在本地随时运行。
 
 后端的单元测试：
 
@@ -128,6 +132,13 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 - 预发布：`v<MAJOR>.<MINOR>.<PATCH>+snapshot.<构建次数>`（推送自动生成）
 - 正式版：`v<MAJOR>.<MINOR>.<PATCH>`（手动打 tag 触发，随后仓库内各版本号
   自动提升到下一个 PATCH）
+
+仓库内的版本号共四处，由 `scripts/bump-version.mjs` 一并改写：
+`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`
+与 `src-tauri/Cargo.lock` 里本包那一条。
+
+各平台的产物格式：Windows 为 NSIS 安装包（`-setup.exe`），macOS 为 DMG，
+Linux 为 deb。
 
 推送提交会触发多平台构建并以预发布形式上传；手动打正式版 tag 时以该版本号
 构建发布，Release 说明按提交信息自动归类生成。
