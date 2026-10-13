@@ -757,14 +757,23 @@ mod tests {
     #[test]
     fn oversized_key_fails_instead_of_truncating() {
         let v = Value::Compound(vec![("k".repeat(MAX_STRING_BYTES + 1), Value::Byte(1))]);
-        assert!(serialize(&v, "").is_err(), "超长键名应报错");
+        // 断言错误提到长度上限：只断言「出错了」时，任何其它原因
+        // （例如序列化中途别处失败）都会让这条通过
+        let e = serialize(&v, "").unwrap_err().to_string();
+        assert!(
+            e.contains("过长") && e.contains("上限"),
+            "超长键名应报长度超限，实际：{e}"
+        );
     }
 
     /// 超长根名同样必须报错。
     #[test]
     fn oversized_root_name_fails_instead_of_truncating() {
+        let e = serialize(&Value::Byte(1), &"r".repeat(MAX_STRING_BYTES + 1))
+            .unwrap_err()
+            .to_string();
         assert!(
-            serialize(&Value::Byte(1), &"r".repeat(MAX_STRING_BYTES + 1)).is_err(),
-            "超长根名应报错"
+            e.contains("过长") && e.contains("上限"),
+            "超长根名应报长度超限，实际：{e}"
         );
     }

@@ -929,7 +929,10 @@ mod tests {
     fn bad_magic_is_rejected() {
         let mut b = assert_baseline_parses();
         b[0] = b'X';
-        assert!(BlockDb::load_from_bytes(&b, false).is_err());
+        // 断言错误内容而不是只断言「出错了」：只断言 is_err 时，
+        // 任何原因导致的失败都会让这条通过（例如改动布局后别处先报错）
+        let e = BlockDb::load_from_bytes(&b, false).unwrap_err().to_string();
+        assert!(e.contains("魔数"), "应指出魔数不匹配，实际：{e}");
     }
 
     #[test]
@@ -1005,7 +1008,14 @@ mod tests {
         // 截在字符串表中间：缺少终止符或数据不足，都应报错而不是越界
         let mut b = build_minimal_pack();
         b.truncate(8 + 5 * 4 + 4 + 3);
-        assert!(BlockDb::load_from_bytes(&b, false).is_err());
+        // 断言是「截断」这一类错误，而不是碰巧因为别的原因失败。
+        // 写成「不足 / 长度 / 越界」时这条会失败并暴露出实际措辞是
+        // 「字符串缺少终止符，文件已截断」——只断言 is_err 就看不到这一点。
+        let e = BlockDb::load_from_bytes(&b, false).unwrap_err().to_string();
+        assert!(
+            e.contains("截断") || e.contains("终止符") || e.contains("不足"),
+            "应指出数据被截断，实际：{e}"
+        );
     }
 
     #[test]

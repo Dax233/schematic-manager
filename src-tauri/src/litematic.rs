@@ -979,9 +979,13 @@ mod tests {
     /// 超过上限一个方块即被拒绝，确认上限不是 < 与 <= 的关系判错。
     #[test]
     fn volume_one_over_limit_is_rejected() {
+        // 断言错误内容：只断言 is_err 时，任何原因（例如乘法溢出走了另一条
+        // 分支）都会让这条通过，就测不出「恰好超限」这个边界
+        let err = region_volume([MAX_REGION_VOLUME as i32 + 1, 1, 1], "over")
+            .expect_err("超过上限 1 应被拒绝");
         assert!(
-            region_volume([MAX_REGION_VOLUME as i32 + 1, 1, 1], "over").is_err(),
-            "超过上限 1 应被拒绝"
+            err.to_string().contains("上限"),
+            "应指出超出上限，实际：{err}"
         );
     }
 

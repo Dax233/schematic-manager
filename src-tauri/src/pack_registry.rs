@@ -475,8 +475,22 @@ mod tests {
 
     #[test]
     fn pack_file_name_rejects_empty() {
-        assert!(pack_file_name("", &[]).is_err());
-        assert!(pack_file_name("   ", &[]).is_err());
+        // 空串在「名不能为空」处就被拒绝。
+        let e1 = pack_file_name("", &[]).unwrap_err().to_string();
+        assert!(e1.contains("不能为空"), "空名应报「不能为空」，实际：{e1}");
+
+        // 纯空白同样走「不能为空」：trim() 会先把它清成空串。
+        let e2 = pack_file_name("   ", &[]).unwrap_err().to_string();
+        assert!(e2.contains("不能为空"), "纯空白名应报「不能为空」，实际：{e2}");
+
+        // 「清理后为空」是另一条分支：名字本身不含空白，但去掉结尾的
+        // 点/空格后什么都不剩（Windows 会忽略结尾的点与空格）。
+        // 这正是只断言 is_err 时看不出来的差别——两条分支被混为一谈。
+        let e3 = pack_file_name("...", &[]).unwrap_err().to_string();
+        assert!(
+            e3.contains("清理后为空"),
+            "全为点的名字应报「清理后为空」，实际：{e3}"
+        );
     }
 
     #[test]
