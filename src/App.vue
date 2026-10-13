@@ -33,6 +33,7 @@ import {
   searchBlocks,
 } from "./api";
 import SceneViewer from "./components/SceneViewer.vue";
+import { OffscreenRenderer, EXPORT_SIZES } from "./render/scene3d";
 import type {
   AnalysisResult,
   BackupEntry,
@@ -90,10 +91,38 @@ const dirItems = ref<Record<string, SchematicSummary[]>>({});
 /** 已加载的目录，按加载顺序 */
 const loadedDirs = computed(() => Object.keys(dirItems.value));
 
-/** 全部目录合并后的文件列表，按路径排序保证顺序稳定 */
+/** 在下拉中被勾选（即参与列表显示）的目录。
+ *
+ * 新加载的目录默认勾选：用户刚选完目录，期望立刻看到内容。
+ * 用 Set 便于 O(1) 判断，且与「哪些目录被加载」分开——
+ * 加载了但不勾选，就是这个目录的文件暂不显示。
+ */
+const enabledDirs = ref<Set<string>>(new Set());
+
+/** 目录被勾选的依据：已加载且勾选，外部加进来的目录一律不显示 */
+function isDirEnabled(dir: string): boolean {
+  return enabledDirs.value.has(dir);
+}
+
+/** 勾选/取消一个目录 */
+function toggleDir(dir: string, on: boolean) {
+  const next = new Set(enabledDirs.value);
+  if (on) next.add(dir);
+  else next.delete(dir);
+  enabledDirs.value = next;
+  // 该目录的文件可能正被选中或勾选，需要一并收敛，
+  // 否则详情会停留在已不显示的文件上
+  syncSelection(files.value);
+  pruneChecks(files.value);
+}
+
+/** 全部目录合并后的文件列表，只含被勾选目录的文件，按路径排序保证顺序稳定 */
 const files = computed<SchematicSummary[]>(() => {
   const all: SchematicSummary[] = [];
-  for (const d of loadedDirs.value) all.push(...(dirItems.value[d] ?? []));
+  for (const d of loadedDirs.value) {
+    if (!enabledDirs.value.has(d)) continue;
+    all.push(...(dirItems.value[d] ?? []));
+  }
   all.sort((a, b) => a.path.localeCompare(b.path));
   return all;
 });
@@ -401,6 +430,8 @@ const brightness = ref(1.45);
 const activeView = ref("left45");
 const exportSize = ref(1024);
 const exporting = ref(false);
+/** 批量导出的进度（null 表示未在批量导出） */
+const exportingProgress = ref<{ done: number; total: number } | null>(null);
 
 // 备份与日志
 const backupOpen = ref(false);
@@ -944,6 +975,13 @@ async function pickDirectory() {
   }
 
   dirItems.value = next;
+  // 新加载的目录默认勾选：用户刚选完目录，期望立刻看到内容。
+  // 已存在的目录保持原勾选状态，不因为重新扫描而被重置。
+  const checked = new Set(enabledDirs.value);
+  for (const dir of dirs) {
+    if (dir in next) checked.add(dir);
+  }
+  enabledDirs.value = checked;
   // 新的合并列表出来后收敛选中与勾选
   syncSelection(files.value);
   pruneChecks(files.value);
@@ -970,6 +1008,11 @@ function removeDir(dir: string) {
   const next = { ...dirItems.value };
   delete next[dir];
   dirItems.value = next;
+  // 勾选集里也要去掉它：留着已卸载目录的条目，之后重新加载同名目录时
+  // 会「自己就勾上了」，与用户预期不符
+  const checked = new Set(enabledDirs.value);
+  checked.delete(dir);
+  enabledDirs.value = checked;
   // 该目录的文件可能正被选中或勾选，需要一并收敛，
   // 否则右侧详情会停留在已移出列表的文件上
   syncSelection(files.value);
@@ -1357,7 +1400,7 @@ function setView(name: string) {
   viewer.value?.applyPreset(name);
 }
 
-/** 导出当前视角为透明背景 PNG */
+/** 导出当前视角为透明背景 PNG（单个文件） */
 async function exportPreview() {
   const cur = selected.value;
   if (!cur || !scene.value) return;
@@ -1388,6 +1431,78 @@ async function exportPreview() {
     Message.error(`导出失败：${e}`);
   } finally {
     exporting.value = false;
+  }
+}
+
+/** 选择批量导出的目标目录 */
+async function pickExportDir(): Promise<string | null> {
+  try {
+    const dir = await open({ directory: true, multiple: false, title: "选择导出目录" });
+    return typeof dir === "string" ? dir : null;
+  } catch (e) {
+    // 同其它对话框：失败必须提示，否则用户点了没反应
+    Message.error(`打开目录选择框失败：${e}`);
+    return null;
+  }
+}
+
+/**
+ * 批量导出预览图。
+ *
+ * 用独立的离屏渲染器逐个渲染，而不是把界面切到每个文件再导出：
+ * 后者会反复冲掉用户正在看的画面，还要等每次界面重建，明显更慢。
+ *
+ * 单个文件失败不中断整批——某个投影读不出来（被占用、格式异常）时
+ * 其余文件仍应导出成功，最后把失败清单如实报出来。
+ */
+async function exportBatch() {
+  const list = checkedFiles.value.filter((f) => !f.error);
+  if (list.length === 0) {
+    Message.warning("请先勾选要导出的投影文件");
+    return;
+  }
+  const dir = await pickExportDir();
+  if (!dir) return;
+
+  const size = exportSize.value;
+  const view = activeView.value;
+  exporting.value = true;
+  exportingProgress.value = { done: 0, total: list.length };
+  let renderer: OffscreenRenderer | null = null;
+  const failures: string[] = [];
+  let ok = 0;
+
+  try {
+    renderer = new OffscreenRenderer();
+    for (const f of list) {
+      try {
+        const data = await buildScene(f.path);
+        const bytes = await renderer.renderPng(data, size, view);
+        const stem = f.fileName.replace(/\.litematic$/i, "");
+        await writeFile(`${dir}/${stem}_preview_${size}.png`, bytes);
+        ok += 1;
+      } catch (e) {
+        failures.push(`${f.fileName}：${e}`);
+      }
+      exportingProgress.value = { done: ok + failures.length, total: list.length };
+    }
+  } catch (e) {
+    // 离屏渲染器都建不起来（例如 WebGL 上下文耗尽），整批无法进行
+    Message.error(`批量导出失败：${e}`);
+    return;
+  } finally {
+    renderer?.dispose();
+    exporting.value = false;
+    exportingProgress.value = null;
+  }
+
+  if (failures.length === 0) {
+    Message.success(`已导出 ${ok} 张 ${size}×${size} 预览图到 ${dir}`);
+  } else {
+    Message.warning({
+      content: `成功 ${ok} 张，失败 ${failures.length} 张：\n${failures.join("\n")}`,
+      duration: 8000,
+    });
   }
 }
 
@@ -1441,6 +1556,12 @@ void followSystemTheme();
           <a-doption v-if="loadedDirs.length === 0" disabled>尚未加载任何目录</a-doption>
           <a-doption v-for="d in loadedDirs" :key="d" :value="d">
             <div class="dir-item">
+              <!-- 勾选才在下方列表显示 -->
+              <a-checkbox
+                :model-value="isDirEnabled(d)"
+                @change="toggleDir(d, $event as boolean)"
+                @click.stop
+              />
               <span class="dir-item__name" :title="d">{{ d }}</span>
               <span class="dir-item__count">{{ (dirItems[d] ?? []).length }} 个</span>
               <!-- 移除按钮：用 @click.stop 阻止冒泡，否则点它会同时选中该项、
@@ -1611,20 +1732,37 @@ void followSystemTheme();
               :style="{ width: '140px' }"
             />
             <span class="preview__value">{{ Math.round(brightness * 100) }}%</span>
+            <!-- 导出尺寸：四档可选，单个与批量共用。
+                 选项来自 EXPORT_SIZES，避免与 scene3d.ts 的定义各写一份而漂移 -->
             <a-select v-model="exportSize" size="small" style="width: 104px">
-              <a-option :value="512">512</a-option>
-              <a-option :value="1024">1024</a-option>
-              <a-option :value="2048">2048</a-option>
-              <a-option :value="3072">3072</a-option>
+              <a-option v-for="s in EXPORT_SIZES" :key="s" :value="s">{{ s }}</a-option>
             </a-select>
             <a-button
               size="small"
               type="primary"
-              :loading="exporting"
-              :disabled="!scene"
+              :loading="exporting && !exportingProgress"
+              :disabled="!scene || exporting"
               @click="exportPreview"
             >
               导出预览图
+            </a-button>
+            <!-- 批量导出：对目录栏里勾选的文件各导出一张，输出到所选目录 -->
+            <a-button
+              size="small"
+              :loading="exporting && !!exportingProgress"
+              :disabled="!hasChecked || exporting"
+              :title="
+                hasChecked
+                  ? `导出勾选的 ${checkedCount} 个投影各一张预览图`
+                  : '先在下方的目录栏里勾选要导出的投影'
+              "
+              @click="exportBatch"
+            >
+              批量导出
+              <template v-if="exportingProgress">
+                （{{ exportingProgress.done }}/{{ exportingProgress.total }}）
+              </template>
+              <template v-else-if="hasChecked">（{{ checkedCount }}）</template>
             </a-button>
             <span class="preview__spacer" />
             <span v-if="sceneError" class="preview__error">{{ sceneError }}</span>

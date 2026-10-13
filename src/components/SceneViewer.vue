@@ -3,6 +3,12 @@ import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { SceneData } from "../types";
+import {
+  applyPreset as applyPresetTo,
+  buildSceneGroup,
+  fitCamera as fitCameraTo,
+  type SceneGroup,
+} from "../render/scene3d";
 
 const props = withDefaults(
   defineProps<{
@@ -18,7 +24,7 @@ const error = ref("");
 
 // three 的对象不需要响应式代理（会被深度追踪，既慢又可能出错）
 const renderer = shallowRef<THREE.WebGLRenderer | null>(null);
-const root = shallowRef<THREE.Group | null>(null);
+let built: SceneGroup | null = null;
 let threeScene: THREE.Scene | null = null;
 let camera: THREE.PerspectiveCamera | null = null;
 let controls: OrbitControls | null = null;
@@ -31,120 +37,28 @@ let needsRender = true;
 function requestRender() {
   needsRender = true;
 }
-const disposables: Array<{ dispose: () => void }> = [];
 
-const PRESETS: Record<string, [number, number]> = {
-  front: [0, 12],
-  left45: [-45, 30],
-  right45: [45, 30],
-  back: [180, 12],
-};
-
+/** 释放当前网格 */
 function disposeScene() {
-  for (const d of disposables) d.dispose();
-  disposables.length = 0;
-  if (root.value) {
-    root.value.clear();
-  }
-}
-
-/** 由场景数据构建 three 的网格 */
-function buildMeshes(data: SceneData) {
-  if (!root.value) return;
-  disposeScene();
-
-  for (const batch of data.batches) {
-    const geo = new THREE.BufferGeometry();
-    // 顶点位置已在世界坐标（单位为方块），x/z 需要居中
-    const pos = new Float32Array(batch.positions);
-    for (let i = 0; i < pos.length; i += 3) {
-      pos[i] -= data.origin[0];
-      pos[i + 1] -= data.origin[1];
-      pos[i + 2] -= data.origin[2];
-    }
-    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-    // UV 在模型空间为 0..16，除以 16 归一化
-    const uvRaw = new Float32Array(batch.uvs);
-    const uv = new Float32Array(uvRaw.length);
-    for (let i = 0; i < uvRaw.length; i++) uv[i] = uvRaw[i] / 16;
-    geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
-    // 明暗系数作为第二套 UV 之外的逐顶点属性，写进顶点颜色
-    const shade = new Float32Array(batch.shades);
-    const color = new Float32Array(shade.length * 3);
-    for (let i = 0; i < shade.length; i++) {
-      color[i * 3] = shade[i];
-      color[i * 3 + 1] = shade[i];
-      color[i * 3 + 2] = shade[i];
-    }
-    geo.setAttribute("color", new THREE.BufferAttribute(color, 3));
-    geo.setIndex(new THREE.BufferAttribute(new Uint32Array(batch.indices), 1));
-    geo.computeBoundingBox();
-
-    const tex = new THREE.DataTexture(
-      new Uint8Array(batch.textureRgba),
-      batch.textureWidth,
-      batch.textureHeight,
-      THREE.RGBAFormat,
-    );
-    // Minecraft 贴图按方块单位采样，必须最近邻，否则边缘会糊
-    tex.magFilter = THREE.NearestFilter;
-    tex.minFilter = THREE.NearestFilter;
-    tex.generateMipmaps = false;
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.needsUpdate = true;
-
-    const mat = new THREE.MeshBasicMaterial({
-      map: tex,
-      vertexColors: true,
-      side: THREE.FrontSide,
-      transparent: true,
-      alphaTest: 0.5,
-    });
-    // 立即套用当前亮度：切换投影会重建材质，若不在创建时设置，
-    // 画面会回到 100% 而滑杆仍显示原值，两者不一致
-    mat.color.setScalar(props.brightness);
-
-    const mesh = new THREE.Mesh(geo, mat);
-    root.value.add(mesh);
-    disposables.push(geo, tex, mat);
-  }
+  built?.dispose();
+  built = null;
 }
 
 /** 把相机拉到能完整看到整个投影的位置 */
-function fitCamera(data: SceneData) {
-  if (!camera || !controls || !root.value) return;
-  const box = new THREE.Box3().setFromObject(root.value);
-  const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
-  const radius = Math.max(size.length() * 0.5, 1);
-  const dist = radius / Math.sin((camera.fov * Math.PI) / 360);
-  controls.target.copy(center);
-  camera.position.copy(center).add(new THREE.Vector3(dist, dist, dist));
-  camera.near = Math.max(dist / 100, 0.05);
-  camera.far = dist * 10;
-  camera.updateProjectionMatrix();
-  controls.update();
+function fitCamera() {
+  if (camera && built) fitCameraTo(camera, built.group);
 }
 
 function applyPreset(name: string) {
-  const angles = PRESETS[name];
-  if (!angles || !camera || !controls || !root.value) return;
-  const box = new THREE.Box3().setFromObject(root.value);
-  const center = box.getCenter(new THREE.Vector3());
-  const radius = Math.max(box.getSize(new THREE.Vector3()).length() * 0.5, 1);
-  const dist = radius / Math.sin((camera.fov * Math.PI) / 360);
-  const [yawDeg, pitchDeg] = angles;
-  const yaw = (yawDeg * Math.PI) / 180;
-  const pitch = (pitchDeg * Math.PI) / 180;
-  // 与旧版一致的视角定义：yaw 绕 Y，pitch 为俯角
-  const dir = new THREE.Vector3(
-    Math.cos(pitch) * Math.sin(yaw),
-    -Math.sin(pitch),
-    Math.cos(pitch) * Math.cos(yaw),
+  if (!camera || !built) return;
+  applyPresetTo(camera, built.group, name);
+  controls?.target.copy(camera.position).add(
+    camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(-1),
   );
-  controls.target.copy(center);
-  camera.position.copy(center).addScaledVector(dir, -dist);
-  controls.update();
+  // 重新取景后要把控制的注视点放到模型中心，否则旋转会绕错点
+  const box = new THREE.Box3().setFromObject(built.group);
+  if (!box.isEmpty()) controls?.target.copy(box.getCenter(new THREE.Vector3()));
+  controls?.update();
   renderSoon();
 }
 
@@ -178,6 +92,25 @@ function onResize() {
   renderSoon();
 }
 
+/** 重建网格并刷新画面 */
+function rebuild(data: SceneData | null) {
+  disposeScene();
+  if (!data) {
+    // 清空后也要重绘一次，否则画布上会残留上一个投影的画面
+    renderSoon();
+    return;
+  }
+  built = buildSceneGroup(data);
+  if (threeScene) threeScene.add(built.group);
+  // 切换投影后必须显式请求重绘。
+  //
+  // 这是「切换投影后预览不更新，要点一下画面才变」的成因：按需渲染只在
+  // needsRender 或阻尼未停时才画，而重建网格既不置 needsRender、也不改变
+  // 相机（fitCamera 只调 controls.update()，没有输入时阻尼不产生位移），
+  // 于是画布一直停在上一帧，直到用户点一下画面触发交互才刷新。
+  renderSoon();
+}
+
 onMounted(() => {
   const el = host.value;
   if (!el) return;
@@ -199,10 +132,6 @@ onMounted(() => {
 
     // 不加光源：材质是 MeshBasicMaterial，本就不参与光照计算，
     // 立体感完全来自逐顶点的明暗系数（写入 color 属性）。
-
-    const group = new THREE.Group();
-    scene.add(group);
-    root.value = group;
 
     camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10000);
     controls = new OrbitControls(camera, r.domElement);
@@ -226,8 +155,8 @@ onMounted(() => {
     window.addEventListener("resize", onResize);
     onResize();
     if (props.scene) {
-      buildMeshes(props.scene);
-      fitCamera(props.scene);
+      rebuild(props.scene);
+      fitCamera();
     }
   } catch (e) {
     // WebGL 不可用时给出明确提示，而不是留下一块空白
@@ -251,36 +180,39 @@ onBeforeUnmount(() => {
 watch(
   () => props.scene,
   (data) => {
-    if (!data) {
-      disposeScene();
-      return;
-    }
-    buildMeshes(data);
-    fitCamera(data);
+    rebuild(data);
+    if (data) fitCamera();
+    // 亮度：新建材质时要套用当前值，否则切换投影后画面回到 100%
+    // 而滑杆仍显示原值，两者不一致
+    applyBrightness(props.brightness);
+    renderSoon();
   },
 );
+
+/** 把亮度套到现有材质上 */
+function applyBrightness(b: number) {
+  built?.group.traverse((o) => {
+    const m = (o as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined;
+    if (m && "color" in m && m.vertexColors) {
+      // 顶点颜色已承载面明暗，亮度通过材质颜色整体缩放
+      m.color.setScalar(b);
+      m.needsUpdate = true;
+    }
+  });
+}
 
 watch(
   () => props.brightness,
   (b) => {
-    if (!root.value) return;
-    root.value.traverse((o) => {
-      const m = (o as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined;
-      if (m && "color" in m && m.vertexColors) {
-        // 顶点颜色已承载面明暗，亮度通过材质颜色整体缩放
-        m.color.setScalar(b);
-        m.needsUpdate = true;
-      }
-    });
+    applyBrightness(b);
     render();
   },
 );
 
 /**
- * 按指定边长离屏渲染并返回 PNG 字节。
+ * 按指定边长导出当前画面为透明背景 PNG。
  *
- * 导出与屏幕上看到的画面保持一致：临时把渲染器调到目标尺寸、
- * 相机宽高比设为 1、清屏色设为全透明，渲染后立即恢复原状，
+ * 临时把渲染器调到目标尺寸、宽高比设为 1，渲染后立即恢复，
  * 因此用户不会看到界面尺寸被改动。
  */
 async function exportPng(size: number): Promise<Uint8Array> {
@@ -298,11 +230,13 @@ async function exportPng(size: number): Promise<Uint8Array> {
     r.setSize(size, size, false);
     camera.aspect = 1;
     camera.updateProjectionMatrix();
-    r.setClearAlpha(0); // 透明背景
     r.render(threeScene, camera);
 
     const blob: Blob = await new Promise((resolve, reject) => {
-      r.domElement.toBlob((b) => (b ? resolve(b) : reject(new Error("导出图像失败"))), "image/png");
+      r.domElement.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error("导出图像失败"))),
+        "image/png",
+      );
     });
     return new Uint8Array(await blob.arrayBuffer());
   } finally {
@@ -310,7 +244,6 @@ async function exportPng(size: number): Promise<Uint8Array> {
     r.setSize(prev.x, prev.y, false);
     camera.aspect = prevAspect;
     camera.updateProjectionMatrix();
-    r.setClearAlpha(0);
     render();
   }
 }
@@ -318,7 +251,7 @@ async function exportPng(size: number): Promise<Uint8Array> {
 defineExpose({
   applyPreset,
   exportPng,
-  fitCamera: () => props.scene && fitCamera(props.scene),
+  fitCamera,
 });
 </script>
 
@@ -335,11 +268,25 @@ defineExpose({
   position: relative;
   width: 100%;
   height: 100%;
-  min-height: 240px;
+  min-height: 200px;
+  // 裁掉任何越界内容，作为「渲染图形不得超出范围」的最后一道防线
+  overflow: hidden;
 
   &__canvas {
+    // 画布容器：尺寸由外部样式决定（默认 200×200，见 .preview__stage）
     width: 100%;
     height: 100%;
+    overflow: hidden;
+
+    // three.js 的 setSize(w, h, false) 只设置 canvas 的 width/height **属性**，
+    // 不改 CSS 尺寸。若不在这里约束 canvas 元素本身，它会按属性尺寸显示：
+    // 实测容器 862px 而画布 987px，横向溢出 125px，画面被撑出面板之外。
+    // 用 100% 让显示尺寸恒等于容器，位图分辨率另由属性决定（设备像素比放大）。
+    :deep(canvas) {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
   }
 
   &__error,

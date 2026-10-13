@@ -80,11 +80,52 @@ SHIM = r"""
     regionCount: 1, entityCount: 3, tileEntityCount: 2, pendingTicks: 0,
     hasPreview: false, error: ""
   };
-  var scene = {
-    batches: [], totalVertices: 0, totalTriangles: 0,
-    enclosing: [16, 12, 16], origin: [0, 0, 0],
-    mcVersionName: "1.20.1", dataVersion: 3465, unresolvedBlocks: 0
-  };
+  // 一个朝向相机的**单片四边形**，用于核验几何真的被画出来了。
+  //
+  // 为什么不用立方体：立方体测不出绕序问题。若六面绕序全反，近面被
+  // FrontSide 剔除，但**远面**此时正好正面朝向相机而被画出，轮廓与颜色
+  // 几乎不变——实测两种绕序的不透明像素数完全相同（4857）。
+  // 单片四边形没有「远面」可替代：绕序正确才可见，反了就是 0 个像素，
+  // 信号明确。
+  //
+  // 相机由 fitCamera 放在 (d,d,d) 方向（见 SceneViewer 与 scene3d.ts），
+  // 因此四边形取 XY 平面、法线 +Z，保证相机在它的正面一侧。
+  //
+  // 不能再用空 batches：空场景没有三角形，永远画出 0 个像素，
+  // 「绕序反了 → 面被剔除 → 看穿方块」这类几何缺陷完全测不到——
+  // 上一版正是空桩，因此渲染检查全绿而用户实际看到透视方块。
+  function quadScene() {
+    // 角点顺序按「与后端相同的索引规则能得出 +Z 法线」来定。
+    //
+    // 这里刻意沿用后端那条规则（0-2-1 / 0-3-2），而不是另写一套「看起来
+    // 逆时针」的顺序：若两边规则不同，后端改绕序时这个替身不会跟着
+    // 失效，检查就失去意义。下面的角点顺序是让该规则产出 +Z 法线的唯一
+    // 排法（cross(c2-c0, c1-c0) = +Z）。
+    var v = [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]];
+    var pos = [], uv = [], sh = [], idx = [];
+    for (var k = 0; k < 4; k++) {
+      pos.push(v[k][0], v[k][1], v[k][2]);
+      uv.push(k === 0 || k === 3 ? 0 : 16, k < 2 ? 0 : 16);
+      sh.push(1.0);
+    }
+    // 与后端 mesh::build 相同的索引规则
+    idx.push(0, 2, 1, 0, 3, 2);
+    // 4×4 纯色贴图（不透明橙），便于按像素判断画的是它
+    var rgba = [];
+    for (var i = 0; i < 4 * 4; i++) rgba.push(255, 128, 0, 255);
+    return {
+      batches: [{
+        texture: 0,
+        positions: pos, uvs: uv, shades: sh, indices: idx,
+        textureWidth: 4, textureHeight: 4, textureRgba: rgba
+      }],
+      totalVertices: 4,
+      totalTriangles: 2,
+      enclosing: [1, 1, 0], origin: [0, 0, 0],
+      mcVersionName: "1.20.1", dataVersion: 3465, unresolvedBlocks: 0
+    };
+  }
+  var scene = quadScene();
   var analysis = {
     blocks: [], entities: [], tileEntities: [],
     nonAirTotal: 1234, airTotal: 1838,
@@ -296,6 +337,53 @@ SHIM = r"""
     // 留 2px 取整余量
     var fits = declSum <= boxW + 2;
 
+    // ---- 3D 视图真的画出东西了吗 ----
+    // 这一段防的是「几何绕序反了 → 所有面被 FrontSide 剔除 → 看穿方块」：
+    // 那种情况下布局全对、画布尺寸也对，只有像素是空的。
+    // 因此直接读画布的像素：不透明像素应占相当比例（实心立方体的轮廓）。
+    var pix = { opaque: 0, total: 0, ratio: 0 };
+    var cv = sb ? document.querySelector(".scene-viewer canvas") : null;
+    if (cv) {
+      try {
+        var gl = cv.getContext("webgl2") || cv.getContext("webgl");
+        if (gl) {
+          var w = cv.width, h = cv.height;
+          var buf = new Uint8Array(w * h * 4);
+          gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+          var op = 0;
+          for (var pi = 3; pi < buf.length; pi += 4) {
+            if (buf[pi] > 200) op++;
+          }
+          pix = { opaque: op, total: w * h, ratio: +(op / (w * h)).toFixed(4) };
+        }
+      } catch (e) {
+        pix = { opaque: -1, total: -1, ratio: -1, err: String(e) };
+      }
+    }
+
+    // ---- 预览区尺寸与是否越界 ----
+    // 要求：靠左、200×200、渲染图形不得超出范围。
+    // 画布曾实测 987px 而容器只有 862px：three.js 的 setSize 只改 canvas 的
+    // width/height 属性、不改 CSS 尺寸，未约束时它就按属性尺寸撑出去。
+    var stage = document.querySelector(".preview__stage");
+    var cvEl = document.querySelector(".scene-viewer canvas");
+    var stBox = stage ? stage.getBoundingClientRect() : null;
+    var cvBox = cvEl ? cvEl.getBoundingClientRect() : null;
+    var previewOk = false, canvasOverflow = false;
+    if (stBox && cvBox) {
+      previewOk = Math.round(stBox.width) === 200 && Math.round(stBox.height) === 200;
+      canvasOverflow =
+        cvBox.left < stBox.left - 1 || cvBox.right > stBox.right + 1 ||
+        cvBox.top < stBox.top - 1 || cvBox.bottom > stBox.bottom + 1;
+    }
+
+    // ---- 预览控制条是否被挤压 ----
+    // 控制条内容合计约 840px，不换行时 flex 会把单选按钮压到 47px 宽，
+    // 导致「正面」竖排成两行（高度 44px）。这里用按钮宽高判断。
+    var barBtn = document.querySelector(".preview__bar .arco-radio-button");
+    var barBox = barBtn ? barBtn.getBoundingClientRect() : null;
+    var barOk = barBox ? Math.round(barBox.height) <= 30 : false;
+
     return "LAYOUT:"
       + "gapWb=" + gapWb
       + ",gapDt=" + gapDt
@@ -310,6 +398,20 @@ SHIM = r"""
       + ",bodyH=" + bodyH
       + ",minBodyH=" + minBodyH
       + ",gapFoot=" + gapFoot
+      + ",stageW=" + (stBox ? Math.round(stBox.width) : -1)
+      + ",stageH=" + (stBox ? Math.round(stBox.height) : -1)
+      + ",stageLeft=" + (stBox ? Math.round(stBox.left) : -1)
+      + ",detailLeft=" + Math.round(rDt.left)
+      + ",canvasW=" + (cvBox ? Math.round(cvBox.width) : -1)
+      + ",previewOk=" + previewOk
+      + ",canvasOverflow=" + canvasOverflow
+      + ",barOk=" + barOk
+      + ",barBtnH=" + (barBox ? Math.round(barBox.height) : -1)
+      + ",barBtnW=" + (barBox ? Math.round(barBox.width) : -1)
+      + ",pixOpaque=" + pix.opaque
+      + ",pixTotal=" + pix.total
+      + ",pixRatio=" + pix.ratio
+      + ",pixErr=" + (pix.err ? String(pix.err).slice(0, 40) : "-")
       + ",declSum=" + declSum
       + ",boxW=" + boxW
       + ",fits=" + fits
@@ -804,7 +906,34 @@ def main():
                   f"  目录栏 {td_font} / 详情区 {detail_font or '无对照'}")
             print(f"  目录栏宽度 {fields.get('w')}px")
             print(f"  各列宽度 {fields.get('wCols0')}")
-            # 各列合计不得超出目录栏宽度：超出会把末列挤出可视区，
+            # 3D 视图必须真的画出几何。
+            #
+            # 替身给的是一个朝向相机的单片四边形（见 SHIM 里的 quadScene）：
+            # 绕序正确 → 被 FrontSide 画出 → 有不透明像素；绕序反了 →
+            # 整个面作为背面被剔除 → 0 个像素。这条正是「透视方块」的
+            # 回归防线：上一版替身用空 batches，画布永远是 0 个像素，
+            # 因此渲染检查全绿而用户实际看到看穿。
+            pix_opaque = int(fields.get("pixOpaque", "-1"))
+            pix_ratio = fields.get("pixRatio", "-1")
+            claim("3D 视图真的画出了几何（绕序是否朝外）", pix_opaque > 100,
+                  f"  不透明像素 {pix_opaque}/40000（占比 {pix_ratio}）；"
+                  f"为 0 说明面被当成背面剔除，即看穿方块")
+            # 预览舞台必须是 200×200 且靠左（其左缘对齐详情栏左缘）
+            stage_w = int(fields.get("stageW", "-1"))
+            stage_h = int(fields.get("stageH", "-1"))
+            stage_left = int(fields.get("stageLeft", "-1"))
+            detail_left = int(fields.get("detailLeft", "-1"))
+            claim("预览区为 200×200", stage_w == 200 and stage_h == 200,
+                  f"  实际 {stage_w}×{stage_h}")
+            claim("预览区靠左（贴住详情栏左缘）", abs(stage_left - detail_left) <= 1,
+                  f"  舞台左缘 {stage_left} / 详情栏左缘 {detail_left}")
+            # 渲染图形不得超出舞台。曾实测画布 987px 而容器 862px
+            claim("渲染图形未超出预览区", fields.get("canvasOverflow") == "false",
+                  f"  画布宽 {fields.get('canvasW')}px / 舞台宽 {stage_w}px")
+            # 控制条不应被挤压到文字竖排：曾实测单选按钮 47×44（「正面」竖排）
+            bar_h = int(fields.get("barBtnH", "-1"))
+            claim("预览控制条未被挤压（按钮不竖排）", fields.get("barOk") == "true",
+                  f"  视角按钮 {fields.get('barBtnW')}×{bar_h}px；高度超过 30 说明文字折行了")
             # 与「加宽名称以显示更多内容」的目的相反。
             decl_sum = int(fields.get("declSum", "0"))
             box_w = int(fields.get("boxW", "0"))

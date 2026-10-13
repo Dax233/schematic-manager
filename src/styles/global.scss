@@ -249,13 +249,13 @@ body,
   }
 }
 
-// 目录切换下拉里的单行：目录名 + 移除按钮
+// 目录切换下拉里的单行：勾选框 + 目录名 + 移除按钮
 .dir-item {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 260px;
-  max-width: 520px;
+  min-width: 280px;
+  max-width: 560px;
 
   &__name {
     flex: 1 1 auto;
@@ -403,17 +403,39 @@ body,
   border-bottom: 1px solid var(--color-border-1);
   background: var(--color-bg-2);
 
+  // 预览舞台固定为 200×200 并靠左显示。
+  //
+  // 之前是 height:400px 且宽度铺满整个详情栏（实测 862px），
+  // 即「满了整个右侧窗口」。投影是体素模型，正方形容器更贴合，
+  // 也不会把下方的信息面板挤出视野。
+  //
+  // 固定尺寸而不是 flex:1，是为了让「靠左 + 限定 200」这条要求
+  // 不随窗口宽度变化：无论右侧多宽，预览区始终是左上角那块 200×200。
   &__stage {
-    height: 400px;
-    min-height: 240px;
+    width: 200px;
+    height: 200px;
+    flex: 0 0 auto;
+    align-self: flex-start;
+    min-width: 0;
+    overflow: hidden;
     background: var(--color-fill-1);
   }
 
   &__bar {
     display: flex;
     align-items: center;
+    // 允许换行：控制条内容（四个视角按钮 + 亮度滑杆 + 尺寸 + 两个导出按钮）
+    // 合计约 840px，窄窗口下放不进一行。不换行时 flex 会压缩各控件，
+    // 单选按钮被挤到 47px 导致「正面」竖排成两行（实测 h=44px）。
+    // 换行比压扁可读，也不会因为以后再加控件而突然错位。
+    flex-wrap: wrap;
     gap: 8px;
     padding: 6px 8px;
+
+    // 各控件不被压缩，宁可换行也不缩到文字竖排
+    > * {
+      flex-shrink: 0;
+    }
   }
 
   &__label {
@@ -428,8 +450,11 @@ body,
     width: 42px;
   }
 
+  // 占位弹性块：把右侧信息推到行尾。
+  // 允许它收缩（其余控件不许），否则它会挤占控件空间。
   &__spacer {
     flex: 1 1 auto;
+    min-width: 0;
   }
 
   &__info {

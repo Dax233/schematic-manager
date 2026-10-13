@@ -1053,4 +1053,95 @@ describe("多目录与列宽复位", () => {
     ).toBeGreaterThan(Math.max(...others) * 2);
     w.unmount();
   });
+
+  /** 取「已加载目录」下拉里的勾选框 */
+  async function openDirMenu(w: ReturnType<typeof mountApp>) {
+    const trig = w.findAll("button").find((b) => b.text().includes("已加载目录"));
+    expect(trig, "应有「已加载目录」按钮").toBeTruthy();
+    await trig!.trigger("click");
+    await flushPromises();
+    return Array.from(
+      document.querySelectorAll<HTMLInputElement>(".dir-item input[type=checkbox]"),
+    );
+  }
+
+  it("新加载的目录默认勾选，文件立即显示", async () => {
+    const a: SchematicSummary = { ...summary, path: "/a/a.litematic", fileName: "a.litematic", dirName: "/a" };
+    mockInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === "scan_litematics") return { items: [a], skippedDirs: 0, skippedPaths: [] };
+      return undefined;
+    }) as never);
+    const w = mountApp();
+    await addDirs(w, "/a");
+    expect(w.text(), "刚加载的目录应默认显示其文件").toContain("a.litematic");
+
+    const boxes = await openDirMenu(w);
+    expect(boxes.length, "下拉里应有一个目录勾选框").toBe(1);
+    expect(boxes[0].checked, "新加载的目录应默认勾选").toBe(true);
+    w.unmount();
+  });
+
+  it("取消勾选目录后，该目录的文件从列表消失；重新勾选又出现", async () => {
+    // 对应需求「已加载目录菜单中增加选择框，勾选的才会在下面显示」
+    const a: SchematicSummary = { ...summary, path: "/a/a.litematic", fileName: "a.litematic", dirName: "/a" };
+    const b: SchematicSummary = { ...summary, path: "/b/b.litematic", fileName: "b.litematic", dirName: "/b" };
+    let call = 0;
+    mockInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === "scan_litematics") {
+        call += 1;
+        return { items: [call === 1 ? a : b], skippedDirs: 0, skippedPaths: [] };
+      }
+      return undefined;
+    }) as never);
+
+    const w = mountApp();
+    await addDirs(w, "/a", "/b");
+    expect(w.text()).toContain("a.litematic");
+    expect(w.text()).toContain("b.litematic");
+
+    // 取消第一个目录（下拉顺序即加载顺序）
+    let boxes = await openDirMenu(w);
+    expect(boxes.length).toBe(2);
+    boxes[0].click();
+    await flushPromises();
+    expect(w.text(), "取消勾选后该目录的文件应消失").not.toContain("a.litematic");
+    expect(w.text(), "另一个目录的文件应保留").toContain("b.litematic");
+    // 目录仍是「已加载」状态，只是不显示
+    expect(w.findAll("button").some((x) => x.text().includes("已加载目录（2）")), "目录数不应减少").toBe(true);
+
+    // 重新勾选应恢复显示
+    boxes = await openDirMenu(w);
+    boxes = Array.from(
+      document.querySelectorAll<HTMLInputElement>(".dir-item input[type=checkbox]"),
+    );
+    boxes[0].click();
+    await flushPromises();
+    expect(w.text(), "重新勾选后文件应再次出现").toContain("a.litematic");
+    w.unmount();
+  });
+
+  it("取消勾选正被选中的文件的目录时，详情回到空状态", async () => {
+    // 否则右侧会停留在「已不在列表里」的文件上：该文件的改动仍会被
+    // 保存到磁盘，而用户在列表里找不到它
+    const a: SchematicSummary = { ...summary, path: "/a/a.litematic", fileName: "a.litematic", dirName: "/a" };
+    mockInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === "scan_litematics") return { items: [a], skippedDirs: 0, skippedPaths: [] };
+      return undefined;
+    }) as never);
+
+    const w = mountApp();
+    await addDirs(w, "/a");
+    await w.findAll("tr").find((r) => r.text().includes("a.litematic"))!.trigger("click");
+    await flushPromises();
+    expect(w.text(), "选中后应出现详情").toContain("信息");
+
+    const boxes = await openDirMenu(w);
+    boxes[0].click();
+    await flushPromises();
+
+    expect(w.text(), "文件已不显示，应回到空状态").toContain("选择一个投影文件以查看详情");
+    const btn = (label: string) => w.findAll("button").find((x) => x.text().includes(label));
+    expect(btn("方块替换")?.attributes("disabled"), "依赖选中项的按钮应禁用").toBeDefined();
+    w.unmount();
+  });
 });
