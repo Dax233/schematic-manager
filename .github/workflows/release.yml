@@ -1,7 +1,7 @@
 name: 构建与发布
 
 # 触发规则：
-#   1. push 到 main            -> 快照发布（pre-release），tag 形如 v0.1.1+snapshot.<构建次数>
+#   1. push 到 main            -> 快照发布（pre-release），tag 形如 v1.0.1+snapshot.<构建次数>
 #   2. push 形如 v1.2.3 的 tag  -> 正式发布，以该版本号构建；随后把仓库内版本号递增到下一 PATCH
 #   3. 手动触发                 -> 按当前 package.json 版本做一次快照构建
 on:

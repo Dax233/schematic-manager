@@ -8,7 +8,7 @@
  *   3. src-tauri/tauri.conf.json -> "version"
  *
  * 用法：
- *   node scripts/bump-version.mjs 0.1.1        # 指定版本
+ *   node scripts/bump-version.mjs 1.0.1        # 指定版本
  *   node scripts/bump-version.mjs --next       # 当前版本 PATCH + 1
  */
 import { readFileSync, writeFileSync } from "node:fs";
