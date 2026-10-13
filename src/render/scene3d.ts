@@ -78,7 +78,16 @@ export function buildSceneGroup(data: SceneData): SceneGroup {
       // 用 DoubleSide 会同时画出方块内部的面，透视效果反而不对。
       side: THREE.FrontSide,
       transparent: true,
-      alphaTest: 0.5,
+      // **不要**设 alphaTest。
+      //
+      // 染色玻璃这类贴图的 alpha 是半透明的（实测白色/黄色染色玻璃各 16×16
+      // 里有 191 个像素的 alpha 落在 1..127），原本按逐方块取的第一张玻璃贴图
+      // 首像素 alpha 为 163。alphaTest 会直接**丢弃**低于阈值的像素，
+      // 而这些像素本应作为半透明画出来——结果是玻璃上被挖出大片窟窿/缺面。
+      //
+      // 完全透明的像素（alpha=0）由 transparent + 普通混合处理，
+      // 不需要 alphaTest 也看不见，因此去掉它没有副作用。
+      depthWrite: false,
     });
 
     const mesh = new THREE.Mesh(geo, mat);

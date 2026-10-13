@@ -649,6 +649,78 @@ fn real_project_has_no_unresolved_texture_faces() {
     );
 }
 
+/// 真实投影里用到的贴图确实含**半透明**像素，因此前端不得用 alphaTest 丢弃它们。
+///
+/// 前端材质原先设了 \lphaTest: 0.5\（THREE 会把 alpha 低于阈值的像素整片
+/// 丢弃）。实测白色/黄色染色玻璃的贴图各有 191 个像素的 alpha 落在 1..127，
+/// 这些像素本应作为半透明画出来，却被 alphaTest 挖成了窟窿——正是
+/// 「方块缺面/有洞」的一类成因。
+///
+/// 这条用例量出「真实数据里确实存在半透明像素」，从而说明前端不能靠
+/// alphaTest 处理透明；前端的材质已相应改为只用 transparent 混合。
+/// 两边合起来才是完整证据：只改前端而没有这条数据支撑，
+/// 日后有人「优化」着把 alphaTest 加回去也不会被拦住。
+#[test]
+#[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
+fn real_project_textures_do_contain_partial_alpha() {
+    let files = collect_litematic(&real_dir());
+    let db = bundled_db();
+
+    let mut used: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    for f in &files {
+        let Ok(sc) = crate::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
+        let Some(vi) = db.pick_version(sc.summary().data_version) else { continue };
+        for q in crate::visibility::collect_quads(&sc, &db, vi) {
+            if q.texture != crate::blockdb::NO_TEXTURE {
+                used.insert(q.texture);
+            }
+        }
+    }
+    assert!(!used.is_empty(), "没有收集到任何使用的贴图");
+
+    let (mut zero, mut partial, mut opaque) = (0usize, 0usize, 0usize);
+    let mut examples: Vec<String> = Vec::new();
+    for &pool in &used {
+        let Some(tex) = db.textures.get(pool as usize) else { continue };
+        let start = tex.offset as usize;
+        let Some(px) = db.pixels.get(start..start + tex.len as usize) else { continue };
+        let n = (tex.w as usize) * (tex.h as usize);
+        let mut this_partial = 0usize;
+        for i in 0..n {
+            let o = i * 4;
+            if o + 3 >= px.len() {
+                break;
+            }
+            match px[o + 3] {
+                0 => zero += 1,
+                1..=127 => {
+                    partial += 1;
+                    this_partial += 1;
+                }
+                _ => opaque += 1,
+            }
+        }
+        if this_partial > 0 && examples.len() < 5 {
+            examples.push(format!("池下标 {pool}：{this_partial} 个半透明像素"));
+        }
+    }
+
+    println!(
+        "  真实投影用到 {} 张贴图：全透明 {zero}、半透明 {partial}、不透明 {opaque} 像素",
+        used.len()
+    );
+    for e in &examples {
+        println!("    {e}");
+    }
+    // 要守的事实是「存在半透明像素」——有了它，前端就不能用 alphaTest
+    // 丢弃低 alpha 的像素。
+    assert!(
+        partial > 0,
+        "本次样本里没有半透明像素（全透明 {zero} / 半透明 {partial} / 不透明 {opaque}）；\
+         样本不足以判断前端能否使用 alphaTest，请换一批含染色玻璃的投影"
+    );
+}
+
 #[test]
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn real_project_piston_states_all_resolve() {
