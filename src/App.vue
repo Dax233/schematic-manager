@@ -76,7 +76,28 @@ async function followSystemTheme() {
   }
 }
 
-const files = ref<SchematicSummary[]>([]);
+/** 每个已加载目录 → 该目录的扫描结果。
+ *
+ * 用「目录 → 结果」而不是一个扁平列表：用户可一次加载多个目录，
+ * 移除其中一个时只需丢掉它那一份，不必重新扫描其余目录。
+ *
+ * 键是用户选择的目录本身（不是文件所在的子目录）：
+ * 一个目录下的文件可能分布在多层子目录里，用文件自身的 dirName 分不出
+ * 「它属于哪次加载」。
+ */
+const dirItems = ref<Record<string, SchematicSummary[]>>({});
+
+/** 已加载的目录，按加载顺序 */
+const loadedDirs = computed(() => Object.keys(dirItems.value));
+
+/** 全部目录合并后的文件列表，按路径排序保证顺序稳定 */
+const files = computed<SchematicSummary[]>(() => {
+  const all: SchematicSummary[] = [];
+  for (const d of loadedDirs.value) all.push(...(dirItems.value[d] ?? []));
+  all.sort((a, b) => a.path.localeCompare(b.path));
+  return all;
+});
+
 const selected = ref<SchematicSummary | null>(null);
 const analysis = ref<AnalysisResult | null>(null);
 const analyzing = ref(false);
@@ -86,15 +107,33 @@ const draft = ref({ name: "", author: "", description: "" });
 const dirty = ref(false);
 const searchText = ref("");
 
+/** 名称列的默认宽度。取实测自然宽度（176px）的两倍。
+ *
+ * 名称是最需要宽度的列：投影文件名普遍较长，之前一律被省略号截断，
+ * 只能靠悬停提示看全名。加倍后同屏能直接读出更多字符。
+ *
+ * 声明在目录栏默认宽度之前：后者要用它算出「能容下全部列」的宽度。
+ */
+const NAME_COL_W = 352;
+
 /** 左侧目录栏宽度（像素）。
  *
  * 用户可以拖动中间的拖动条调整，因此不写死在样式里。
  * 取值同时受 MIN/MAX 约束：太窄会让「名称/制作版本/尺寸」三列挤在一起、
  * 太宽则把右侧预览与详情压得过小。
+ *
+ * 默认值必须容得下各列默认宽度之和（见 SIDEBAR_FIT_W），
+ * 否则最后一列「来源目录」会被挤出可视区——名称加宽本意是
+ * 「显示更多内容」，挤出末列就与这个目的相反了。
  */
 const SIDEBAR_MIN_W = 320;
 const SIDEBAR_MAX_W = 1200;
-const sidebarWidth = ref(560);
+/** 各列默认宽度之和，含选择列与 1px 占位列。改列宽时要同步。 */
+const SIDEBAR_FIT_W = 40 + NAME_COL_W + 90 + 110 + 90 + 130 + 1;
+/** 目录栏默认宽度。至少 560（保证右侧仍有可用空间），
+ *  但要足够放下全部列，否则最后一列会被挤出可视区。 */
+const SIDEBAR_DEFAULT_W = Math.max(560, SIDEBAR_FIT_W);
+const sidebarWidth = ref(SIDEBAR_DEFAULT_W);
 /** 是否正在拖动分隔条。拖动期间禁用过渡并屏蔽文本选择 */
 const resizing = ref(false);
 
@@ -141,7 +180,7 @@ function startResize(e: PointerEvent) {
 /** 双击分隔条：在默认宽度与最窄宽度之间切换，便于快速让出空间 */
 function toggleSidebarWidth() {
   sidebarWidth.value = sidebarWidth.value <= SIDEBAR_MIN_W + 8
-    ? clampSidebar(560)
+    ? clampSidebar(SIDEBAR_DEFAULT_W)
     : SIDEBAR_MIN_W;
 }
 
@@ -178,6 +217,8 @@ onMounted(() => {
   window.addEventListener("pointerdown", onGlobalPointerDown);
   window.addEventListener("keydown", onGlobalKey);
   window.addEventListener("blur", onGlobalPointerDown);
+  // 拦截浏览器默认右键菜单（capture 阶段，确保在组件处理之前生效）
+  document.addEventListener("contextmenu", onDocumentContextMenu, true);
   onWindowResize();
 });
 
@@ -187,6 +228,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("pointerdown", onGlobalPointerDown);
   window.removeEventListener("keydown", onGlobalKey);
   window.removeEventListener("blur", onGlobalPointerDown);
+  document.removeEventListener("contextmenu", onDocumentContextMenu, true);
   stopResize();
 });
 
@@ -258,12 +300,10 @@ async function doConvert() {
         `。新文件：${r.outputPath}`,
     );
     convOpen.value = false;
-    const res = await scanLitematics(cur.dirName, 1);
-    const items = res.items.length > 0 ? res.items : files.value;
-    files.value = items;
-    // 转换会生成新文件并可能改动原文件，因此同步刷新选中项记录
-    syncSelection(items);
-    pruneChecks(items);
+    // 转换会生成新文件并可能改动原文件；重扫全部已加载目录后再定位选中项
+    await rescanAll();
+    syncSelection(files.value);
+    pruneChecks(files.value);
   } catch (e) {
     Message.error(`转换失败：${e}`);
   } finally {
@@ -487,8 +527,8 @@ async function doReplace() {
     } else {
       Message.success(`已替换 ${r.replaced} 个方块（改动前已备份）`);
       replaceOpen.value = false;
-      const res = await scanLitematics(cur.dirName, 1);
-      const hit = res.items.find((f) => f.path === cur.path);
+      await rescanAll();
+      const hit = files.value.find((f) => f.path === cur.path);
       if (hit) {
         selected.value = hit;
         resetDraft(hit);
@@ -514,25 +554,29 @@ const status = ref("就绪");
 
 /** 目录栏表格的列（默认宽度）。
  *
- * 固定列宽合计必须小于目录栏默认宽度（560），否则会出现横向滚动：
- * 首列左缘与末列右缘被裁掉。实测「制作版本」给出的日期较长（如 1.21.1）
- * 在 90px 下已够用，因此把固定部分压到 370，
- * 余下空间由「名称」与「来源目录」这两列分摊（都不设宽度）。
- *
  * 用户可在表头拖动调整宽度（见 columnResizable）；调整结果存在
  * colWidths 里，由 tableColumns 套回，因此这里始终是「默认值」。
  *
- * 「尺寸」列原本只有 slotName。Arco 的列宽拖动只对有 dataIndex 的列生效，
- * 因此这里补一个 dataIndex——td 渲染时 slotName 优先（实测 table-td.js:148），
- * 显示内容不受影响，只是让该列也能拖动。
+ * 「尺寸」列原本只有 slotName。Arco 的列宽拖动只对有 dataIndex 的列生效
+ * （table.js 里 resizable 要求 column.dataIndex），因此这里补一个 dataIndex——
+ * td 渲染时 slotName 优先（实测 table-td.js:148），显示内容不受影响，
+ * 只是让该列也能拖动。
  */
 const columns = computed<TableColumnData[]>(() => [
-  { title: "名称", dataIndex: "fileName", ellipsis: true, tooltip: true },
+  { title: "名称", dataIndex: "fileName", width: NAME_COL_W, ellipsis: true, tooltip: true },
   { title: "制作版本", dataIndex: "mcVersionName", width: 90 },
   // 110 是实测值：`16 × 12 × 16` 在 100px 下会折成两行
   { title: "尺寸", dataIndex: "dims", slotName: "dims", width: 110 },
   { title: "方块总数", dataIndex: "totalBlocks", width: 90 },
-  { title: "来源目录", dataIndex: "dirName", ellipsis: true, tooltip: true },
+  { title: "来源目录", dataIndex: "dirName", width: 130, ellipsis: true, tooltip: true },
+  // 1px 占位列，只为让「来源目录」也能拖动。
+  //
+  // Arco 判定可拖动时要求 `index2 < row.length - 1`（table.js:1247）：
+  // **最后一列永远不能拖**，因为它的宽度被当成「剩余空间」。
+  // 而用户要求每一列都能调宽。补一个 1px 宽的占位列放在最右侧，
+  // 「来源目录」就不再是最后一列，从而获得拖动手柄；
+  // 占位列自身没有 dataIndex，本来也不参与拖动，且被样式隐藏。
+  { title: "", dataIndex: "__filler", width: 1, className: "sidebar__filler-col" },
 ]);
 
 const blockColumns: TableColumnData[] = [
@@ -648,8 +692,7 @@ function pruneChecks(items: SchematicSummary[]) {
   if (changed) checkedPaths.value = next;
 }
 
-// 列宽：由用户在表头拖动调整。初始值就是列定义的 width，
-// 未设宽度的列（名称、来源目录）不参与，由它们分摊剩余空间。
+// 列宽：由用户在表头拖动调整。
 const colWidths = ref<Record<string, number>>({});
 
 /** 表头拖动结束：记录该列的新宽度 */
@@ -657,11 +700,7 @@ function onColumnResize(dataIndex: string, width: number) {
   colWidths.value = { ...colWidths.value, [dataIndex]: width };
 }
 
-/** 计算实际用于渲染的列：把用户调整过的宽度套回去。
- *
- * 列定义本身保持常量，用户改动只体现在这里，
- * 因此「重置列宽」只需清空 colWidths 即可。
- */
+/** 计算实际用于渲染的列：把用户调整过的宽度套回去。 */
 const tableColumns = computed<TableColumnData[]>(() =>
   columns.value.map((c) => {
     const key = String(c.dataIndex ?? "");
@@ -670,9 +709,21 @@ const tableColumns = computed<TableColumnData[]>(() =>
   }),
 );
 
-/** 恢复默认列宽 */
+/** 表格的 key。改变它会强制重建表格组件。
+ *
+ * 复位列宽只能靠重建，原因在 Arco 内部：拖动时它把宽度记在自己的
+ * `columnWidth` 里，渲染时按
+ *   `columnWidth[dataIndex] || column.width`
+ * 取值（table-col-group.js）。也就是说一旦内部记下宽度，外部怎么改
+ * `columns.width` 都不会生效——实测拖到 266px 后点复位，仍停在 266px。
+ * Arco 没有提供清除该状态的接口，因此改为换 key 重建。
+ */
+const tableKey = ref(0);
+
+/** 恢复默认列宽：清掉用户改动，并重建表格以清掉 Arco 内部记录 */
 function resetColumnWidths() {
   colWidths.value = {};
+  tableKey.value += 1;
 }
 
 const fileBusy = ref(false);
@@ -696,9 +747,15 @@ async function doDeleteFiles() {
   try {
     const r = await deleteFiles(list.map((f) => f.path));
     Message.success(`已删除 ${r.names.length} 个文件（${formatBytes(r.totalBytes)}），可从回收站还原`);
-    // 从列表移除，并清掉勾选，避免对已删除的文件再操作
-    const gone = new Set(r.names);
-    files.value = files.value.filter((f) => !gone.has(f.fileName));
+    // 从各个目录的结果里移除已删除的文件。
+    // 按路径而不是文件名移除：不同目录下可能有同名文件，
+    // 按文件名会把另一个目录里同名的文件也一并移出列表。
+    const gone = new Set(list.map((f) => f.path));
+    const next: Record<string, SchematicSummary[]> = {};
+    for (const d of loadedDirs.value) {
+      next[d] = (dirItems.value[d] ?? []).filter((f) => !gone.has(f.path));
+    }
+    dirItems.value = next;
     pruneChecks(files.value);
     syncSelection(files.value);
   } catch (e) {
@@ -808,45 +865,137 @@ function onGlobalKey(e: KeyboardEvent) {
   if (e.key === "Escape") closeRowMenu();
 }
 
+/** 全局禁用浏览器默认右键菜单。
+ *
+ * 不拦截时，右键会弹出 WebView2 自带的那套
+ * 「返回 / 刷新 / 另存为 / 打印 / 更多工具」——它是浏览器菜单，
+ * 出现在桌面应用里既突兀又无用，还会盖住我们自己的菜单。
+ *
+ * 这里用前端拦截而不是调 WebView2 的
+ * `SetAreDefaultContextMenusEnabled(false)`：后者需要在启动阶段拿到
+ * 控制器，失败时只能打日志、用户在界面上看不到任何反馈，而这一步
+ * 一旦没生效就完全退回浏览器菜单，属于「静默失效」。前端监听则
+ * 不依赖平台接口，且能被自动化测试直接验证。
+ *
+ * 只在没有自己的菜单要展示时才 preventDefault：text/textarea 上保留
+ * 原生菜单（复制/粘贴），否则用户没法在输入框里用右键粘贴。
+ */
+function onDocumentContextMenu(e: MouseEvent) {
+  const el = e.target as HTMLElement | null;
+  // 输入类元素保留原生菜单：里面的复制/粘贴是系统能力，我们没实现
+  if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) {
+    return;
+  }
+  e.preventDefault();
+}
+
 
 async function pickDirectory() {
   // 对话框调用本身也可能失败（插件未就绪、系统对话框不可用）。
   // 放在 try 之外会让这个 Promise 静默 reject：用户点了「添加目录」
   // 却什么都没发生，也收不到任何提示。其余对话框调用都在 try 内，
   // 这里保持一致。
-  let dir: unknown;
+  let picked: unknown;
   try {
-    dir = await open({ directory: true, multiple: false, title: "选择投影目录" });
+    picked = await open({
+      directory: true,
+      multiple: true,
+      title: "选择投影所在文件夹（可多选）",
+    });
   } catch (e) {
     Message.error(`打开目录选择框失败：${e}`);
     return;
   }
-  if (typeof dir !== "string") return;
+
+  // multiple: true 时返回数组；某些平台/插件版本可能仍返回单个字符串，
+  // 两种都接受，避免「多选后一个都不加载」。
+  const dirs: string[] = (Array.isArray(picked) ? picked : [picked]).filter(
+    (d): d is string => typeof d === "string" && d.length > 0,
+  );
+  if (dirs.length === 0) return;
+
   status.value = "正在扫描…";
-  try {
-    const r = await scanLitematics(dir);
-    files.value = r.items;
-    syncSelection(r.items);
-    // 勾选集要跟着新列表收敛：留着已不在列表里的路径，
-    // 之后点删除/复制会因文件不存在而整批失败
-    pruneChecks(r.items);
-    const parts: string[] = [];
-    const bad = r.items.filter((f) => f.error).length;
-    if (bad > 0) parts.push(`${bad} 个文件解析失败`);
-    // 被跳过的目录必须告知：否则结果看起来完整，用户会以为文件真的不存在
-    if (r.skippedDirs > 0) {
-      parts.push(`已跳过 ${r.skippedDirs} 个无法读取的目录`);
-      // 列出被跳过的路径，否则用户无从判断少了哪些内容
-      Message.warning({
-        content: `以下目录无法读取，已跳过：\n${r.skippedPaths.join("\n")}`,
-        duration: 8000,
-      });
+  const next = { ...dirItems.value };
+  const parts: string[] = [];
+  let bad = 0;
+  let skippedDirs = 0;
+  const skippedPaths: string[] = [];
+  let added = 0;
+
+  for (const dir of dirs) {
+    try {
+      const r = await scanLitematics(dir);
+      if (!(dir in next)) added++;
+      next[dir] = r.items;
+      bad += r.items.filter((f) => f.error).length;
+      skippedDirs += r.skippedDirs;
+      skippedPaths.push(...r.skippedPaths);
+    } catch (e) {
+      // 一个目录失败不应让其余目录也加载不了；如实报出是哪个目录
+      Message.error(`扫描 ${dir} 失败：${e}`);
     }
-    status.value = parts.length > 0 ? `扫描完成，${parts.join("，")}` : "扫描完成";
-  } catch (e) {
-    status.value = "扫描失败";
-    Message.error(`扫描失败：${e}`);
   }
+
+  if (Object.keys(next).length === Object.keys(dirItems.value).length && added === 0) {
+    // 一个目录都没加进来（全部失败或被取消）
+    if (skippedDirs === 0) Message.warning("没有新增任何目录");
+    status.value = "扫描完成";
+    return;
+  }
+
+  dirItems.value = next;
+  // 新的合并列表出来后收敛选中与勾选
+  syncSelection(files.value);
+  pruneChecks(files.value);
+
+  if (added > 0) parts.push(`新增 ${added} 个目录`);
+  if (skippedDirs > 0) {
+    parts.push(`已跳过 ${skippedDirs} 个无法读取的目录`);
+    // 列出被跳过的路径，否则用户无从判断少了哪些内容
+    Message.warning({
+      content: `以下目录无法读取，已跳过：\n${skippedPaths.join("\n")}`,
+      duration: 8000,
+    });
+  }
+  if (bad > 0) parts.push(`${bad} 个文件解析失败`);
+  status.value = parts.length > 0 ? `扫描完成，${parts.join("，")}` : "扫描完成";
+}
+
+/** 移除一个已加载目录。
+ *
+ * 只丢掉它那一份扫描结果，不重新扫描其余目录：重扫又慢又可能因
+ * 某个目录临时不可读而连带失败，而用户只是想移掉一个目录。
+ */
+function removeDir(dir: string) {
+  const next = { ...dirItems.value };
+  delete next[dir];
+  dirItems.value = next;
+  // 该目录的文件可能正被选中或勾选，需要一并收敛，
+  // 否则右侧详情会停留在已移出列表的文件上
+  syncSelection(files.value);
+  pruneChecks(files.value);
+  Message.info(`已移除目录：${dir}`);
+}
+
+/** 重新扫描全部已加载目录，用于文件被改动之后。
+ *
+ * 逐个目录独立处理：某一个目录临时读不到（被删除、权限变化）时，
+ * 保留它原有结果并提示，而不是让整次刷新失败、把其它目录也清空。
+ */
+async function rescanAll(): Promise<void> {
+  const dirs = loadedDirs.value;
+  if (dirs.length === 0) return;
+  const next: Record<string, SchematicSummary[]> = {};
+  for (const d of dirs) {
+    try {
+      const r = await scanLitematics(d);
+      next[d] = r.items;
+    } catch (e) {
+      Message.error(`重新扫描 ${d} 失败：${e}`);
+      next[d] = dirItems.value[d] ?? [];
+    }
+  }
+  dirItems.value = next;
 }
 
 function resetDraft(record: SchematicSummary | null) {
@@ -870,8 +1019,8 @@ async function saveDraft() {
     });
     dirty.value = false;
     // 重新读取，确保界面显示的是文件中的真实内容而不是内存里的草稿
-    const fresh = await scanLitematics(cur.dirName, 1);
-    const hit = fresh.items.find((f) => f.path === cur.path);
+    await rescanAll();
+    const hit = files.value.find((f) => f.path === cur.path);
     if (hit) {
       selected.value = hit;
       resetDraft(hit);
@@ -948,8 +1097,8 @@ async function onRestore(row: BackupEntry) {
     Message.success("已还原");
     await Promise.all([refreshBackups(), refreshLogs()]);
     // 还原后重新读取文件内容与预览，避免界面仍显示还原前的数据
-    const r = await scanLitematics(cur.dirName, 1);
-    const hit = r.items.find((f) => f.path === cur.path);
+    await rescanAll();
+    const hit = files.value.find((f) => f.path === cur.path);
     if (hit) {
       selected.value = hit;
       resetDraft(hit);
@@ -1280,6 +1429,35 @@ void followSystemTheme();
 
     <div class="toolbar">
       <a-button size="small" type="primary" @click="pickDirectory">添加目录</a-button>
+      <!-- 已加载目录的下拉：查看当前加载了哪些、并逐个移除。
+           不禁用：未加载时点开应看到「尚未加载任何目录」的说明，
+           而不是一个点不动的按钮——那样用户不知道是坏了还是没数据。 -->
+      <a-dropdown trigger="click">
+        <a-button size="small">
+          已加载目录（{{ loadedDirs.length }}）
+          <icon-down />
+        </a-button>
+        <template #content>
+          <a-doption v-if="loadedDirs.length === 0" disabled>尚未加载任何目录</a-doption>
+          <a-doption v-for="d in loadedDirs" :key="d" :value="d">
+            <div class="dir-item">
+              <span class="dir-item__name" :title="d">{{ d }}</span>
+              <span class="dir-item__count">{{ (dirItems[d] ?? []).length }} 个</span>
+              <!-- 移除按钮：用 @click.stop 阻止冒泡，否则点它会同时选中该项、
+                   让下拉以为是「选择目录」而不是「移除」 -->
+              <a-button
+                size="mini"
+                type="text"
+                status="danger"
+                title="从列表移除该目录（不会删除磁盘上的文件）"
+                @click.stop="removeDir(d)"
+              >
+                移除
+              </a-button>
+            </div>
+          </a-doption>
+        </template>
+      </a-dropdown>
       <a-input-search
         v-model="searchText"
         size="small"
@@ -1329,6 +1507,7 @@ void followSystemTheme();
         </div>
 
         <a-table
+          :key="tableKey"
           :columns="tableColumns"
           :data="filteredFiles"
           :pagination="false"

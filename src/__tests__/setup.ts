@@ -21,6 +21,25 @@ if (typeof window !== "undefined" && !window.matchMedia) {
 }
 
 // 部分组件会观察尺寸变化
+// 视口尺寸对齐真实窗口。
+//
+// jsdom 默认 1024x768，而 tauri.conf.json 里窗口是 1500x950。
+// 目录栏宽度受「窗口宽 - 360」约束（clampSidebar），因此默认视口会把
+// 默认宽度夹到 664，与用户实际看到的宽度不一致——测试断言的就不是
+// 真实行为了。这里按窗口配置设置，让测试环境贴近实际运行环境。
+if (typeof window !== "undefined") {
+  Object.defineProperty(window, "innerWidth", {
+    value: 1500,
+    writable: true,
+    configurable: true,
+  });
+  Object.defineProperty(window, "innerHeight", {
+    value: 950,
+    writable: true,
+    configurable: true,
+  });
+}
+
 if (typeof window !== "undefined" && !("ResizeObserver" in window)) {
   class ResizeObserverStub {
     observe() {}

@@ -394,17 +394,22 @@ describe("跟随系统深浅色", () => {
 });
 
 describe("重新扫描后的选中项", () => {
-  /** 点工具栏的「添加目录」并等扫描完成 */
-  async function addDir(w: ReturnType<typeof mountApp>, dir: string) {
-    mockOpen.mockResolvedValue(dir);
+  /** 点工具栏的「添加目录」并等扫描完成。
+   *
+   * 对话框用 multiple: true 打开，因此插件返回的是**数组**。
+   * 这里也传数组，与真实返回值一致；只传单个字符串会掩盖
+   * 「只处理了返回值的第一种形态」这类缺陷。
+   */
+  async function addDir(w: ReturnType<typeof mountApp>, ...dirs: string[]) {
+    mockOpen.mockResolvedValue(dirs);
     const btn = w.findAll("button").find((b) => b.text().includes("添加目录"));
     expect(btn, "应能定位到「添加目录」按钮").toBeTruthy();
     await btn!.trigger("click");
     await flushPromises();
   }
 
-  it("换到另一个目录后，不再显示上一个目录的选中项", async () => {
-    // 这条防的是一个真实缺陷：pickDirectory 只替换 files 而不处理选中项，
+  it("移除目录后，不再显示该目录的选中项", async () => {
+    // 这条防的是一个真实缺陷：移除目录时只改列表而不处理选中项，
     // 于是详情面板继续显示**已不在列表中**的文件，「保存元数据」会把改动
     // 写到那个路径上，而用户在列表里选中不了它，看不出改动写到了哪里。
     const other: SchematicSummary = {
@@ -425,14 +430,33 @@ describe("重新扫描后的选中项", () => {
     await flushPromises();
     expect(w.text(), "选中后应出现详情页签").toContain("信息");
 
-    // 换一个目录重新扫描，新列表里没有原选中项
+    // 再加一个目录（新列表里没有原选中项）
     stubInvoke({
       scan_litematics: { items: [other], skippedDirs: 0, skippedPaths: [] },
     });
     await addDir(w, "/q");
+    // 加载多个目录时两边的文件都要在：不是「換目录」而是「追加目录」
+    expect(w.text(), "先前加载的目录应保留").toContain("测试.litematic");
+    expect(w.text(), "新加载的目录也应显示").toContain("另一个.litematic");
 
-    expect(w.text(), "旧目录的文件不应还留在列表里").not.toContain("测试.litematic");
-    expect(w.text(), "应显示新目录的文件").toContain("另一个.litematic");
+    // 通过真实界面移除：点开「已加载目录」下拉，点第一项的「移除」按钮。
+    // 不直接调用组件内部函数——那绕过了按钮是否真的能用、事件是否接对，
+    // 而这两点正是「点了没反应」类缺陷的所在。
+    const trigger = w.findAll("button").find((b) => b.text().includes("已加载目录"));
+    expect(trigger, "应有「已加载目录」下拉按钮").toBeTruthy();
+    await trigger!.trigger("click");
+    await flushPromises();
+
+    // 下拉内容被 teleport 到 body，因此从 document 里找
+    const removeBtn = Array.from(document.querySelectorAll(".dir-item button")).find((b) =>
+      (b.textContent ?? "").includes("移除"),
+    ) as HTMLElement | undefined;
+    expect(removeBtn, "下拉里应有「移除」按钮").toBeTruthy();
+    removeBtn!.click();
+    await flushPromises();
+
+    expect(w.text(), "被移除目录的文件不应还留在列表里").not.toContain("测试.litematic");
+    expect(w.text(), "另一个目录的文件应保留").toContain("另一个.litematic");
     expect(
       w.text(),
       "选中项已不在列表中，应回到空状态而不是继续显示旧文件的详情",
@@ -440,8 +464,8 @@ describe("重新扫描后的选中项", () => {
 
     // 依赖选中项的按钮必须同步禁用，否则点下去会作用到旧路径
     const btn = (label: string) => w.findAll("button").find((b) => b.text().includes(label));
-    expect(btn("方块替换")?.attributes("disabled"), "切换后应禁用").toBeDefined();
-    expect(btn("版本转换")?.attributes("disabled"), "切换后应禁用").toBeDefined();
+    expect(btn("方块替换")?.attributes("disabled"), "移除后应禁用").toBeDefined();
+    expect(btn("版本转换")?.attributes("disabled"), "移除后应禁用").toBeDefined();
     w.unmount();
   });
 
@@ -656,12 +680,22 @@ describe("目录栏宽度调整", () => {
     return parseFloat(el.style.width || "0");
   }
 
-  it("默认宽度与最窄宽度都在合理范围内", async () => {
+  it("默认宽度容得下各列，且不把右侧挤没", async () => {
     const w = mountApp();
     await flushPromises();
     const def = sidebarWidth(w);
-    expect(def, "默认宽度应够放下三列").toBeGreaterThanOrEqual(320);
+    expect(def, "默认宽度应够放下全部列").toBeGreaterThanOrEqual(320);
     expect(def, "默认宽度不应把右侧挤没").toBeLessThanOrEqual(1200);
+
+    // 关键：各列默认宽度之和不能超过目录栏默认宽度，
+    // 否则最后一列会被挤出可视区——名称加宽本意是「显示更多」，
+    // 挤出末列就与目的相反。这里按 colgroup 的实际宽度求和核对。
+    const cols = w.findAll(".sidebar colgroup col");
+    const sum = cols.reduce((acc, c) => {
+      const m = /width:\s*([\d.]+)px/.exec(c.attributes("style") ?? "");
+      return acc + (m ? Number(m[1]) : 0);
+    }, 0);
+    expect(sum, `各列合计 ${sum}px 应不超过目录栏默认宽度 ${def}px`).toBeLessThanOrEqual(def);
 
     const splitter = w.find(".splitter");
     expect(splitter.exists(), "应有拖动条").toBe(true);
@@ -747,7 +781,10 @@ describe("目录栏宽度调整", () => {
     const w = mountApp();
     await flushPromises();
     const splitter = w.find(".splitter");
-    expect(sidebarWidth(w)).toBe(560);
+    // 默认宽度由列宽合计决定，因此从当前值取而不是写死数字：
+    // 写死会在调整列宽后立刻失效，而那并不代表行为出错。
+    const def = sidebarWidth(w);
+    expect(def, "默认宽度应是合理值").toBeGreaterThanOrEqual(320);
 
     await splitter.trigger("dblclick");
     await flushPromises();
@@ -755,7 +792,7 @@ describe("目录栏宽度调整", () => {
 
     await splitter.trigger("dblclick");
     await flushPromises();
-    expect(sidebarWidth(w), "再次双击应回到默认宽度").toBe(560);
+    expect(sidebarWidth(w), "再次双击应回到默认宽度").toBe(def);
     w.unmount();
   });
 });
@@ -905,6 +942,115 @@ describe("目录栏多选与文件操作", () => {
       w.find(".sidebar__checks").text(),
       "全选只应选中当时的可见项，清空搜索后不应把之前不可见的一起算上",
     ).toContain("已选 1 / 3");
+    w.unmount();
+  });
+});
+
+/** 多目录加载与移除、以及列宽复位。
+ *
+ * 这些都是「点了没反应」类型的功能，测试必须经由真实界面触发，
+ * 而不是直接调用组件内部函数——按钮是否可用、事件是否接对，
+ * 恰恰是缺陷所在。
+ */
+describe("多目录与列宽复位", () => {
+  async function addDirs(w: ReturnType<typeof mountApp>, ...dirs: string[]) {
+    mockOpen.mockResolvedValue(dirs);
+    const btn = w.findAll("button").find((b) => b.text().includes("添加目录"));
+    await btn!.trigger("click");
+    await flushPromises();
+  }
+
+  it("一次选多个目录时全部加载，文件合并显示", async () => {
+    const a: SchematicSummary = { ...summary, path: "/a/a.litematic", fileName: "a.litematic", dirName: "/a" };
+    const b: SchematicSummary = { ...summary, path: "/b/b.litematic", fileName: "b.litematic", dirName: "/b" };
+    let call = 0;
+    mockInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === "scan_litematics") {
+        call += 1;
+        return { items: [call === 1 ? a : b], skippedDirs: 0, skippedPaths: [] };
+      }
+      return undefined;
+    }) as never);
+
+    const w = mountApp();
+    await addDirs(w, "/a", "/b");
+
+    expect(call, "两个目录都应被扫描").toBe(2);
+    expect(w.text(), "第一个目录的文件应在列表里").toContain("a.litematic");
+    expect(w.text(), "第二个目录的文件应在列表里").toContain("b.litematic");
+    expect(w.text(), "计数应为两个目录之和").toContain("共 2 个投影");
+    w.unmount();
+  });
+
+  it("移除下拉里的目录后，该目录的文件从列表消失，其余保留", async () => {
+    const a: SchematicSummary = { ...summary, path: "/a/a.litematic", fileName: "a.litematic", dirName: "/a" };
+    const b: SchematicSummary = { ...summary, path: "/b/b.litematic", fileName: "b.litematic", dirName: "/b" };
+    let call = 0;
+    mockInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === "scan_litematics") {
+        call += 1;
+        return { items: [call === 1 ? a : b], skippedDirs: 0, skippedPaths: [] };
+      }
+      return undefined;
+    }) as never);
+
+    const w = mountApp();
+    await addDirs(w, "/a", "/b");
+    expect(w.text()).toContain("a.litematic");
+
+    // 移除第一个目录（下拉项顺序即加载顺序）
+    const trigger = w.findAll("button").find((x) => x.text().includes("已加载目录"));
+    await trigger!.trigger("click");
+    await flushPromises();
+    const rm = Array.from(document.querySelectorAll(".dir-item button"))[0] as HTMLElement;
+    expect(rm, "应有移除按钮").toBeTruthy();
+    rm.click();
+    await flushPromises();
+
+    expect(w.text(), "被移除目录的文件应消失").not.toContain("a.litematic");
+    expect(w.text(), "另一个目录的文件应保留").toContain("b.litematic");
+    expect(w.text(), "计数应更新").toContain("共 1 个投影");
+    w.unmount();
+  });
+
+  it("已加载目录下拉正确反映当前状态", async () => {
+    const w = mountApp();
+    const btn = w.findAll("button").find((b) => b.text().includes("已加载目录"));
+    expect(btn, "应有「已加载目录」按钮").toBeTruthy();
+    expect(btn!.text(), "未加载时应显示 0").toContain("0");
+
+    // 未加载时下拉里应给出说明，而不是一个空白面板
+    await btn!.trigger("click");
+    await flushPromises();
+    expect(document.body.textContent, "未加载时应说明「尚未加载任何目录」").toContain(
+      "尚未加载任何目录",
+    );
+    w.unmount();
+  });
+
+  it("名称列明显宽于其余各列", async () => {
+    const w = mountApp();
+    // 断言 colgroup 上的宽度而不是 getBoundingClientRect：
+    // jsdom 不做布局，所有元素尺寸都是 0，量出来只会得到 0 比 0。
+    // colgroup 的 <col> 带的是 Arco 实际使用的列宽，也就是渲染依据本身。
+    const cols = w.findAll(".sidebar colgroup col");
+    // 选择列 + 5 个数据列 + 1 个 1px 占位列（让最后一列也能拖动）
+    expect(cols.length, "应有 7 列（含选择列与占位列）").toBe(7);
+    const widthOf = (i: number) => {
+      const style = cols[i].attributes("style") ?? "";
+      const m = /width:\s*([\d.]+)px/.exec(style);
+      expect(m, `第 ${i} 列应带宽度：${style}`).toBeTruthy();
+      return Number(m![1]);
+    };
+    // 顺序：选择列、名称、制作版本、尺寸、方块总数、来源目录、占位列
+    const name = widthOf(1);
+    const others = [widthOf(2), widthOf(3), widthOf(4), widthOf(5)];
+    // 用关系而不是绝对值：绝对值会随后续样式微调而失效，
+    // 这里要保证的是「名称确实是被加宽的那一列」。
+    expect(
+      name,
+      `名称列(${name}) 应比其余各列(${others.join("/")})都宽出一倍以上`,
+    ).toBeGreaterThan(Math.max(...others) * 2);
     w.unmount();
   });
 });

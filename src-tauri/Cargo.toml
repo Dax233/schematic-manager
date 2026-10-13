@@ -23,14 +23,6 @@ serde_json = "1"
 flate2 = "1"
 thiserror = "2"
 
-# 关掉 WebView2 自带的右键菜单需要直接调用它的 COM 接口
-# （Tauri 2 没有把 wry 的 with_default_context_menus 透出来）。
-# 两者都已在依赖树里（tauri 自己就用它们），因此不增加实际编译量；
-# 版本与 tauri-2.12.3 的约束保持一致，避免同一 crate 出现两个版本。
-[target.'cfg(windows)'.dependencies]
-webview2-com = "0.39"
-windows = { version = "0.62", features = ["Win32_Foundation"] }
-
 [profile.release]
 codegen-units = 1
 lto = true

@@ -149,6 +149,83 @@ body,
     height: 100%;
   }
 
+  // 表头各列之间的竖向分割线。
+  //
+  // Arco 只在 `border: { cell: true }` 时给 th 加 border-right，
+  // 而本项目用的是 `{ wrapper: true, cell: false }`，于是表头完全没有
+  // 分割线——列宽可拖动却看不出从哪拖。
+  //
+  // 这里只给**表头**补线，不动单元格：单元格加满边框会让 41 行的列表
+  // 变成密集网格，可读性反而变差。线画在 th 右侧，与
+  // .arco-table-column-handle（right:-4px, width:8px）的中心位置一致，
+  // 因此看起来就是「拖动条的所在位置」。
+  //
+  // 用 --color-border-2 而不是 --color-neutral-3：前者在深色主题下有
+  // 对应取值，能自动适配；后者是固定灰阶。
+  .arco-table-header .arco-table-th {
+    border-right: 1px solid var(--color-border-2);
+
+    // 最后一列右边不再画线：它右侧就是容器边框，两条线叠在一起会显得更粗
+    &:last-child {
+      border-right: 0;
+    }
+  }
+
+  // 拖动中的那一列用主题色高亮，明确「正在调这一列的宽度」
+  .arco-table-header .arco-table-th-resizing {
+    border-right-color: rgb(var(--primary-6));
+  }
+
+  // 占位列：只为让最后一列能拖动而存在，不应被看见。
+  // 去掉它的边框与内边距，并把内容裁掉（表头为空字符串）。
+  .sidebar__filler-col {
+    padding: 0 !important;
+    border-right: 0 !important;
+
+    .arco-table-cell {
+      padding: 0 !important;
+    }
+  }
+
+  // 占位列的表头也不要画分割线
+  .arco-table-header .sidebar__filler-col {
+    border-right: 0 !important;
+    border-left: 1px solid var(--color-border-2);
+  }
+
+  // 拖动条本身平时不可见，只靠上面的分割线提示位置。
+  // 悬停时给一条更明显的主题色竖线，让「这里能拖」变得可发现。
+  //
+  // right 从 Arco 默认的 -4px 改为 0：默认值让手柄有 4px 探出表头容器，
+  // 会把表头的 scrollWidth 撑大（实测多 11px：手柄 4px + 每列分割线 6px），
+  // 从而在没有任何列被挤出时也冒出一条横向滚动条。收进来后
+  // 仍保留 8px 的可抓取宽度，配合分割线足以定位。
+  .arco-table-column-handle {
+    right: 0;
+
+    &:hover::after {
+      position: absolute;
+      top: 20%;
+      left: 100%;
+      width: 2px;
+      height: 60%;
+      background: rgb(var(--primary-6));
+      content: "";
+      transform: translateX(-100%);
+    }
+  }
+
+  // 目录栏字号收紧，同宽下能多显示内容。
+  // 只改目录栏，右侧详情与对话框保持原字号：那里的文字是逐字阅读的，
+  // 缩到 12px 会明显费力。
+  .arco-table-th,
+  .arco-table-td {
+    font-size: 12px;
+  }
+
+  .arco-table-cell {
+    padding: 3px 6px !important;
+  }
   // 顶部文件操作条与底部多选条都固定高度，不随表格伸缩，
   // 因此表格的 flex:1 才是「吃掉剩余空间」的那一段。
   &__ops,
@@ -169,6 +246,29 @@ body,
   // 底部多选条：上方留分隔线，计数靠左、按钮靠右
   &__checks {
     border-top: 1px solid var(--color-border-1);
+  }
+}
+
+// 目录切换下拉里的单行：目录名 + 移除按钮
+.dir-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 260px;
+  max-width: 520px;
+
+  &__name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__count {
+    flex: 0 0 auto;
+    color: var(--color-text-3);
+    font-size: 12px;
   }
 }
 
@@ -264,9 +364,16 @@ body,
   border-bottom: 1px solid var(--color-border-1);
 }
 
-// 数据表格按桌面端密度压缩行高
+// 数据表格按桌面端密度压缩行高。
+//
+// 排除目录栏：它在 .sidebar 里有自己的 3px 6px 规则（更紧凑，为了同屏
+// 显示更多文件）。这里若不是 `.sidebar *` 排除，全局的 `!important`
+// 会覆盖侧栏那条——两条规则特异性相同，靠书写顺序决定胜负，
+// 一旦以后调整顺序就会静默失效。
 .arco-table-cell {
-  padding: 4px 8px !important;
+  &:not(.sidebar *) {
+    padding: 4px 8px !important;
+  }
 }
 
 // 表单状态提示

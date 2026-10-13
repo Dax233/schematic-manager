@@ -135,10 +135,20 @@ pub fn reveal_in_file_manager(path: &Path) -> AppResult<()> {
     }
     #[cfg(windows)]
     {
-        // explorer.exe 对 /select 的返回码不可靠（打开成功也常返回 1），
-        // 因此这里只判断「能否启动」，不判断退出码，避免报假错。
+        // `/select,` 与路径必须是**两个参数**。
+        //
+        // 写成 `.arg(format!("/select,{}", path))` 时，含空格的路径会让整串被
+        // 引号包成一个 token：`"/select,C:\我的 目录\a.litematic"`。
+        // explorer 对参数的解析很特别，这种形式会被它忽略——进程正常启动、
+        // 不报错，但窗口不出现也不选中任何文件，表现就是「点了没反应」。
+        // 分开传时 Rust 只给路径加引号，得到 `/select, "C:\..."`，这是
+        // explorer 认识的形式。
+        //
+        // 另外 explorer.exe 的返回码不可靠（成功也常返回 1），
+        // 因此只判断能否启动，不判断退出码，避免报假错。
         std::process::Command::new("explorer.exe")
-            .arg(format!("/select,{}", path.display()))
+            .arg("/select,")
+            .arg(path)
             .spawn()
             .map_err(|e| AppError::Parse(format!("无法打开资源管理器：{e}")))?;
         Ok(())

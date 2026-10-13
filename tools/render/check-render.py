@@ -240,6 +240,62 @@ SHIM = r"""
       ? Math.round(rSb.bottom - footEl.getBoundingClientRect().bottom)
       : 0;
 
+    // ---- 表头竖向分割线 ----
+    // 没有分割线时，列宽虽可拖却看不出各列边界在哪。逐列取 border-right-width：
+    // 除最后一列外都应有 1px（最后一列右边就是容器边框，两条线叠一起会显粗）。
+    var ths = sb.querySelectorAll(".arco-table-header th");
+    var dividerOk = 0;
+    for (var i = 0; i < ths.length; i++) {
+      var bw = parseFloat(window.getComputedStyle(ths[i]).borderRightWidth) || 0;
+      var isLast = i === ths.length - 1;
+      if (isLast ? bw === 0 : bw > 0) dividerOk++;
+    }
+
+    // ---- 列宽拖动与复位 ----
+    // 拖动后名称列应明显变宽；点复位后应回到原宽。
+    // 复位这一点过去是坏的：Arco 把拖动结果记在自己的 columnWidth 里，
+    // 优先级高于 columns.width（table-col-group.js: columnWidth[d] || item.width），
+    // 因此外部清状态改不动它，必须重建组件。
+    var colW = function () {
+      var t = sb.querySelectorAll(".arco-table-header th"), a = [];
+      for (var j = 0; j < t.length; j++) a.push(Math.round(t[j].getBoundingClientRect().width));
+      return a;
+    };
+    var wCols = colW();
+    var handle = sb.querySelector(".arco-table-column-handle");
+    var dragged = false;
+    if (handle) {
+      var hb = handle.getBoundingClientRect();
+      var hx = Math.round(hb.left + hb.width / 2), hy = Math.round(hb.top + hb.height / 2);
+      handle.dispatchEvent(new MouseEvent("mousedown", {
+        bubbles: true, cancelable: true, clientX: hx, clientY: hy }));
+      window.dispatchEvent(new MouseEvent("mousemove", {
+        bubbles: true, cancelable: true, clientX: hx + 90, clientY: hy }));
+      window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+      dragged = true;
+    }
+
+    // 表头是否被横向挤出可视区。
+    // 名称列加宽后各列合计可能超过目录栏宽度，最后一列会被截到外面，
+    // 用户反而「看不到更多内容」——与加宽的目的相反，因此必须检查。
+    //
+    // 注意：拖动句柄有 4~8px 宽且绝对定位，可能让 scrollWidth 略大于
+    // clientWidth。那种情况不是「列被挤出」，因此用「列宽合计」判断，
+    // 而不是直接看是否有滚动条。
+    //
+    // 表头与表体各有一个 colgroup，因此**只取第一个**：两个都加会把
+    // 合计算成两倍（实测 1626px 而非 813px），得到假失败。
+    var colGroup = sb.querySelector(".arco-table-header colgroup");
+    var cols = (colGroup || sb).querySelectorAll("col");
+    var declSum = 0;
+    for (var ci = 0; ci < cols.length; ci++) {
+      var cm = /width:\s*([\d.]+)px/.exec(cols[ci].getAttribute("style") || "");
+      if (cm) declSum += Number(cm[1]);
+    }
+    var boxW = Math.round(rSb.width);
+    // 留 2px 取整余量
+    var fits = declSum <= boxW + 2;
+
     return "LAYOUT:"
       + "gapWb=" + gapWb
       + ",gapDt=" + gapDt
@@ -253,11 +309,84 @@ SHIM = r"""
       + ",gapBody=" + gapBody
       + ",bodyH=" + bodyH
       + ",minBodyH=" + minBodyH
-      + ",gapFoot=" + gapFoot;
+      + ",gapFoot=" + gapFoot
+      + ",declSum=" + declSum
+      + ",boxW=" + boxW
+      + ",fits=" + fits
+      + ",thCount=" + ths.length
+      + ",dividerOk=" + dividerOk
+      + ",handleCount=" + sb.querySelectorAll(".arco-table-column-handle").length
+      + ",tdFont=" + (function () {
+          var td = sb.querySelector(".arco-table-td");
+          return td ? window.getComputedStyle(td).fontSize : "";
+        })()
+      + ",detailFont=" + (function () {
+          var el = document.querySelector(".detail .arco-table-td");
+          return el ? window.getComputedStyle(el).fontSize : "";
+        })()
+      + ",dragged=" + dragged
+      + ",wCols0=" + wCols.join("|");
+  }
+
+  /** 测列宽拖动与复位。自包含：自己记录拖动前宽度作为基准，
+   *  不依赖其它步骤的采样——目录栏一被拖动，所有列宽都会重算，
+   *  跨步骤比较必然得到假失败。 */
+  function resetWidthsAndMeasure() {
+    var sb = document.querySelector(".sidebar");
+    var read = function () {
+      var t = sb.querySelectorAll(".arco-table-header th"), a = [];
+      for (var j = 0; j < t.length; j++) a.push(Math.round(t[j].getBoundingClientRect().width));
+      return a.join("|");
+    };
+    var base = read();
+
+    // 用真实表头拖动句柄把名称列拖宽。
+    //
+    // mousedown 必须打在**名称列**的手柄上（第一个句柄属于名称列），
+    // 并且要等一拍再量：Arco 的 handleThMouseMoving 挂在 window 上，
+    // 但列宽变化经 Vue 渲染是异步的。
+    var handles = sb.querySelectorAll(".arco-table-column-handle");
+    var handle = handles.length ? handles[0] : null;
+    // mousedown 必须打在**名称列**的手柄上（第一个句柄属于名称列）。
+    //
+    // 宽度必须在**之后**的拍子里读：列宽变化经 Vue 渲染是异步的，
+    // 同拍读到仍是拖动前的值（实测得到「352 -> 352」的假失败）。
+    var handles = sb.querySelectorAll(".arco-table-column-handle");
+    var handle = handles.length ? handles[0] : null;
+    if (handle) {
+      var hb = handle.getBoundingClientRect();
+      var hx = Math.round(hb.left + hb.width / 2), hy = Math.round(hb.top + hb.height / 2);
+      handle.dispatchEvent(new MouseEvent("mousedown", {
+        bubbles: true, cancelable: true, button: 0, clientX: hx, clientY: hy }));
+      window.dispatchEvent(new MouseEvent("mousemove", {
+        bubbles: true, cancelable: true, button: 0, clientX: hx + 90, clientY: hy }));
+      window.dispatchEvent(new MouseEvent("mouseup", {
+        bubbles: true, cancelable: true, button: 0, clientX: hx + 90, clientY: hy }));
+    }
+
+    var btns = sb.querySelectorAll("button"), reset = null;
+    for (var k = 0; k < btns.length; k++) {
+      if ((btns[k].textContent || "").indexOf("列宽复位") >= 0) reset = btns[k];
+    }
+    if (!reset) return Promise.resolve("RESET:no-button");
+
+    return new Promise(function (done) {
+      // 第一拍：读拖动后的宽度（此时 Vue 已渲染）
+      setTimeout(function () {
+        var dragged = read();
+        reset.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        // 第二拍：读复位后的宽度（重建组件同样是异步的）
+        setTimeout(function () {
+          done("RESET:base=" + base + ",dragged=" + dragged + ",afterReset=" + read());
+        }, 80);
+      }, 80);
+    });
   }
 
   var layoutResult = "";
   var dragState = null;
+  /** 列宽核对只跑一次：pending 为空会一直是空，需要显式守卫 */
+  var widthChecked = false;
 
   // 用真实指针事件拖动分隔条，确认宽度确实随之改变。
   //
@@ -283,7 +412,12 @@ SHIM = r"""
     // 这条路径同时验证了「拖出窄条后仍继续」这一要点
     window.dispatchEvent(mk("pointermove", x + dx));
     window.dispatchEvent(mk("pointerup", x + dx));
-    // 拖动应已结束：再发一次移动不应继续改变宽度
+    // 再发一次移动，验证拖动已结束。
+    //
+    // 这里**不**在本拍量宽度：Vue 的更新是异步的，同拍读到的仍是拖动前的值，
+    // 拿两次同样过期的值比较会「通过得毫无意义」。松手后不再跟随这一条
+    // 由前端单元测试（「拖动会改变宽度，且 pointerup 之后不再跟随」）
+    // 逐拍量取验证，这里只负责确认真实布局下的拖动效果。
     window.dispatchEvent(mk("pointermove", x + dx + 200));
     dragState = { before: before, x: x };
   }
@@ -294,8 +428,7 @@ SHIM = r"""
     if (!sb || !dragState || dragState === "none") return "DRAG:none";
     var after = Math.round(sb.getBoundingClientRect().width);
     var r = "DRAG:before=" + dragState.before + ",after=" + after
-          + ",delta=" + (after - dragState.before)
-          + ",movedAfterUp=" + dragState.movedAfterUp;
+          + ",delta=" + (after - dragState.before);
     dragState = null;
     return r;
   }
@@ -370,13 +503,36 @@ SHIM = r"""
       // 依次打开每个功能对话框；打开后立刻关闭，再看下一个
       var pending = DIALOG_BUTTONS.filter(function (n) { return !dialogTried.includes(n); })[0];
       if (!pending) {
-        dialogsDone = true;
+        // 只执行一次：pending 在所有对话框试完后会一直是 undefined，
+        // 不加守卫的话每到一拍都会重跑一遍（会反复重置拖动态）。
+        //
+        // 注意守卫**不能直接 return 到底**：列宽核对是异步的，
+        // 它 resolve 之后会调 startDrag 设好 dragState，
+        // 那次结果要由下面的 dragState 分支来量。直接 return 会让
+        // 拖动态永远没人处理，表现就是「未能取到拖动结果」。
+        if (widthChecked) {
+          if (dragState) {
+            layoutResult += " " + finishDrag();
+            status();
+            clearInterval(timer);
+          }
+          return;
+        }
+        widthChecked = true;
         state = "dialog-checked";
-        // 对话框全部核对完，主界面已稳定：此时量布局最可靠
+        // 对话框全部核对完，主界面已稳定：此时量布局最可靠。
+        // 先测列宽拖动与复位，此时目录栏还是默认宽度。
+        //
+        // 顺序很重要：若先拖目录栏分隔条，列宽会因重新分配而全部变化，
+        // 之后与「复位后」比较就得到假失败（实测复位后 405px vs 默认 352px，
+        // 差别全部来自目录栏变宽，而不是复位没生效）。
         layoutResult = measureLayout();
-        // 拖动分两拍：这一拍发起，下一拍量结果
-        startDrag(120);
-        status();
+        resetWidthsAndMeasure().then(function (r) {
+          layoutResult += " " + r;
+          // 列宽核对完再拖动目录栏分隔条，同样分两拍量结果
+          startDrag(120);
+          status();
+        });
         return;
       }
       dialogTried.push(pending);
@@ -628,7 +784,56 @@ def main():
                   f"  与栏底差 {gap_body}px")
             claim("表体高度占满可用空间", body_h >= min_body_h,
                   f"  表体 {body_h}px，至少应 {min_body_h}px（按内容收缩会远小于它）")
+            # 底部操作条自身也必须贴底，否则它下面留一条空白
+            claim("底部操作条贴住栏底", abs(int(fields.get("gapFoot", "9999"))) <= 2,
+                  f"  与栏底差 {fields.get('gapFoot')}px")
+            # 表头竖向分割线：每列都要有（末列除外），否则看不出列边界在哪
+            th_count = int(fields.get("thCount", "0"))
+            divider_ok = int(fields.get("dividerOk", "0"))
+            claim("表头每列都有竖向分割线", th_count > 0 and divider_ok == th_count,
+                  f"  {divider_ok}/{th_count} 列有边框（末列应为 0，其余 1px）")
+            # 拖动手柄：Arco 不给最后一列手柄（它被当作剩余空间）。
+            # 这里补了一个 1px 占位列放在最后，使**真正的每一列都能拖**，
+            # 因此手柄数 = 数据列数（含被隐藏的占位列）即可。
+            claim("每列都有列宽拖动手柄", int(fields.get("handleCount", "0")) >= th_count - 2,
+                  f"  {fields.get('handleCount')} 个手柄 / {th_count} 个表头（末列为占位列）")
+            # 目录栏字号应比右侧详情区小（同宽下显示更多内容）
+            td_font = fields.get("tdFont", "")
+            detail_font = fields.get("detailFont", "")
+            claim("目录栏字号小于详情区", td_font == "12px" and detail_font not in ("", td_font),
+                  f"  目录栏 {td_font} / 详情区 {detail_font or '无对照'}")
             print(f"  目录栏宽度 {fields.get('w')}px")
+            print(f"  各列宽度 {fields.get('wCols0')}")
+            # 各列合计不得超出目录栏宽度：超出会把末列挤出可视区，
+            # 与「加宽名称以显示更多内容」的目的相反。
+            decl_sum = int(fields.get("declSum", "0"))
+            box_w = int(fields.get("boxW", "0"))
+            claim("各列未被横向挤出可视区", fields.get("fits") == "true",
+                  f"  列宽合计 {decl_sum}px / 目录栏 {box_w}px")
+
+        # 列宽拖动与复位
+        rst = re.search(r"RESET:([^\s<]*)", visible)
+        if not rst:
+            print("  未能取到列宽复位结果")
+            layout_ok = False
+        elif rst.group(1).startswith("no-button"):
+            print("  未找到「列宽复位」按钮")
+            layout_ok = False
+        else:
+            rf = {}
+            for part in rst.group(1).split(","):
+                k, _, v = part.partition("=")
+                rf[k] = v
+            base = [int(x) for x in rf.get("base", "").split("|") if x]
+            dragged = [int(x) for x in rf.get("dragged", "").split("|") if x]
+            after = [int(x) for x in rf.get("afterReset", "").split("|") if x]
+            # 拖动必须真的改变了列宽，否则下面的复位断言没有意义
+            moved = len(base) > 1 and len(dragged) > 1 and base[1] != dragged[1]
+            claim("拖动表头能改变列宽", moved,
+                  f"  名称列 {base[1] if len(base) > 1 else '?'}px -> "
+                  f"{dragged[1] if len(dragged) > 1 else '?'}px")
+            claim("「列宽复位」能恢复默认宽度", bool(base) and after == base,
+                  f"  复位后 {after} / 默认 {base}")
 
         if not dra or dra.group(1) == "none":
             print("  未能取到拖动结果")
