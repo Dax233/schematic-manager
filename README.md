@@ -133,6 +133,10 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 - 正式版：`v<MAJOR>.<MINOR>.<PATCH>`（手动打 tag 触发，随后仓库内各版本号
   自动提升到下一个 PATCH）
 
+「下一个 PATCH」以**所打的 tag** 为基准：`v2.0.0` 之后仓库内版本号变为
+`2.0.1`（而不是「仓库原版本 + 1」）。两者在常规流程下一致，但直接发一个
+与仓库版本不同的 tag 时，只有以 tag 为基准才不会让版本号倒退。
+
 仓库内的版本号共四处，由 `scripts/bump-version.mjs` 一并改写：
 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`
 与 `src-tauri/Cargo.lock` 里本包那一条。
