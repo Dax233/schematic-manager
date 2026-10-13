@@ -196,9 +196,19 @@ async function main() {
     const cmp = await api(`/compare/${prev}...${HEAD_REF}`);
     if (cmp && Array.isArray(cmp.commits)) commits = cmp.commits;
   } else {
-    // 没有上一版：取到仓库首个提交为止
-    const list = await api(`/commits?sha=${HEAD_REF}&per_page=100`);
-    if (Array.isArray(list)) commits = list.reverse();
+    // 没有上一版：取到仓库最初的那个提交为止。
+    //
+    // 必须**翻页**：GitHub 的 /commits 一次最多返回 100 条，而这个仓库早已
+    // 超过 100 个提交（实测 142）。此前只取第一页，于是「初始版本」的说明
+    // 里会缺掉最老的那批提交——正好是项目最早的功能，看起来像没做过。
+    const all = [];
+    for (let page = 1; page <= 10; page++) {
+      const chunk = await api(`/commits?sha=${HEAD_REF}&per_page=100&page=${page}`);
+      if (!Array.isArray(chunk) || chunk.length === 0) break;
+      all.push(...chunk);
+      if (chunk.length < 100) break;
+    }
+    commits = all.reverse(); // 接口按时间倒序返回，反转成从旧到新
   }
 
   const { groups, breaking, other } = groupCommits(commits);

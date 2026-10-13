@@ -40,6 +40,16 @@ function check(label, ok, extra = "") {
 /** 当前夹具：Release 列表（按创建时间倒序，与 GitHub 返回顺序一致） */
 let releases = [];
 
+/**
+ * 「无上一版」分支用的提交夹具，按页给。
+ *
+ * 这里刻意做成**多页**：GitHub 的 /commits 一次最多 100 条，而本仓库已有
+ * 142 个提交。早先 release-notes.mjs 只取第一页，于是「初始版本」的说明会
+ * 悄悄少掉最老的一批提交。单页夹具发现不了这个问题，所以夹具必须超过一页。
+ */
+const COMMITS_PER_PAGE = 100;
+let totalCommits = 0;
+
 /** 请求过的路径，用来确认脚本真的按预期查了对应端点 */
 const requested = [];
 
@@ -56,6 +66,24 @@ const server = createServer((req, res) => {
   if (path.endsWith("/releases")) {
     const page = url.searchParams.get("page") || "1";
     send(200, page === "1" ? releases : []);
+    return;
+  }
+
+  // 提交列表（「无上一版」分支用）：按页返回，最新的在前
+  if (path.endsWith("/commits")) {
+    if (totalCommits === 0) {
+      send(200, []);
+      return;
+    }
+    const page = Number(url.searchParams.get("page") || "1");
+    const start = (page - 1) * COMMITS_PER_PAGE;
+    const end = Math.min(start + COMMITS_PER_PAGE, totalCommits);
+    // 编号从 1 开始：第 1 条是最新的
+    const items = [];
+    for (let n = start + 1; n <= end; n++) {
+      items.push({ commit: { message: `chore: 第 ${n} 个提交` } });
+    }
+    send(200, items);
     return;
   }
   // 提交对比
@@ -215,12 +243,20 @@ releases = [
   );
 }
 
-// 四、一个上一版都没有：应标为初始版本
+// 四、一个上一版都没有：应标为初始版本，且提交要**翻页取全**
 releases = [];
 {
+  // 造 142 个提交（多于单页上限 100）：若脚本只取第一页，最老的提交会丢失
+  totalCommits = 142;
   const { text, r } = await notesFor({ tag: "v0.1.0", ver: "0.1.0", prerelease: false });
   check("首个版本：脚本正常退出", r.status === 0, `退出码 ${r.status}：${r.stderr.slice(-200)}`);
   check("首个版本：标注为初始版本", rangeOf(text) === "初始版本", `实际 ${rangeOf(text)}`);
+  // 夹具里第 142 个提交是**最老**的，只取第一页时它必然缺失
+  check("首个版本：取到最老的提交（说明确实翻了页）", text.includes("第 142 个提交"));
+  check("首个版本：也取到了最新一条", text.includes("第 1 个提交"));
+  // 数量核对：142 条都应出现在分组列表里
+  const listed = (text.match(/^- 第 \d+ 个提交$/gm) || []).length;
+  check("首个版本：142 个提交一个不少", listed === 142, `实际列出 ${listed} 条`);
 }
 
 // 五、畸形资产不应让脚本崩溃（表格少几行不该阻塞整个发布）
