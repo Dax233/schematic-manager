@@ -148,6 +148,56 @@ body,
   .arco-table-body {
     height: 100%;
   }
+
+  // 顶部文件操作条与底部多选条都固定高度，不随表格伸缩，
+  // 因此表格的 flex:1 才是「吃掉剩余空间」的那一段。
+  &__ops,
+  &__checks {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    background: var(--color-bg-2);
+  }
+
+  // 顶部操作条靠左，并在下方留一条分隔线，与表格区分开
+  &__ops {
+    border-bottom: 1px solid var(--color-border-1);
+  }
+
+  // 底部多选条：上方留分隔线，计数靠左、按钮靠右
+  &__checks {
+    border-top: 1px solid var(--color-border-1);
+  }
+}
+
+// 行的右键菜单。
+//
+// 用 fixed 定位到鼠标处：菜单要浮在表格之上，而表格内部有滚动容器，
+// 用 absolute 会被滚动区域的 overflow 裁掉。
+.ctx-menu {
+  position: fixed;
+  z-index: 2000;
+  min-width: 132px;
+  padding: 4px;
+  background: var(--color-bg-popup);
+  border: 1px solid var(--color-border-2);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 12%);
+
+  &__item {
+    padding: 5px 10px;
+    border-radius: 3px;
+    color: var(--color-text-1);
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible {
+      background: var(--color-fill-2);
+      outline: none;
+    }
+  }
 }
 
 // 拖动条：视觉上是一条细窄的分隔线，命中区域比看起来宽，便于抓取

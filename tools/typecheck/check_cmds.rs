@@ -26,6 +26,7 @@
 #[path = "../../src-tauri/src/blockdb_write.rs"] mod blockdb_write;
 #[path = "../../src-tauri/src/convert.rs"] mod convert;
 #[path = "../../src-tauri/src/duplicate.rs"] mod duplicate;
+#[path = "../../src-tauri/src/file_ops.rs"] mod file_ops;
 #[path = "../../src-tauri/src/geometry.rs"] mod geometry;
 #[path = "../../src-tauri/src/jar_file.rs"] mod jar_file;
 #[path = "../../src-tauri/src/jar_index.rs"] mod jar_index;

@@ -10,6 +10,7 @@ import type {
   ConvertOutcome,
   ConvertTarget,
   DuplicateScan,
+  FileOpOutcome,
   ReplaceOutcome,
   ReplaceRule,
   ImportOutcome,
@@ -160,4 +161,26 @@ export function setPackEnabled(file: string, enabled: boolean): Promise<void> {
 /** 删除某个资源包：同时移除清单记录与磁盘文件 */
 export function deletePack(file: string): Promise<void> {
   return invoke<void>("delete_pack", { file });
+}
+
+// ---------------------------------------------------------------- 目录栏文件操作
+
+/** 删除选中的投影文件（移入系统回收站，可还原） */
+export function deleteFiles(paths: string[]): Promise<FileOpOutcome> {
+  return invoke<FileOpOutcome>("delete_files", { paths });
+}
+
+/** 把选中的文件复制到剪贴板，供在资源管理器里粘贴 */
+export function copyFilesToClipboard(paths: string[]): Promise<FileOpOutcome> {
+  return invoke<FileOpOutcome>("copy_files_to_clipboard", { paths });
+}
+
+/** 把选中的文件复制到指定目录（同名不覆盖，自动加序号） */
+export function copyFilesToDir(paths: string[], destDir: string): Promise<FileOpOutcome> {
+  return invoke<FileOpOutcome>("copy_files_to_dir", { paths, destDir });
+}
+
+/** 在文件管理器中定位到一个文件 */
+export function revealInFileManager(path: string): Promise<void> {
+  return invoke<void>("reveal_in_file_manager", { path });
 }

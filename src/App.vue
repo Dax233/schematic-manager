@@ -9,10 +9,14 @@ import { Message } from "@arco-design/web-vue";
 import {
   analyzeSchematic,
   applyReplace,
+  copyFilesToClipboard,
+  copyFilesToDir,
+  deleteFiles,
   deletePack,
   importJar,
   listBlockVersions,
   listPacks,
+  revealInFileManager,
   setPackEnabled,
   previewReplace,
   buildScene,
@@ -170,12 +174,19 @@ function onWindowResize() {
 
 onMounted(() => {
   window.addEventListener("resize", onWindowResize);
+  // 右键菜单：点击别处、滚动、按 Esc 都要关闭，否则菜单会一直挂在屏幕上
+  window.addEventListener("pointerdown", onGlobalPointerDown);
+  window.addEventListener("keydown", onGlobalKey);
+  window.addEventListener("blur", onGlobalPointerDown);
   onWindowResize();
 });
 
 // 组件卸载时摘掉 window 上的监听，避免拖动中关闭窗口而留下悬挂的监听
 onBeforeUnmount(() => {
   window.removeEventListener("resize", onWindowResize);
+  window.removeEventListener("pointerdown", onGlobalPointerDown);
+  window.removeEventListener("keydown", onGlobalKey);
+  window.removeEventListener("blur", onGlobalPointerDown);
   stopResize();
 });
 
@@ -252,6 +263,7 @@ async function doConvert() {
     files.value = items;
     // 转换会生成新文件并可能改动原文件，因此同步刷新选中项记录
     syncSelection(items);
+    pruneChecks(items);
   } catch (e) {
     Message.error(`转换失败：${e}`);
   } finally {
@@ -500,20 +512,28 @@ const sceneInfo = computed(() => {
 });
 const status = ref("就绪");
 
-/** 目录栏表格的列。
+/** 目录栏表格的列（默认宽度）。
  *
  * 固定列宽合计必须小于目录栏默认宽度（560），否则会出现横向滚动：
  * 首列左缘与末列右缘被裁掉。实测「制作版本」给出的日期较长（如 1.21.1）
- * 在 100px 下已够用，因此把固定部分压到 370，
+ * 在 90px 下已够用，因此把固定部分压到 370，
  * 余下空间由「名称」与「来源目录」这两列分摊（都不设宽度）。
+ *
+ * 用户可在表头拖动调整宽度（见 columnResizable）；调整结果存在
+ * colWidths 里，由 tableColumns 套回，因此这里始终是「默认值」。
+ *
+ * 「尺寸」列原本只有 slotName。Arco 的列宽拖动只对有 dataIndex 的列生效，
+ * 因此这里补一个 dataIndex——td 渲染时 slotName 优先（实测 table-td.js:148），
+ * 显示内容不受影响，只是让该列也能拖动。
  */
-const columns: TableColumnData[] = [
+const columns = computed<TableColumnData[]>(() => [
   { title: "名称", dataIndex: "fileName", ellipsis: true, tooltip: true },
   { title: "制作版本", dataIndex: "mcVersionName", width: 90 },
-  { title: "尺寸", slotName: "dims", width: 100 },
+  // 110 是实测值：`16 × 12 × 16` 在 100px 下会折成两行
+  { title: "尺寸", dataIndex: "dims", slotName: "dims", width: 110 },
   { title: "方块总数", dataIndex: "totalBlocks", width: 90 },
   { title: "来源目录", dataIndex: "dirName", ellipsis: true, tooltip: true },
-];
+]);
 
 const blockColumns: TableColumnData[] = [
   { title: "方块", dataIndex: "name", ellipsis: true, tooltip: true },
@@ -560,6 +580,235 @@ function syncSelection(items: SchematicSummary[]) {
   sceneError.value = "";
 }
 
+// ---------------------------------------------------------------- 目录栏多选与文件操作
+
+/** 已勾选的文件路径集合。
+ *
+ * 用 Set 而不是数组：勾选/取消/反选都只做 O(1) 的成员判断，
+ * 而 129 个文件时每次全量比较数组会明显变慢。
+ * 同时与列表数据解耦——列表重新扫描后，仍然存在的路径自然保持勾选。
+ */
+const checkedPaths = ref<Set<string>>(new Set());
+
+/** 供 a-table 的 rowSelection 使用：Arco 要求数组形式的 keys */
+const checkedKeys = computed(() => Array.from(checkedPaths.value));
+
+/** 当前列表里被勾选的条数（只算可见的，避免「筛掉了却仍算选中」） */
+const checkedCount = computed(() =>
+  filteredFiles.value.filter((f) => checkedPaths.value.has(f.path)).length,
+);
+
+/** 被勾选的文件记录（按列表顺序，保证操作顺序稳定可预期） */
+const checkedFiles = computed(() =>
+  filteredFiles.value.filter((f) => checkedPaths.value.has(f.path)),
+);
+
+const hasChecked = computed(() => checkedCount.value > 0);
+
+/** 勾选变化：Arco 传回完整 keys 数组 */
+function onSelectionChange(keys: (string | number)[]) {
+  checkedPaths.value = new Set(keys.map(String));
+}
+
+/** 全选当前列表（只选可见项：搜索过滤后「全选」应当只作用于筛选结果） */
+function checkAll() {
+  const next = new Set(checkedPaths.value);
+  for (const f of filteredFiles.value) next.add(f.path);
+  checkedPaths.value = next;
+}
+
+/** 反选当前列表：可见项在「选中/未选中」之间翻转 */
+function invertChecks() {
+  const next = new Set(checkedPaths.value);
+  for (const f of filteredFiles.value) {
+    if (next.has(f.path)) next.delete(f.path);
+    else next.add(f.path);
+  }
+  checkedPaths.value = next;
+}
+
+/** 清除全部勾选（含被搜索过滤掉、当前不可见的那些） */
+function clearChecks() {
+  checkedPaths.value = new Set();
+}
+
+/** 扫描结果更新后丢弃已不存在的勾选项。
+ *
+ * 必须清理：勾选集里留着已删除/已移走的路径，之后点「删除」或「复制」
+ * 会因路径不存在而整批失败，用户却看不出是哪个文件的问题。
+ */
+function pruneChecks(items: SchematicSummary[]) {
+  const alive = new Set(items.map((f) => f.path));
+  let changed = false;
+  const next = new Set<string>();
+  for (const p of checkedPaths.value) {
+    if (alive.has(p)) next.add(p);
+    else changed = true;
+  }
+  if (changed) checkedPaths.value = next;
+}
+
+// 列宽：由用户在表头拖动调整。初始值就是列定义的 width，
+// 未设宽度的列（名称、来源目录）不参与，由它们分摊剩余空间。
+const colWidths = ref<Record<string, number>>({});
+
+/** 表头拖动结束：记录该列的新宽度 */
+function onColumnResize(dataIndex: string, width: number) {
+  colWidths.value = { ...colWidths.value, [dataIndex]: width };
+}
+
+/** 计算实际用于渲染的列：把用户调整过的宽度套回去。
+ *
+ * 列定义本身保持常量，用户改动只体现在这里，
+ * 因此「重置列宽」只需清空 colWidths 即可。
+ */
+const tableColumns = computed<TableColumnData[]>(() =>
+  columns.value.map((c) => {
+    const key = String(c.dataIndex ?? "");
+    const w = key ? colWidths.value[key] : undefined;
+    return w ? { ...c, width: w } : c;
+  }),
+);
+
+/** 恢复默认列宽 */
+function resetColumnWidths() {
+  colWidths.value = {};
+}
+
+const fileBusy = ref(false);
+
+/** 统一的文件操作错误提示：把后端给的原因原样带出来 */
+function reportFileOpError(action: string, e: unknown) {
+  Message.error(`${action}失败：${e}`);
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
+
+/** 删除勾选的文件（移入回收站） */
+async function doDeleteFiles() {
+  const list = checkedFiles.value;
+  if (list.length === 0) return;
+  fileBusy.value = true;
+  try {
+    const r = await deleteFiles(list.map((f) => f.path));
+    Message.success(`已删除 ${r.names.length} 个文件（${formatBytes(r.totalBytes)}），可从回收站还原`);
+    // 从列表移除，并清掉勾选，避免对已删除的文件再操作
+    const gone = new Set(r.names);
+    files.value = files.value.filter((f) => !gone.has(f.fileName));
+    pruneChecks(files.value);
+    syncSelection(files.value);
+  } catch (e) {
+    reportFileOpError("删除", e);
+  } finally {
+    fileBusy.value = false;
+  }
+}
+
+/** 复制勾选的文件到剪贴板 */
+async function doCopyFiles() {
+  const list = checkedFiles.value;
+  if (list.length === 0) return;
+  fileBusy.value = true;
+  try {
+    const r = await copyFilesToClipboard(list.map((f) => f.path));
+    Message.success(
+      `已复制 ${r.names.length} 个文件（${formatBytes(r.totalBytes)}）到剪贴板，可在资源管理器里粘贴`,
+    );
+  } catch (e) {
+    reportFileOpError("复制", e);
+  } finally {
+    fileBusy.value = false;
+  }
+}
+
+/** 复制到指定目录：先让用户选目标目录 */
+async function doCopyFilesTo() {
+  const list = checkedFiles.value;
+  if (list.length === 0) return;
+  try {
+    const dest = await open({ directory: true, multiple: false, title: "选择目标文件夹" });
+    if (typeof dest !== "string") return;
+    fileBusy.value = true;
+    const r = await copyFilesToDir(list.map((f) => f.path), dest);
+    Message.success(
+      `已复制 ${r.names.length} 个文件（${formatBytes(r.totalBytes)}）到 ${r.destDir}`,
+    );
+  } catch (e) {
+    reportFileOpError("复制到", e);
+  } finally {
+    fileBusy.value = false;
+  }
+}
+
+/** 打开第一个勾选文件所在的文件夹。
+ *
+ * 只处理第一个：资源管理器的「选中」语义只对一个目标有意义，
+ * 因此界面上也如实提示用的是哪一个。
+ */
+async function doOpenFolder() {
+  const first = checkedFiles.value[0];
+  if (!first) return;
+  try {
+    await revealInFileManager(first.path);
+    Message.success(`已在文件管理器中定位：${first.fileName}`);
+  } catch (e) {
+    reportFileOpError("打开文件夹", e);
+  }
+}
+
+/** 右键菜单：只保留「打开文件夹」，作用于右键点中的那一行。
+ *
+ * 用 a-table 的 rowContextmenu 事件而不是自定义 tr 插槽：
+ * 该插槽在 Arco 里不存在（实测只在 tbody 内部渲染 tr），
+ * 写上去不会报错但永远不生效。
+ *
+ * 菜单位置用 fixed 定位到鼠标处；点击别处、窗口失焦或按 Esc 关闭。
+ */
+const ctxMenu = ref<{ open: boolean; x: number; y: number; path: string; name: string }>({
+  open: false,
+  x: 0,
+  y: 0,
+  path: "",
+  name: "",
+});
+
+function onRowContextMenu(raw: TableData, ev: Event) {
+  ev.preventDefault();
+  const row = raw as unknown as SchematicSummary;
+  const me = ev as MouseEvent;
+  // 视口下边缘附近要向上翻，否则菜单会被窗口裁掉
+  const menuH = 40;
+  const y = me.clientY + menuH > window.innerHeight ? me.clientY - menuH : me.clientY;
+  ctxMenu.value = { open: true, x: me.clientX, y, path: row.path, name: row.fileName };
+}
+
+function closeRowMenu() {
+  if (ctxMenu.value.open) ctxMenu.value = { ...ctxMenu.value, open: false };
+}
+
+async function revealRow(row: { path: string; name: string }) {
+  closeRowMenu();
+  try {
+    await revealInFileManager(row.path);
+    Message.success(`已在文件管理器中定位：${row.name}`);
+  } catch (e) {
+    reportFileOpError("打开文件夹", e);
+  }
+}
+
+/** 全局：点击别处或按 Esc 关闭右键菜单 */
+function onGlobalPointerDown() {
+  closeRowMenu();
+}
+function onGlobalKey(e: KeyboardEvent) {
+  if (e.key === "Escape") closeRowMenu();
+}
+
+
 async function pickDirectory() {
   // 对话框调用本身也可能失败（插件未就绪、系统对话框不可用）。
   // 放在 try 之外会让这个 Promise 静默 reject：用户点了「添加目录」
@@ -578,6 +827,9 @@ async function pickDirectory() {
     const r = await scanLitematics(dir);
     files.value = r.items;
     syncSelection(r.items);
+    // 勾选集要跟着新列表收敛：留着已不在列表里的路径，
+    // 之后点删除/复制会因文件不存在而整批失败
+    pruneChecks(r.items);
     const parts: string[] = [];
     const bad = r.items.filter((f) => f.error).length;
     if (bad > 0) parts.push(`${bad} 个文件解析失败`);
@@ -1050,21 +1302,66 @@ void followSystemTheme();
 
     <div class="workbench" :class="{ 'is-resizing': resizing }">
       <div class="sidebar" :style="{ width: sidebarWidth + 'px' }">
+        <!-- 文件操作条：在目录栏顶部、靠左。
+             作用于勾选的文件；未勾选时禁用，避免误操作到「看起来选中」的行。 -->
+        <div class="sidebar__ops">
+          <a-button
+            size="mini"
+            status="danger"
+            :disabled="!hasChecked"
+            :loading="fileBusy"
+            @click="doDeleteFiles"
+          >
+            删除
+          </a-button>
+          <a-button size="mini" :disabled="!hasChecked" :loading="fileBusy" @click="doCopyFiles">
+            复制
+          </a-button>
+          <a-button size="mini" :disabled="!hasChecked" :loading="fileBusy" @click="doCopyFilesTo">
+            复制到
+          </a-button>
+          <a-button size="mini" :disabled="!hasChecked" @click="doOpenFolder">
+            打开文件夹
+          </a-button>
+          <a-button size="mini" @click="resetColumnWidths" title="把各列宽度恢复为默认">
+            列宽复位
+          </a-button>
+        </div>
+
         <a-table
-          :columns="columns"
+          :columns="tableColumns"
           :data="filteredFiles"
           :pagination="false"
           row-key="path"
           size="small"
           :bordered="{ wrapper: true, cell: false }"
           :scroll="{ y: '100%' }"
+          column-resizable
+          :row-selection="{ type: 'checkbox', showCheckedAll: false, width: 40 }"
+          :selected-keys="checkedKeys"
+          @selection-change="onSelectionChange"
+          @column-resize="onColumnResize"
           @row-click="onRowClick"
+          @row-contextmenu="onRowContextMenu"
         >
           <template #dims="{ record }">{{ formatDims(record.enclosing) }}</template>
           <template #empty>
             <a-empty description="点击「添加目录」选择投影所在文件夹" />
           </template>
         </a-table>
+
+        <!-- 目录栏底部：只放多选操作 -->
+        <div class="sidebar__checks">
+          <span class="hint-dim">已选 {{ checkedCount }} / {{ filteredFiles.length }}</span>
+          <span class="preview__spacer" />
+          <a-button size="mini" :disabled="filteredFiles.length === 0" @click="checkAll">
+            全选
+          </a-button>
+          <a-button size="mini" :disabled="filteredFiles.length === 0" @click="invertChecks">
+            反选
+          </a-button>
+          <a-button size="mini" :disabled="!hasChecked" @click="clearChecks">清除</a-button>
+        </div>
       </div>
 
       <!-- 拖动条：调整左侧目录栏宽度 -->
@@ -1082,6 +1379,25 @@ void followSystemTheme();
         @dblclick="toggleSidebarWidth"
         @keydown="onSplitterKey"
       />
+
+      <!-- 行的右键菜单：只保留「打开文件夹」 -->
+      <div
+        v-if="ctxMenu.open"
+        class="ctx-menu"
+        :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
+        role="menu"
+        @contextmenu.prevent
+      >
+        <div
+          class="ctx-menu__item"
+          role="menuitem"
+          tabindex="0"
+          @click="revealRow({ path: ctxMenu.path, name: ctxMenu.name })"
+          @keydown.enter="revealRow({ path: ctxMenu.path, name: ctxMenu.name })"
+        >
+          打开文件夹
+        </div>
+      </div>
 
       <div class="detail">
         <div class="preview">

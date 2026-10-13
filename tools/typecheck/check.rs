@@ -33,6 +33,10 @@
 #[path = "../../src-tauri/src/zip.rs"] mod zip;
 #[path = "../../src-tauri/src/backup.rs"] mod backup;
 #[path = "../../src-tauri/src/startup.rs"] mod startup;
+// 目录栏的文件操作（删除/复制/打开文件夹）。
+// Windows 实现用 `#[link]` 直接声明系统函数，不依赖外部 crate，
+// 因此这里也能离线编译并跑它的单元测试。
+#[path = "../../src-tauri/src/file_ops.rs"] mod file_ops;
 // 真实投影的端到端核验。用例都标了 #[ignore]，这里的价值是把它们**编译**
 // 一遍：写错字段名或签名时，离线也能发现，不必等有 cargo 依赖时才暴露。
 #[path = "../../src-tauri/src/real_project.rs"] mod real_project;

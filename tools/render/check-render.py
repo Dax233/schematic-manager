@@ -219,11 +219,26 @@ SHIM = r"""
     // Arco 内层的 .arco-table-container 也不继承父高度，会按内容收缩。
     // 「内容少」时才暴露——外层全对而表体只有 370px，下面一大片空白。
     // 只量外层会得出「全部正常」的错误结论，因此这里量最内层表体。
+    //
+    // 目录栏底部还有一条多选操作条，因此「该到哪」不是 sidebar 底边，
+    // 而是那条操作条的上边。直接和 sidebar 底边比会把操作条本身的高度
+    // 算成空白（实测差 34px），得到假失败。
     var bodyEl = sb.querySelector(".arco-table-body");
-    var gapBody = bodyEl ? Math.round(rSb.bottom - bodyEl.getBoundingClientRect().bottom) : 9999;
+    var footEl = sb.querySelector(".sidebar__checks");
+    var contentBottom = footEl
+      ? footEl.getBoundingClientRect().top
+      : rSb.bottom;
+    var gapBody = bodyEl
+      ? Math.round(contentBottom - bodyEl.getBoundingClientRect().bottom)
+      : 9999;
     var bodyH = bodyEl ? Math.round(bodyEl.getBoundingClientRect().height) : 0;
     // 表体高度应约等于「目录栏高 - 表头高」，而不是内容高度
     var minBodyH = Math.round(rSb.height * 0.5);
+
+    // 底部操作条必须与目录栏底边齐平（否则它下面会留空白）
+    var gapFoot = footEl
+      ? Math.round(rSb.bottom - footEl.getBoundingClientRect().bottom)
+      : 0;
 
     return "LAYOUT:"
       + "gapWb=" + gapWb
@@ -237,7 +252,8 @@ SHIM = r"""
       + ",spTab=" + (sp.getAttribute("tabindex") || "-")
       + ",gapBody=" + gapBody
       + ",bodyH=" + bodyH
-      + ",minBodyH=" + minBodyH;
+      + ",minBodyH=" + minBodyH
+      + ",gapFoot=" + gapFoot;
   }
 
   var layoutResult = "";

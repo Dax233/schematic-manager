@@ -8,7 +8,7 @@ use crate::error::{AppError, AppResult};
 use crate::dto::{
     AnalysisResult, BackupEntryDto, BlockCount, BlockHitDto, BlockVersionDto,
     ConvertItemDto, ConvertOutcomeDto, ConvertTargetDto, DuplicateGroupDto, DuplicateScanDto,
-    EntityCount, ImportOutcomeDto, PackEntryDto, PackListDto, PackLoadFailureDto,
+    EntityCount, FileOpOutcome, ImportOutcomeDto, PackEntryDto, PackListDto, PackLoadFailureDto,
     ReplaceOutcomeDto, ReplaceRuleDto, SceneDto, SaveOutcome, ScanResult, SchematicSummary,
     UnreadableFileDto, VersionOptionDto,
 };
@@ -1443,5 +1443,83 @@ pub fn set_pack_enabled(file: String, enabled: bool) -> Result<(), String> {
     // 启用集合变了，方块库必须重建：否则要重启程序才生效
     invalidate_db();
     Ok(())
+}
+
+// ---------------------------------------------------------------- 目录栏文件操作
+//
+// 这四个命令都作用于用户在目录栏里勾选的文件。共同点：
+// 路径来自前端，属于不可信输入，因此统一先经 file_ops::check_files
+// 校验存在性与类型，再执行具体动作。
+//
+// 与 delete_pack 的差别：后者只接受单一文件名并限制在 packs 目录内；
+// 这里的文件由用户在任意目录中选择，因此不能限制目录，
+// 但删除一律走回收站，把「误删」的代价限制在可还原范围内。
+
+/// 删除选中的文件（移入系统回收站，不永久删除）。
+#[tauri::command]
+pub fn delete_files(paths: Vec<String>) -> Result<FileOpOutcome, String> {
+    let files = crate::file_ops::check_files(&paths).map_err(|e| e.to_string())?;
+    crate::file_ops::delete_to_trash(&files).map_err(|e| e.to_string())?;
+    let names: Vec<String> = files.iter().map(|f| f.name.clone()).collect();
+    let _ = backup::append_log(
+        &backup::backup_root(&exe_dir()),
+        &format!("删除到回收站 {} 个文件：{}", names.len(), names.join("、")),
+    );
+    Ok(FileOpOutcome {
+        total_bytes: files.iter().map(|f| f.size).sum(),
+        names,
+        written: Vec::new(),
+        dest_dir: String::new(),
+    })
+}
+
+/// 把选中的文件复制到系统剪贴板，供用户在资源管理器里粘贴。
+#[tauri::command]
+pub fn copy_files_to_clipboard(paths: Vec<String>) -> Result<FileOpOutcome, String> {
+    let files = crate::file_ops::check_files(&paths).map_err(|e| e.to_string())?;
+    crate::file_ops::copy_paths_to_clipboard(&files).map_err(|e| e.to_string())?;
+    Ok(FileOpOutcome {
+        total_bytes: files.iter().map(|f| f.size).sum(),
+        names: files.iter().map(|f| f.name.clone()).collect(),
+        written: Vec::new(),
+        dest_dir: String::new(),
+    })
+}
+
+/// 把选中的文件复制到指定目录。同名不覆盖，改为追加序号。
+#[tauri::command]
+pub fn copy_files_to_dir(paths: Vec<String>, dest_dir: String) -> Result<FileOpOutcome, String> {
+    let files = crate::file_ops::check_files(&paths).map_err(|e| e.to_string())?;
+    let dest = PathBuf::from(&dest_dir);
+    let written = crate::file_ops::copy_into(&files, &dest).map_err(|e| e.to_string())?;
+    let names: Vec<String> = files.iter().map(|f| f.name.clone()).collect();
+    let _ = backup::append_log(
+        &backup::backup_root(&exe_dir()),
+        &format!(
+            "复制 {} 个文件到 {}：{}",
+            names.len(),
+            dest.display(),
+            names.join("、")
+        ),
+    );
+    Ok(FileOpOutcome {
+        total_bytes: files.iter().map(|f| f.size).sum(),
+        names,
+        written: written
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect(),
+        dest_dir: dest.to_string_lossy().into_owned(),
+    })
+}
+
+/// 在系统文件管理器中定位到一个文件（打开其所在目录并选中该文件）。
+///
+/// 只处理**一个**文件：资源管理器的「选中」语义只对一个目标有意义，
+/// 传多个时行为不确定，因此这里明确取第一个由前端决定。
+#[tauri::command]
+pub fn reveal_in_file_manager(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    crate::file_ops::reveal_in_file_manager(p).map_err(|e| e.to_string())
 }
 

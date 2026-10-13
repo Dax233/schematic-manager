@@ -277,6 +277,24 @@ pub struct SaveOutcome {
     pub backup_path: String,
 }
 
+/// 批量文件操作的结果。
+///
+/// 带上实际处理的文件名与（复制时的）目标路径：用户需要看到
+/// 「到底动了哪些文件、复制到哪儿了」，只回一句「成功」无法核对。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileOpOutcome {
+    /// 实际处理的文件名
+    pub names: Vec<String>,
+    /// 复制操作写入的目标路径；删除时为空
+    pub written: Vec<String>,
+    /// 目标目录（复制时）
+    pub dest_dir: String,
+    /// 处理的文件总字节数。界面用它在提示里给出「共多少 MB」，
+    /// 让用户能核对复制的确实是预期的那批文件。
+    pub total_bytes: u64,
+}
+
 /// 完整分析结果
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

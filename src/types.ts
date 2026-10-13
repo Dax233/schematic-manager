@@ -25,10 +25,21 @@ export interface SchematicSummary {
   hasPreview: boolean;
 }
 
+/** 批量文件操作的结果（与后端 FileOpOutcome 对齐） */
+export interface FileOpOutcome {
+  /** 实际处理的文件名 */
+  names: string[];
+  /** 复制操作写入的目标路径；删除时为空 */
+  written: string[];
+  /** 目标目录（复制时） */
+  destDir: string;
+  /** 处理的文件总字节数 */
+  totalBytes: number;
+}
+
 export interface BlockCount {
   name: string;
-  state: string;
-  count: number;
+  state: string;  count: number;
 }
 
 export interface EntityCount {

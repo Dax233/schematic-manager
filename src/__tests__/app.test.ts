@@ -760,3 +760,151 @@ describe("目录栏宽度调整", () => {
   });
 });
 
+
+
+/** 目录栏的多选与文件操作按钮。
+ *
+ * 这些按钮都只在「有勾选」时才可用，且必须把勾选的路径正确传给后端。
+ * 传错路径（例如传成空数组、或传了未勾选的行）会造成误删/误复制，
+ * 属于不能靠肉眼发现的错误，因此逐项核对发给后端的参数。
+ */
+describe("目录栏多选与文件操作", () => {
+  /** 挂载并让列表出现若干行 */
+  async function mountWithRows(n = 3) {
+    const items = Array.from({ length: n }, (_, i) => ({
+      ...summary,
+      path: `/p/f${i}.litematic`,
+      fileName: `f${i}.litematic`,
+      name: `文件${i}`,
+    }));
+    stubInvoke({ scan_litematics: { items, skippedDirs: 0, skippedPaths: [] } });
+    mockOpen.mockResolvedValue("/p");
+    const w = mountApp();
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    return w;
+  }
+
+  /** 取某一行左侧的勾选框 */
+  function rowCheckbox(w: ReturnType<typeof mountApp>, i: number) {
+    return w.findAll(".arco-table-body tbody tr")[i].find("input[type=checkbox]");
+  }
+
+  function btn(w: ReturnType<typeof mountApp>, label: string) {
+    return w.findAll("button").find((b) => b.text().trim() === label);
+  }
+
+  it("勾选后按钮才可用，未勾选时禁用", async () => {
+    const w = await mountWithRows();
+    // 未勾选：删除/复制/复制到/打开文件夹都应禁用
+    for (const label of ["删除", "复制", "复制到", "打开文件夹"]) {
+      expect(btn(w, label), `应有「${label}」按钮`).toBeTruthy();
+      expect(btn(w, label)!.attributes("disabled"), `未勾选时「${label}」应禁用`).toBeDefined();
+    }
+    // 清除在未勾选时也应禁用
+    expect(btn(w, "清除")!.attributes("disabled")).toBeDefined();
+
+    await rowCheckbox(w, 0).setValue(true);
+    await flushPromises();
+    for (const label of ["删除", "复制", "复制到", "打开文件夹"]) {
+      expect(btn(w, label)!.attributes("disabled"), `勾选后「${label}」应可用`).toBeUndefined();
+    }
+    w.unmount();
+  });
+
+  it("全选选中当前列表全部，反选翻转，清除清空", async () => {
+    const w = await mountWithRows(3);
+    expect(w.find(".sidebar__checks").text()).toContain("已选 0 / 3");
+
+    await btn(w, "全选")!.trigger("click");
+    await flushPromises();
+    expect(w.find(".sidebar__checks").text()).toContain("已选 3 / 3");
+
+    await btn(w, "反选")!.trigger("click");
+    await flushPromises();
+    expect(w.find(".sidebar__checks").text(), "全部选中后反选应变成全不选").toContain("已选 0 / 3");
+
+    // 再全选后清除
+    await btn(w, "全选")!.trigger("click");
+    await flushPromises();
+    await btn(w, "清除")!.trigger("click");
+    await flushPromises();
+    expect(w.find(".sidebar__checks").text()).toContain("已选 0 / 3");
+    w.unmount();
+  });
+
+  it("删除只把勾选的路径发给后端", async () => {
+    const w = await mountWithRows(3);
+    await rowCheckbox(w, 1).setValue(true);
+    await flushPromises();
+
+    mockInvoke.mockResolvedValueOnce({
+      names: ["f1.litematic"], written: [], destDir: "", totalBytes: 10,
+    });
+    await btn(w, "删除")!.trigger("click");
+    await flushPromises();
+
+    const call = mockInvoke.mock.calls.find((c) => c[0] === "delete_files");
+    expect(call, "应调用 delete_files").toBeTruthy();
+    expect((call![1] as { paths: string[] }).paths, "只应传勾选的那一个路径").toEqual([
+      "/p/f1.litematic",
+    ]);
+    w.unmount();
+  });
+
+  it("复制把勾选的路径发给剪贴板命令", async () => {
+    const w = await mountWithRows(3);
+    await rowCheckbox(w, 0).setValue(true);
+    await flushPromises();
+
+    mockInvoke.mockResolvedValueOnce({
+      names: ["f0.litematic"], written: [], destDir: "", totalBytes: 5,
+    });
+    await btn(w, "复制")!.trigger("click");
+    await flushPromises();
+
+    const call = mockInvoke.mock.calls.find((c) => c[0] === "copy_files_to_clipboard");
+    expect(call, "应调用 copy_files_to_clipboard").toBeTruthy();
+    expect((call![1] as { paths: string[] }).paths).toEqual(["/p/f0.litematic"]);
+    w.unmount();
+  });
+
+  it("打开文件夹只用第一个勾选项（资源管理器只能选中一个）", async () => {
+    const w = await mountWithRows(3);
+    await rowCheckbox(w, 0).setValue(true);
+    await rowCheckbox(w, 2).setValue(true);
+    await flushPromises();
+
+    mockInvoke.mockResolvedValueOnce(undefined);
+    await btn(w, "打开文件夹")!.trigger("click");
+    await flushPromises();
+
+    const call = mockInvoke.mock.calls.find((c) => c[0] === "reveal_in_file_manager");
+    expect(call, "应调用 reveal_in_file_manager").toBeTruthy();
+    expect((call![1] as { path: string }).path, "应传列表中的第一个勾选项").toBe(
+      "/p/f0.litematic",
+    );
+    w.unmount();
+  });
+
+  it("全选只作用于搜索结果，不会选中被过滤掉的行", async () => {
+    const w = await mountWithRows(3);
+    // 搜索只留下 f1
+    await w.find("input[type=search], .arco-input-search input").setValue("f1");
+    await flushPromises();
+    expect(w.find(".sidebar__checks").text(), "过滤后总数应变为 1").toContain("/ 1");
+
+    await btn(w, "全选")!.trigger("click");
+    await flushPromises();
+    expect(w.find(".sidebar__checks").text()).toContain("已选 1 / 1");
+
+    // 清空搜索后，f0/f2 不应被顺带选中
+    await w.find("input[type=search], .arco-input-search input").setValue("");
+    await flushPromises();
+    expect(
+      w.find(".sidebar__checks").text(),
+      "全选只应选中当时的可见项，清空搜索后不应把之前不可见的一起算上",
+    ).toContain("已选 1 / 3");
+    w.unmount();
+  });
+});
