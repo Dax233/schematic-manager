@@ -1102,6 +1102,71 @@ mod tests {
         assert!(!items[0].is_overlay, "版本包不是叠加包");
         assert!(items[1].is_overlay, "模组包是叠加包");
     }
+
+    // ---- delete_pack 的文件名校验 ----
+    //
+    // 这是安全校验：`file` 来自清单，而清单是可被手工编辑的文本文件。
+    // 校验不通过时必须直接拒绝，因此下面这些用例**不会触碰磁盘**——
+    // 合法文件名才会走到读写清单那一步，而那些需要真实 packs 目录，
+    // 不适合在单元测试里构造。
+
+    /// 各种「不是单一文件名」的输入都必须被拒绝。
+    #[test]
+    fn delete_pack_rejects_path_like_names() {
+        let bad = [
+            // 上级目录
+            "..",
+            "../x.pack",
+            "..\\x.pack",
+            "a/../../x.pack",
+            // 子目录
+            "sub/x.pack",
+            "sub\\x.pack",
+            // 绝对路径（Windows 盘符与 Unix 根）
+            "C:\\Windows\\x.pack",
+            "C:/Windows/x.pack",
+            "/etc/x.pack",
+            "\\\\server\\share\\x.pack",
+            // 盘符相对路径：不含 / \ ..，朴素的字符串检查会放过，
+            // 但 Path::join 会把基础目录整个替换掉
+            "C:x.pack",
+            "D:evil.pack",
+            // 当前目录前缀
+            "./x.pack",
+            // 空串与纯空白
+            "",
+            " ",
+        ];
+        for name in bad {
+            let r = delete_pack(name.to_string());
+            assert!(
+                r.is_err(),
+                "{name:?} 应被拒绝，实际返回 {r:?}"
+            );
+            let msg = r.unwrap_err();
+            assert!(
+                msg.contains("不合法"),
+                "{name:?} 的错误信息应说明文件名不合法，实际：{msg}"
+            );
+        }
+    }
+
+    /// 正常文件名不应被校验拦住。
+    ///
+    /// 这些输入会继续走到读写清单，因此会以「清单里没有该资源包」之类的
+    /// 原因失败——关键是错误**不是**「文件名不合法」。
+    #[test]
+    fn delete_pack_accepts_plain_file_names() {
+        for name in ["a.pack", "1.20.1.pack", "my-pack_v2.pack", "中文名.pack"] {
+            let r = delete_pack(name.to_string());
+            if let Err(e) = r {
+                assert!(
+                    !e.contains("不合法"),
+                    "{name:?} 是合法文件名，不应被判为不合法：{e}"
+                );
+            }
+        }
+    }
 }
 
 /// 删除某个资源包：同时移除清单记录与磁盘文件。
@@ -1111,9 +1176,20 @@ mod tests {
 /// 一条 `exists=false` 的记录，重新导入即可修复。
 #[tauri::command]
 pub fn delete_pack(file: String) -> Result<(), String> {
-    // 只接受文件名，不接受路径：清单里的 file 由程序生成，
-    // 但如果被手工改成 `../../x`，拼接后就会删到 packs 目录之外
-    if file.contains('/') || file.contains('\\') || file.contains("..") {
+    // 只接受单一文件名，不接受任何路径形式。
+    //
+    // 用路径组件解析而不是字符串匹配：`C:x.pack` 这类**盘符相对路径**不含
+    // `/`、`\`、`..`，能通过朴素的字符串检查，但 `Path::join` 遇到带前缀的
+    // 路径会**直接替换掉基础目录**，于是删除目标跑出了 packs 目录。
+    // 组件解析能一并挡住盘符、UNC 前缀、`.`、`..`、空串等全部形式。
+    let mut comps = std::path::Path::new(&file).components();
+    let single_normal = matches!(comps.next(), Some(std::path::Component::Normal(_)))
+        && comps.next().is_none();
+    // 反斜杠在 Unix 上只是普通字符，会被判成一个正常组件，
+    // 因此额外挡一次，保证两个平台接受的文件名集合一致。
+    // 另外拒绝「全是空白」的名字：它们不含可见字符，只会是手工改清单的结果。
+    // 注意只拒绝**整体**为空白，中间含空格的正常文件名仍应允许。
+    if !single_normal || file.contains('\\') || file.trim().is_empty() {
         return Err(format!("资源包文件名不合法：{file}"));
     }
     let mut entries = read_manifest_for_write().map_err(|e| e.to_string())?;
