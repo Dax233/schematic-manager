@@ -136,8 +136,9 @@ pub fn find(candidates: &[Candidate]) -> DuplicateScan {
                     }
                     Ok(false) => true,
                     Err(e) => {
-                        // 比对失败的文件留在待处理集合里，交由后续轮次
-                        // 再试；同时如实上报，不静默丢弃
+                        // 比对失败（打开/读取出错）：该文件既不能确认重复，
+                        // 也不能算作「与谁都不重复」，因此移出待处理集合并
+                        // 单独上报，不做重试——同一次筛查里重试也只会同样失败。
                         failed.push((other.path.clone(), e.to_string()));
                         false
                     }
