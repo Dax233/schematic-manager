@@ -163,6 +163,12 @@ jobs:
       - name: 工作流结构检查
         run: pnpm check:workflow
 
+      # 「创建 Release」那段失败重试循环的正确性。它有两种失效方式：
+      # 该重试时没重试，或把不该重试的错误也重试三遍再失败、白等一分钟。
+      # 脚本从工作流里抽真实 bash，用 gh 桩模拟 403/422/成功四种情形后执行。
+      - name: Release 创建重试逻辑检查
+        run: pnpm check:retry
+
       # 覆盖各功能发出的命令名与参数，以及界面挂载与主要交互流程。
       - name: 前端单元测试
         run: pnpm test
@@ -408,14 +414,56 @@ jobs:
             title="$title 快照构建 #${{ github.run_number }}"
           fi
 
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" release-assets/* --clobber
-            gh release edit "$tag" --notes-file release-notes.md --title "$title"
-          else
-            args=(--title "$title" --notes-file release-notes.md --target "${{ github.sha }}")
-            if [ "$pre" = "true" ]; then args+=(--prerelease); fi
-            gh release create "$tag" release-assets/* "${args[@]}"
-          fi
+          # 草稿确认：即使 gh 报错也不要留下半成品
+          cleanup() {
+            gh release delete "$tag" --yes --cleanup-tag >/dev/null 2>&1 || true
+          }
+
+          do_release() {
+            if gh release view "$tag" >/dev/null 2>&1; then
+              gh release upload "$tag" release-assets/* --clobber
+              gh release edit "$tag" --notes-file release-notes.md --title "$title"
+            else
+              args=(--title "$title" --notes-file release-notes.md --target "${{ github.sha }}")
+              if [ "$pre" = "true" ]; then args+=(--prerelease); fi
+              gh release create "$tag" release-assets/* "${args[@]}"
+            fi
+          }
+
+          # 实测本仓库偶发 403「Resource not accessible by integration」：
+          # 同一份代码、同样的令牌权限（任务日志里明确写着 Contents: write），
+          # #54 失败而 5 分钟后的 #55 成功；#47/#49/#54/#61 出现过该错误。
+          # 这不是权限声明或仓库设置问题（已逐一排除），重试是对症的缓解。
+          # 失败重试三次；每次间隔递增，给服务端状态留出恢复时间。
+          attempt=1
+          delay=15
+          while true; do
+            set +e
+            out="$(do_release 2>&1)"
+            rc=$?
+            set -e
+            if [ $rc -eq 0 ]; then
+              echo "Release 已就绪：$tag"
+              break
+            fi
+            echo "创建 / 更新 Release 失败（第 $attempt 次）："
+            echo "$out"
+            # 只对「集成无权访问」这类可恢复错误重试；
+            # 其它错误（例如 tag 冲突、资产名非法）重试也不会变好，直接失败
+            if ! grep -q "Resource not accessible by integration" <<<"$out"; then
+              echo "该错误不属于可重试类型，直接失败"
+              exit $rc
+            fi
+            if [ $attempt -ge 3 ]; then
+              echo "已重试 $attempt 次仍失败，放弃"
+              cleanup
+              exit $rc
+            fi
+            echo "${delay} 秒后重试…"
+            sleep "$delay"
+            attempt=$((attempt + 1))
+            delay=$((delay * 2))
+          done
 
       # 正式发布后：把仓库内版本号 dump 到下一 PATCH
       - name: 递增版本号到下一 PATCH

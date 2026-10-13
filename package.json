@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "check:ipc": "node scripts/check-ipc-contract.mjs",
     "check:notes": "node scripts/check-release-notes.mjs",
-    "check:workflow": "node scripts/check-workflow.mjs"
+    "check:workflow": "node scripts/check-workflow.mjs",
+    "check:retry": "node scripts/check-release-retry.mjs"
   },
   "dependencies": {
     "@arco-design/web-vue": "^2.56.0",
