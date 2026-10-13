@@ -499,7 +499,13 @@ pub fn apply_conversion(
         .file_stem()
         .map(|v| v.to_string_lossy().into_owned())
         .unwrap_or_else(|| "projection".into());
-    let out_path = dir.join(format!("{stem}_{}.litematic", target.name));
+    // 版本名可能含路径分隔符或 `..`（导入资源包时未指定名称的话，
+    // 包名会直接成为版本名），必须清理成一段安全文件名再拼接，
+    // 否则写出路径会离开投影所在目录。
+    let out_path = dir.join(format!(
+        "{stem}_{}.litematic",
+        crate::convert::safe_file_component(&target.name)
+    ));
 
     let items: Vec<crate::convert::ConvertItem> = items
         .into_iter()

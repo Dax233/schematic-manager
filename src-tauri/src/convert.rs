@@ -195,6 +195,39 @@ pub struct ConvertTarget {
     pub data_version: i32,
 }
 
+/// 把版本名清理成可安全用作**文件名**的一段。
+///
+/// 为什么必须清理：转换结果的文件名由版本名拼接而成
+/// （`<原文件名主干>_<版本名>.litematic`），而版本名并不总是可信——
+/// 导入资源包时若未指定名称，`pack_build` 会用用户填写的包名作为
+/// 版本名（`pack_build.rs` 里 `version_id = pack_name`）。于是版本名可能
+/// 含 `..`、`/`、`\` 等字符：实测 `a\..\..\evil` 会让写出路径
+/// 从投影所在目录一路退回上层目录，把结果写到别处去。
+///
+/// 清理规则与 `pack_registry::pack_file_name` 保持一致（同样场景、同样做法）：
+/// 路径分隔符与 Windows 保留字符换成下划线，去掉结尾的点与空格
+/// （它们在 Windows 上会被静默忽略，导致实际文件名与预期不符）。
+pub fn safe_file_component(name: &str) -> String {
+    let mut base: String = name
+        .trim()
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    while base.ends_with('.') || base.ends_with(' ') {
+        base.pop();
+    }
+    // 清理后可能只剩空串（例如版本名全是分隔符）：给一个可读的兜底名，
+    // 而不是让调用方拼出 `<主干>_.litematic` 这种含义不明或者干脆失败的名字
+    if base.is_empty() {
+        base.push_str("未知版本");
+    }
+    base
+}
+
 /// 列出可作为转换目标的版本（排除叠加包与源版本本身）
 pub fn targets(db: &BlockDb, source_data_version: i32) -> Vec<ConvertTarget> {
     let mut out: Vec<ConvertTarget> = db
@@ -218,6 +251,7 @@ mod tests {
     use crate::blockdb::VersionDef;
     use crate::blockdb::{BlockDef, Variant};
     use crate::litematic::{BlockState, Region};
+    use std::path::Path;
     use std::collections::HashMap;
 
     fn version(name: &str, dv: i32, blocks: &[&str]) -> VersionDef {
@@ -278,9 +312,78 @@ mod tests {
         }
     }
 
+    /// 版本名不得把转换结果写出投影所在目录。
+    ///
+    /// 这不是假想的输入：导入资源包时不填名称，`pack_build` 就会用包名
+    /// 当版本名，而包名由用户输入。这里把当时实测能逃出目录的几个取值
+    /// 固定成用例。
     #[test]
-    fn analyze_lists_only_blocks_missing_from_target() {
-        let old = version("old", 100, &["minecraft:oak_stairs", "minecraft:stone"]);
+    fn safe_file_component_blocks_path_traversal() {
+        for bad in [
+            r"a\..\..\evil",
+            "a/../../evil",
+            r"..\..\evil",
+            "C:/Windows/Temp/evil",
+            r"a\..\..\..\..\evil",
+        ] {
+            let cleaned = safe_file_component(bad);
+            // 清理后必须只剩一段文件名：不能含任何路径分隔符。
+            // 注意不必禁止子串 ".."——`a_.._.._evil` 里的 ".." 已被下划线
+            // 夹住，整体只是一个普通文件名，不再是上级目录引用。
+            assert!(
+                !cleaned.contains('/') && !cleaned.contains('\\'),
+                "版本名 {bad:?} 清理后仍含路径分隔符：{cleaned:?}"
+            );
+            // 真正要守的性质：拼出的文件仍落在原目录，父目录不变
+            let joined = Path::new("/data/proj").join(format!("demo_{cleaned}.litematic"));
+            assert_eq!(
+                joined.parent(),
+                Some(Path::new("/data/proj")),
+                "版本名 {bad:?} 清理后仍会写出目录：{}",
+                joined.display()
+            );
+        }
+    }
+
+    #[test]
+    fn safe_file_component_keeps_normal_version_names() {
+        // 正常版本名必须原样保留，否则转换结果的文件名会变得难以辨认
+        assert_eq!(safe_file_component("1.20.1"), "1.20.1");
+        assert_eq!(safe_file_component("26.3"), "26.3");
+        assert_eq!(safe_file_component("我的整合包"), "我的整合包");
+    }
+
+    #[test]
+    fn safe_file_component_handles_windows_quirks() {
+        // 结尾的点与空格在 Windows 上被静默忽略，会导致实际文件名与预期不符
+        assert_eq!(safe_file_component("1.20.1."), "1.20.1");
+        assert_eq!(safe_file_component("  1.20.1  "), "1.20.1");
+        assert_eq!(safe_file_component("1.20.1 "), "1.20.1");
+        // 保留字符与控制字符换成下划线
+        assert_eq!(safe_file_component("a<b>c"), "a_b_c");
+        assert_eq!(safe_file_component("a|b"), "a_b");
+        assert_eq!(safe_file_component("a\u{7}b"), "a_b");
+        // 全是分隔符时会被换成下划线，得到 ____ 这类可用文件名（不是空串）；
+        // 只有清理后**确实为空**（空输入或全是空格/结尾点）才用兜底名
+        assert_eq!(safe_file_component(r"\\\/"), "____");
+        assert_eq!(safe_file_component("..."), "未知版本");
+        assert_eq!(safe_file_component("   "), "未知版本");
+        assert_eq!(safe_file_component(""), "未知版本");
+    }
+
+    /// 两个版本名清理后若相同，会写到同一个文件、互相覆盖。
+    /// 这是清理带来的固有取舍：宁可让用户看到「覆盖」，也不能写出目录。
+    #[test]
+    fn safe_file_component_collapses_slash_variants() {
+        assert_eq!(
+            safe_file_component("a/b"),
+            safe_file_component(r"a\b"),
+            "路径分隔符的两种写法应归一到同一个文件名"
+        );
+    }
+
+    #[test]
+    fn analyze_lists_only_blocks_missing_from_target() {        let old = version("old", 100, &["minecraft:oak_stairs", "minecraft:stone"]);
         let new = version("new", 200, &["minecraft:stone"]);
         let db = db_with(vec![old, new]);
         let sc = schematic(
