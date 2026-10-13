@@ -84,6 +84,26 @@ SHIM = r"""
     distinctBlockTypes: 18, distinctStates: 26
   };
   var CALLS = [];
+
+  // 要逐个打开的对话框，以及各自打开后应出现的标题。
+  // 打开对话框会触发各自的加载逻辑（读取可转换版本、资源包清单、备份列表），
+  // 这些一旦抛错，界面表现就是「点了没反应」。
+  var DIALOG_BUTTONS = ["方块替换", "版本转换", "重复文件筛查", "备份管理", "资源包管理"];
+  var DIALOG_TITLES = {
+    "方块替换": "方块替换",
+    "版本转换": "转换游戏版本",
+    "重复文件筛查": "重复文件筛查",
+    "备份管理": "备份管理",
+    "资源包管理": "资源包管理",
+  };
+  var DIALOGS = [];
+  // 已尝试过的对话框名（与 DIALOGS 里带结论的字符串分开：
+  // 第一版用 DIALOGS.includes(name) 判断，而里面存的是「名字=结论」，
+  // 于是永远判为未处理，同一个对话框被反复点开（实测死循环 79 次）。
+  var dialogTried = [];
+  var pendingCheck = null;
+  var dialogsDone = false;
+
   function fake(cmd) {
     // 把调用过的命令记进文档标题：dump-dom 时能直接看到「到底有没有发起扫描」，
     // 不用去猜无头浏览器里的执行情况
@@ -109,6 +129,13 @@ SHIM = r"""
       case "list_packs": return Promise.resolve({ packs: [], loadFailures: [], skipped: [] });
       case "list_backups": return Promise.resolve([]);
       case "read_operation_log": return Promise.resolve([]);
+      // 各功能对话框打开时会调的命令，必须回合法结构，
+      // 否则前端会走到 catch 分支、对话框内一片空白
+      case "convert_targets": return Promise.resolve([
+        { index: 0, name: "1.20.1", dataVersion: 3465 },
+        { index: 1, name: "1.19.4", dataVersion: 3337 },
+      ]);
+      case "scan_duplicates": return Promise.resolve({ groups: [], unreadable: [] });
       default: return Promise.resolve([]);
     }
   }
@@ -129,15 +156,20 @@ SHIM = r"""
     }; } }
   };
 
-  // 自动走一遍真实交互：点「添加目录」让列表出来，再点第一行让详情面板出来。
-  // 只截空状态的话，列表、详情与统计是否真能画出来都无从判断。
+  // 自动走一遍真实交互：点「添加目录」让列表出来，再点第一行让详情面板出来，
+  // 最后依次打开五个功能对话框。
+  //
+  // 为什么要逐个开对话框：打开时的加载逻辑（读取可转换版本、资源包清单等）
+  // 一旦抛错，界面表现就是「点了没反应」——正是最难排查的一类问题。
+  // 只截主界面看不到这些。
   //
   // 判据用「正文里是否出现文件名 / 数据版本」，不能用 `tbody tr`：
   // Arco 的空状态也渲染成一个 tr，用它会误判成「已有数据」而停止，
   // 结果一次都不点（上面这两个判据是实测踩出来的）。
   var tries = 0, state = "wait", clicked = false;
   function status() {
-    document.title = "CALLS:" + CALLS.join("|") + " SCAN:" + state + " tries=" + tries;
+    document.title = "CALLS:" + CALLS.join("|")
+      + " SCAN:" + state + " DIALOGS:" + DIALOGS.join(",") + " tries=" + tries;
   }
   status();
   var timer = setInterval(function () {
@@ -146,19 +178,88 @@ SHIM = r"""
     var hasFile = body.indexOf("28速单区块简单熔炉") >= 0;
     var hasDetail = body.indexOf("3465") >= 0;
 
-    if (hasFile && hasDetail) { state = "detail-shown"; status(); clearInterval(timer); return; }
-    if (hasFile) {
-      var row = Array.prototype.slice.call(document.querySelectorAll("tbody tr"))
-        .filter(function (r) { return (r.textContent || "").indexOf("28速单区块简单熔炉") >= 0; })[0];
-      if (row && state !== "row-clicked") { row.click(); state = "row-clicked"; }
-      else if (!row) { state = "no-row"; }
-      status();
-    } else {
+    if (!hasFile) {
       var btn = Array.prototype.slice.call(document.querySelectorAll("button"))
         .filter(function (b) { return (b.textContent || "").indexOf("添加目录") >= 0; })[0];
       if (btn && !clicked) { clicked = true; btn.click(); state = "clicked"; }
       else if (!btn) { state = "no-button"; }
       status();
+    } else if (!hasDetail) {
+      var row = Array.prototype.slice.call(document.querySelectorAll("tbody tr"))
+        .filter(function (r) { return (r.textContent || "").indexOf("28速单区块简单熔炉") >= 0; })[0];
+      if (row && state !== "row-clicked") { row.click(); state = "row-clicked"; }
+      else if (!row) { state = "no-row"; }
+      status();
+    } else if (!dialogsDone) {
+      // 分两步：先点开，**等到下一个 tick** 再核对。
+      // Vue 的 DOM 更新是异步的，点完立刻查询时弹层还没插进文档，
+      // 会把正常打开的对话框误判成「标题缺失」（实测三个被误判）。
+      if (pendingCheck) {
+        // 判据：文档里是否出现了该对话框的标题元素，**且它确实显示着**。
+        //
+        // 三个坑（都实测踩到）：
+        //  1. 关掉的 Arco 弹层仍留在文档里，容器带 `display: none`。
+        //     只查标题元素会被「已关闭的弹层」命中——把打开逻辑改成一进来就
+        //     throw，检查照样通过（这正是第三次变异没被抓到的原因）。
+        //     因此必须沿祖先链确认没有被 display:none 挡住。
+        //  2. 不能在整页正文里找标题：「备份管理」等四个标题与工具栏按钮同名，
+        //     按钮在任何情况下都在，等于永远命中。
+        //  3. 「备份管理」是 a-drawer（抽屉）不是 a-modal，标题在
+        //     `.arco-drawer-title` 里，只查 modal 会把它判成「未出现」。
+        function shown(node) {
+          var n = node;
+          while (n && n !== document.body) {
+            var st = window.getComputedStyle(n);
+            if (st.display === "none" || st.visibility === "hidden") return false;
+            n = n.parentElement;
+          }
+          return true;
+        }
+        var titleEls = document.querySelectorAll(".arco-modal-title, .arco-drawer-title");
+        var hit = false;
+        for (var ti = 0; ti < titleEls.length; ti++) {
+          var t = titleEls[ti];
+          if ((t.textContent || "").indexOf(DIALOG_TITLES[pendingCheck]) >= 0 && shown(t)) {
+            hit = true;
+          }
+        }
+        DIALOGS.push(pendingCheck + (hit ? "=开" : "=未出现"));
+        // 关掉：点关闭按钮，否则下一个对话框会被叠住点不到
+        var closeBtns = document.querySelectorAll(
+          ".arco-modal-close-btn, .arco-drawer-close-btn");
+        if (closeBtns.length) closeBtns[closeBtns.length - 1].click();
+        pendingCheck = null;
+        status();
+        return;
+      }
+
+      // 依次打开每个功能对话框；打开后立刻关闭，再看下一个
+      var pending = DIALOG_BUTTONS.filter(function (n) { return !dialogTried.includes(n); })[0];
+      if (!pending) {
+        dialogsDone = true;
+        state = "dialog-checked";
+        status();
+        clearInterval(timer);
+        return;
+      }
+      dialogTried.push(pending);
+      var dlg = Array.prototype.slice.call(document.querySelectorAll("button"))
+        .filter(function (b) { return (b.textContent || "").indexOf(pending) >= 0; })[0];
+      if (!dlg) {
+        DIALOGS.push(pending + "=未找到按钮");
+        status();
+        return;
+      }
+      if (dlg.disabled) {
+        DIALOGS.push(pending + "=按钮禁用");
+        status();
+        return;
+      }
+      dlg.click();
+      pendingCheck = pending;
+      status();
+    } else {
+      clearInterval(timer);
     }
     if (tries > 80) { state = "timeout"; status(); clearInterval(timer); }
   }, 100);
@@ -244,7 +345,28 @@ def main():
         visible = re.sub(r"(?is)<script\b.*?</script>", " ", dom)
         print(f"DOM {len(dom)} 字节，去掉 script 后 {len(visible)} 字节 -> {dom_path}")
         m = re.search(r"CALLS:([^<]*)", visible)
-        print(f"替身状态: {m.group(1).strip() if m else '(无)'}")
+        shim_state = m.group(1).strip() if m else "(无)"
+        print(f"替身状态: {shim_state}")
+
+        # 逐个核对功能对话框是否真的打开了。
+        # 标题形如 `... DIALOGS:方块替换=开,版本转换=开 tries=8`，
+        # 末项会带上后面的 tries，必须先把这段元信息切掉，
+        # 否则最后一项的结论会变成「开 tries=8」而被判为失败。
+        dialogs = re.search(r"DIALOGS:([^S]*)", shim_state)
+        dlg_text = dialogs.group(1).strip() if dialogs else ""
+        dlg_text = re.split(r"\s+tries=", dlg_text)[0]
+        dlg_results = [d.strip() for d in dlg_text.split(",") if d.strip()]
+        print("\n=== 功能对话框能否打开 ===")
+        dlg_extra = []
+        for d in dlg_results:
+            name, _, verdict = d.partition("=")
+            ok_d = verdict == "开"
+            dlg_extra.append(ok_d)
+            print(f"  {name:<14} {verdict if verdict else '(未记录)'}")
+        # 五个对话框都应有记录，且都必须真的渲染出标题
+        if len(dlg_results) != 5:
+            dlg_extra.append(False)
+            print(f"  只有 {len(dlg_results)} 个对话框被检查，应为 5 个")
 
         print("\n=== 界面文案是否真的渲染出来（已剔除脚本）===")
         results = []
@@ -270,7 +392,7 @@ def main():
             results.append(gone)
             print(f"  {'不应再出现：' + kw:<24} {'仍在（错误）' if not gone else '已消失（正确）'}")
 
-        ok = all(results)
+        ok = all(results) and all(dlg_extra)
         size = os.path.getsize(SHOT) if os.path.exists(SHOT) else 0
         print(f"\n截图: {SHOT}  {size} 字节")
         print(f"DOM 体积 {len(visible)} 字节（空白页约 3.4 KB，正常渲染应显著更大）")
