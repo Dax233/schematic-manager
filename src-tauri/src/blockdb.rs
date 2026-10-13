@@ -459,7 +459,16 @@ impl BlockDb {
                     multipart,
                 });
             }
-            let langs_for_version = langs.get(lang_idx as usize).cloned().unwrap_or_default();
+            // 语言表下标必须能在本包的语言表池里取到。
+            // 用 `unwrap_or_default()` 静默给一张空表的话，该版本的所有方块
+            // 都会显示不出中文名，而用户看不出是数据坏了还是本来就没有名字。
+            // lang_idx 是文件里的字段，属不可信输入，因此这里显式报错。
+            let langs_for_version = langs.get(lang_idx as usize).cloned().ok_or_else(|| {
+                AppError::Corrupt(format!(
+                    "版本的语言表下标 {lang_idx} 超出了包内语言表数量 {}",
+                    langs.len()
+                ))
+            })?;
             versions.push(VersionDef {
                 name: str_at(&strings, name_idx),
                 data_version,
@@ -657,15 +666,28 @@ impl BlockDb {
         // 版本
         for v in &other.versions {
             let mut v = v.clone();
-            v.lang_idx = v.lang_idx.saturating_add(lang_base);
-            v.is_overlay = is_overlay;
             // 语言表要重新取出：读取端就是按 lang_idx 从语言表池里取的，
-            // 只平移下标而不重挂，display_name 会拿不到中文名
-            v.langs = other
-                .langs
-                .get(v.lang_idx as usize - lang_base as usize)
-                .cloned()
-                .unwrap_or_default();
+            // 只平移下标而不重挂，display_name 会拿不到中文名。
+            //
+            // 必须用**平移前**的原始下标去 other.langs 里取，不能先加法再
+            // 反向减回来：那样一旦 lang_idx 极大，saturating_add 会饱和到
+            // u32::MAX，减回去得到的就不是原值，取到的表也就错了。
+            let local_idx = v.lang_idx as usize;
+            v.langs = other.langs.get(local_idx).cloned().ok_or_else(|| {
+                // 越界说明包里的 lang_idx 与语言表数量对不上。这里报错而不是
+                // `unwrap_or_default()`：静默给一张空表会让该版本的方块全都
+                // 显示不出中文名，而用户看不出是数据坏了还是本来就没有名字。
+                AppError::Corrupt(format!(
+                    "版本 {} 的语言表下标 {local_idx} 超出该包的语言表数量 {}",
+                    v.name,
+                    other.langs.len()
+                ))
+            })?;
+            // 加上基数后不会溢出：两侧都受 MAX_LANGS（100_000）限制，
+            // 上界是 200_000，远小于 u32::MAX。因此这里用普通加法，
+            // 不为不可能发生的边界添加保护逻辑。
+            v.lang_idx += lang_base;
+            v.is_overlay = is_overlay;
             for idx in v.texture_by_path.values_mut() {
                 *idx = idx.saturating_add(tex_base);
             }
@@ -738,6 +760,15 @@ mod tests {
 
     /// 构造最小 pack，可指定 dataVersion
     fn build_minimal_pack_with_dv(data_version: i32) -> Vec<u8> {
+        build_minimal_pack_full(data_version, 0)
+    }
+
+    /// 构造最小 pack，可指定 dataVersion 与版本段的语言表下标。
+    ///
+    /// 语言表下标做成参数，是为了能构造「越界」的包而不必猜字节偏移——
+    /// 手算偏移的测试在布局变动后会静默失效（改错了位置却仍指向某个 u32，
+    /// 于是校验的是别的字段）。
+    fn build_minimal_pack_full(data_version: i32, lang_idx: u32) -> Vec<u8> {
         let mut w: Vec<u8> = Vec::new();
         let s32 = |w: &mut Vec<u8>, v: i32| w.extend_from_slice(&v.to_le_bytes());
         let u32f = |w: &mut Vec<u8>, v: u32| w.extend_from_slice(&v.to_le_bytes());
@@ -806,7 +837,7 @@ mod tests {
         u32f(&mut w, 1); // 段内重复计数
         u32f(&mut w, 0); // 版本名下标
         s32(&mut w, data_version); // dataVersion
-        u32f(&mut w, 0); // langTableIdx
+        u32f(&mut w, lang_idx); // langTableIdx
         u32f(&mut w, 1); // 贴图路径数
         u32f(&mut w, 2);
         u32f(&mut w, 0);
@@ -821,6 +852,28 @@ mod tests {
         u16f(&mut w, 0); // multipart 数
 
         w
+    }
+
+    /// 版本段的语言表下标越界时必须报错，而不是静默给空语言表。
+    ///
+    /// 静默降级时，该版本的所有方块都显示不出中文名，而用户无从判断是
+    /// 数据坏了还是本来就没有名字。lang_idx 来自文件，是不可信输入。
+    #[test]
+    fn out_of_range_lang_index_is_rejected_on_load() {
+        // 包内只有 1 张语言表，下标却写 5
+        let bad = build_minimal_pack_full(3465, 5);
+        let err = BlockDb::load_from_bytes(&bad, false).expect_err("越界下标应报错");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("语言表下标"),
+            "错误信息应指出语言表下标问题，实际：{msg}"
+        );
+        // 同一份数据、下标合法时应能正常解析，确认失败确实来自下标而非别的字段
+        let ok = build_minimal_pack_full(3465, 0);
+        assert!(
+            BlockDb::load_from_bytes(&ok, false).is_ok(),
+            "下标合法时不应报错"
+        );
     }
 
     #[test]
@@ -1163,9 +1216,35 @@ mod tests {
         assert_eq!(base.versions[1].langs[0].zh, "中");
     }
 
+    /// 语言表下标越界时必须报错，而不是静默给一张空表。
+    ///
+    /// 原先用 `unwrap_or_default()`：下标取不到时该版本会拿到空语言表，
+    /// 于是它的方块全都显示不出中文名，而用户无从判断是数据坏了还是
+    /// 本来就没有名字。多语言表下标是包里的字段，属于不可信输入。
     #[test]
-    fn merged_pack_block_is_findable() {
+    fn merge_reports_out_of_range_lang_index() {
         let mut base = tiny_db("1.20.1", 3465, "minecraft:stone", "block/stone", 255);
+        let mut pack = tiny_db("mymod", 3465, "mymod:thing", "block/thing", 128);
+        // 把下标指到语言表数量之外
+        pack.versions[0].lang_idx = pack.langs.len() as u32 + 3;
+        let err = base.merge_from(&pack, true).expect_err("越界下标应报错");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("超出") && msg.contains("语言表"),
+            "错误信息应说明语言表下标越界，实际：{msg}"
+        );
+    }
+
+    /// 下标越界与溢出都走同一条报错路径，这里不再单列「溢出」用例。
+    ///
+    /// 加上基数后的溢出其实**不可达**：lang_idx 与语言表数量都受
+    /// MAX_LANGS（100_000）限制，两者之和的上界是 200_000。原先写过一个
+    /// 名为「溢出」的测试，但它的输入（u32::MAX）只会触发越界分支，
+    /// 断言又是 `超出 || 溢出` 的析取式——名字与实测内容不符，等于没测。
+    /// 需要覆盖的是越界分支，见 merge_reports_out_of_range_lang_index。
+
+    #[test]
+    fn merged_pack_block_is_findable() {        let mut base = tiny_db("1.20.1", 3465, "minecraft:stone", "block/stone", 255);
         let pack = tiny_db("mymod", 3465, "mymod:thing", "block/thing", 128);
         base.merge_from(&pack, true).unwrap();
 
