@@ -430,11 +430,11 @@ jobs:
             fi
           }
 
-          # 实测本仓库偶发 403「Resource not accessible by integration」：
-          # 同一份代码、同样的令牌权限（任务日志里明确写着 Contents: write），
-          # #54 失败而 5 分钟后的 #55 成功；#47/#49/#54/#61 出现过该错误。
-          # 这不是权限声明或仓库设置问题（已逐一排除），重试是对症的缓解。
-          # 失败重试三次；每次间隔递增，给服务端状态留出恢复时间。
+          # 创建 Release 曾失败：HTTP 403「Resource not accessible by integration」。
+          # 该错误不是权限声明写错——此处始终声明 contents: write，日志里也确实是
+          # Contents: write。同一份作业手动重跑能成功，说明是可恢复的服务端状态，
+          # 因此这里失败后自动重试三次（间隔递增），不必再手动重跑。
+          # 仅对「集成无权访问」重试；其它错误（tag 冲突、资产名非法）重试不会变好。
           attempt=1
           delay=15
           while true; do
