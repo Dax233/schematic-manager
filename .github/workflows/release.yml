@@ -146,6 +146,16 @@ jobs:
       - name: 前后端命令契约检查
         run: pnpm check:ipc
 
+      # Release 说明的格式（文件表与下载链接）是发布流程的对外契约，
+      # 但它在发布任务里排在**全部六个平台构建之后**才生成：
+      # 表格一旦写错，要等整轮多平台构建跑完才会暴露，重来一次代价很高。
+      # 这里提前几秒验证一遍。
+      # 该脚本会调用 GitHub API 查对比范围，因此需要 token 以免匿名限流误报失败。
+      - name: Release 说明格式检查
+        run: pnpm check:notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       # 覆盖各功能发出的命令名与参数，以及界面挂载与主要交互流程。
       - name: 前端单元测试
         run: pnpm test
