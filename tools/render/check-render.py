@@ -43,6 +43,13 @@ DIST = os.path.join(ROOT, "dist")
 SHOT = os.path.join(ROOT, "..", "_temp", "frontend_render.png")
 PAGE_NAME = "__render__.html"
 
+# 列表条数的两轮取值。
+#   多行：验证表体撑到底后仍能纵向滚动
+#   少行：验证内容少时表体不收缩（Arco 内层不继承父高度，只有少行才暴露）
+# 用同一个条数会漏掉其中一类问题，因此两轮都跑。
+FILLER_ROWS = 40
+FEW_ROWS = 3
+
 # 无头浏览器的常见位置（Windows / Linux / macOS）
 BROWSER_CANDIDATES = [
     os.environ.get("CHROME_PATH", ""),
@@ -85,6 +92,11 @@ SHIM = r"""
   };
   var CALLS = [];
 
+  // 列表条数由检查脚本按需注入：内容少时才是「表体收缩」暴露的场景，
+  // 内容多时才是「能滚动」的场景，两轮各测一次。
+  var FILLER_ROWS = window.__SM_FILLER_ROWS__;
+  if (typeof FILLER_ROWS !== "number") FILLER_ROWS = 40;
+
   // 要逐个打开的对话框，以及各自打开后应出现的标题。
   // 打开对话框会触发各自的加载逻辑（读取可转换版本、资源包清单、备份列表），
   // 这些一旦抛错，界面表现就是「点了没反应」。
@@ -122,7 +134,7 @@ SHIM = r"""
         // 只给一条时永远测不出滚动（表格内部高度足够容纳一行）。
         // 标题里的「28速单区块简单熔炉」仍是第一条，后续断言依赖它。
         var many = [summary];
-        for (var i = 1; i <= 40; i++) {
+        for (var i = 1; i <= FILLER_ROWS; i++) {
           var s2 = {};
           for (var k in summary) s2[k] = summary[k];
           s2.fileName = "填充投影" + i + ".litematic";
@@ -200,6 +212,19 @@ SHIM = r"""
     var gapDt = Math.round(rDt.bottom - rSb.bottom);
     // 目录栏宽度，供拖动测试比对
     var wBefore = Math.round(rSb.width);
+
+    // 表体是否撑到底。
+    //
+    // 必须单独量这一层：外层 .sidebar / .arco-table 即使撑到底，
+    // Arco 内层的 .arco-table-container 也不继承父高度，会按内容收缩。
+    // 「内容少」时才暴露——外层全对而表体只有 370px，下面一大片空白。
+    // 只量外层会得出「全部正常」的错误结论，因此这里量最内层表体。
+    var bodyEl = sb.querySelector(".arco-table-body");
+    var gapBody = bodyEl ? Math.round(rSb.bottom - bodyEl.getBoundingClientRect().bottom) : 9999;
+    var bodyH = bodyEl ? Math.round(bodyEl.getBoundingClientRect().height) : 0;
+    // 表体高度应约等于「目录栏高 - 表头高」，而不是内容高度
+    var minBodyH = Math.round(rSb.height * 0.5);
+
     return "LAYOUT:"
       + "gapWb=" + gapWb
       + ",gapDt=" + gapDt
@@ -209,7 +234,10 @@ SHIM = r"""
       + ",spW=" + Math.round(sp.getBoundingClientRect().width)
       + ",spCursor=" + window.getComputedStyle(sp).cursor
       + ",spRole=" + (sp.getAttribute("role") || "-")
-      + ",spTab=" + (sp.getAttribute("tabindex") || "-");
+      + ",spTab=" + (sp.getAttribute("tabindex") || "-")
+      + ",gapBody=" + gapBody
+      + ",bodyH=" + bodyH
+      + ",minBodyH=" + minBodyH;
   }
 
   var layoutResult = "";
@@ -391,7 +419,6 @@ def main():
     if not os.path.isdir(DIST) or not os.path.exists(os.path.join(DIST, "index.html")):
         print(f"未找到构建产物 {DIST}/index.html，请先执行 pnpm build")
         return 2
-
     browser = find_browser()
     if not browser:
         print("未找到无头浏览器。可用 CHROME_PATH 环境变量指定，查找过：")
@@ -402,13 +429,27 @@ def main():
     print(f"浏览器: {browser}")
 
     index = open(os.path.join(DIST, "index.html"), encoding="utf-8").read()
-    if "<head>" in index:
-        html = index.replace("<head>", "<head>" + SHIM, 1)
-    else:
-        html = SHIM + index
+
+    def make_page(rows):
+        """生成一份带替身的页面，并注入列表条数。
+
+        条数必须可变：内容少时才是「表体收缩、底部留白」暴露的场景；
+        内容多时才是「表体可滚动」的场景。固定用其中一个条数会漏掉另一类问题。
+        """
+        html = index.replace("<head>", "<head>" + SHIM, 1) if "<head>" in index else SHIM + index
+        inject = f"<script>window.__SM_FILLER_ROWS__={rows};</script>"
+        return html.replace("<head>", "<head>" + inject, 1) if "<head>" in html else inject + html
+
+    html = make_page(FILLER_ROWS)
     render_path = os.path.join(DIST, PAGE_NAME)
     with open(render_path, "w", encoding="utf-8") as f:
         f.write(html)
+
+    # 「内容少」那一轮的页面：单独一份，避免与主页面互相干扰
+    FEW_PAGE = "__few__.html"
+    few_path = os.path.join(DIST, FEW_PAGE)
+    with open(few_path, "w", encoding="utf-8") as f:
+        f.write(make_page(FEW_ROWS))
 
     port = free_port()
     handler = lambda *a, **k: Quiet(*a, directory=DIST, **k)
@@ -497,6 +538,42 @@ def main():
 
         # ---- 布局几何：左侧目录栏的撑高、滚动与拖动 ----
         print("\n=== 左侧目录栏布局 ===")
+
+        # 先跑「内容少」那一轮：Arco 内层容器不继承父高度，
+        # 只有几条数据时表体会按内容收缩、底部露出大片空白。
+        # 上面那趟用的是 40 行，正好把这个形态掩盖掉，因此必须单独测。
+        few_dump = subprocess.run(
+            common + ["--window-size=1827,1190", "--dump-dom",
+                      f"http://127.0.0.1:{port}/{FEW_PAGE}"],
+            capture_output=True, timeout=180)
+        few_visible = re.sub(r"(?is)<script\b.*?</script>", " ",
+                             few_dump.stdout.decode("utf-8", "replace"))
+        few_lay = re.search(r"LAYOUT:([^\s<]*)", few_visible)
+        few_ok = True
+
+        def few_claim(label, cond, detail=""):
+            nonlocal few_ok
+            few_ok = few_ok and cond
+            print(f"  {label:<34} {'是' if cond else '否'}{detail}")
+
+        print(f"  （本组用 {FEW_ROWS} 条数据，模拟「投影很少」时的界面）")
+        if not few_lay or few_lay.group(1) in ("pending", "missing"):
+            print("  未能取到少行数据的布局")
+            few_ok = False
+        else:
+            ff = {}
+            for part in few_lay.group(1).split(","):
+                k, _, v = part.partition("=")
+                ff[k] = v
+            f_gap_body = int(ff.get("gapBody", "9999"))
+            f_body_h = int(ff.get("bodyH", "0"))
+            f_min = int(ff.get("minBodyH", "0"))
+            few_claim("少行时表体仍撑到底", abs(f_gap_body) <= 2,
+                      f"  与栏底差 {f_gap_body}px")
+            few_claim("少行时表体不按内容收缩", f_body_h >= f_min,
+                      f"  表体 {f_body_h}px，至少应 {f_min}px")
+        results.append(few_ok)
+
         lay = re.search(r"LAYOUT:([^\s<]*)", visible)
         dra = re.search(r"DRAG:([^\s<]*)", visible)
         layout_ok = True
@@ -526,6 +603,15 @@ def main():
             claim("拖动条光标为 col-resize", fields.get("spCursor") == "col-resize")
             claim("拖动条可聚焦（键盘可用）", fields.get("spTab") == "0",
                   f"  role={fields.get('spRole')} tabindex={fields.get('spTab')}")
+            # 表体也必须撑到底：外层全对、内层收缩是「内容少才暴露」的形态，
+            # 只查外层会漏掉它。这里直接量最内层表体的高度与底边。
+            gap_body = int(fields.get("gapBody", "9999"))
+            body_h = int(fields.get("bodyH", "0"))
+            min_body_h = int(fields.get("minBodyH", "0"))
+            claim("表体撑到底部（不留大片空白）", abs(gap_body) <= 2,
+                  f"  与栏底差 {gap_body}px")
+            claim("表体高度占满可用空间", body_h >= min_body_h,
+                  f"  表体 {body_h}px，至少应 {min_body_h}px（按内容收缩会远小于它）")
             print(f"  目录栏宽度 {fields.get('w')}px")
 
         if not dra or dra.group(1) == "none":
@@ -551,6 +637,8 @@ def main():
         srv.shutdown()
         if os.path.exists(render_path):
             os.remove(render_path)
+        if os.path.exists(few_path):
+            os.remove(few_path)
 
     print("\n渲染检查：" + ("全部通过" if ok else "存在失败项"))
     return 0 if ok else 1

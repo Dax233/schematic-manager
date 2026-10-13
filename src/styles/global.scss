@@ -115,8 +115,37 @@ body,
     min-height: 0;
   }
 
-  // 表格滚动容器承接纵向滚动，并让表头固定
+  // Arco 在表格内部套了多层：.arco-table → .arco-spin → .arco-table-container
+  // → .arco-scrollbar → .arco-table-content → .arco-scrollbar → .arco-table-body。
+  // 其中 **.arco-table-container 不会自动继承父层高度**：实测 .arco-spin 已是
+  // 991px（撑到底），而它只有 403px，于是整条内层链都按内容高度收缩，
+  // 表体以下露出大片空白。
+  //
+  // 这是「内容少才暴露」的原因：文件多时内容本身就把内层撑满了。
+  // 逐层给出高度，让内层链始终占满外层给出的空间。
   .arco-table-container {
+    height: 100%;
+  }
+
+  .arco-table-container > .arco-scrollbar {
+    height: 100%;
+  }
+
+  // 内容层分成「表头（按内容）+ 表体（吃剩余）」
+  .arco-table-content {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
+  // 表体包裹吃掉剩余高度；min-height:0 是它能在剩余空间里滚动的必要条件
+  .arco-table-content > .arco-scrollbar:last-child {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  // 表体占满包裹高度，滚动仍由 Arco 处理
+  .arco-table-body {
     height: 100%;
   }
 }

@@ -500,11 +500,18 @@ const sceneInfo = computed(() => {
 });
 const status = ref("就绪");
 
+/** 目录栏表格的列。
+ *
+ * 固定列宽合计必须小于目录栏默认宽度（560），否则会出现横向滚动：
+ * 首列左缘与末列右缘被裁掉。实测「制作版本」给出的日期较长（如 1.21.1）
+ * 在 100px 下已够用，因此把固定部分压到 370，
+ * 余下空间由「名称」与「来源目录」这两列分摊（都不设宽度）。
+ */
 const columns: TableColumnData[] = [
-  { title: "名称", dataIndex: "fileName", width: 240, ellipsis: true, tooltip: true },
-  { title: "制作版本", dataIndex: "mcVersionName", width: 100 },
-  { title: "尺寸", slotName: "dims", width: 130 },
-  { title: "方块总数", dataIndex: "totalBlocks", width: 100 },
+  { title: "名称", dataIndex: "fileName", ellipsis: true, tooltip: true },
+  { title: "制作版本", dataIndex: "mcVersionName", width: 90 },
+  { title: "尺寸", slotName: "dims", width: 100 },
+  { title: "方块总数", dataIndex: "totalBlocks", width: 90 },
   { title: "来源目录", dataIndex: "dirName", ellipsis: true, tooltip: true },
 ];
 
