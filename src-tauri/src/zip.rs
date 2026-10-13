@@ -86,19 +86,38 @@ fn u32le(b: &[u8], off: usize) -> u32 {
 /// 找中央目录结尾记录（EOCD）。
 ///
 /// 从尾部向前搜索：EOCD 之后可能还有注释，长度不定，因此不能只看最后 22 字节。
+///
+/// 注释的字节是任意的（zip 规范允许任何内容），因此注释里完全可能出现
+/// `PK\x05\x06`。只认「从尾部遇到的第一个签名」会采信这种假记录，把总条数、
+/// 目录大小、目录偏移全读错，结果是**打开成功却一条条目都找不到**。
+/// 真正的 EOCD 一定满足「起点 + 22 + 注释长度 == 文件长度」（legacy-cpp 的
+/// FindEOCD 也是这么挑的，见 legacy-cpp/src/zip.cpp:202-207），
+/// 因此优先取自洽的那条，找不到时再退回第一个候选，兼容注释长度字段不可信
+/// 的文件（例如某些生成器把注释补在长度字段之外）。
 fn find_eocd(data: &[u8]) -> AppResult<usize> {
     if data.len() < EOCD_MIN_LEN {
         return Err(AppError::Corrupt("不是 zip：文件过短".into()));
     }
     // 注释最长 65535 字节，因此 EOCD 起点不早于 len - 22 - 65535
     let lower = data.len().saturating_sub(EOCD_MIN_LEN + 65535);
+    let mut loose: Option<usize> = None;
     let mut i = data.len() - EOCD_MIN_LEN;
     loop {
         if u32le(data, i) == EOCD_SIG {
-            return Ok(i);
+            let clen = u16le(data, i + 20) as usize;
+            // 尾部严格吻合：最可信，直接采信
+            if i + EOCD_MIN_LEN + clen == data.len() {
+                return Ok(i);
+            }
+            // 不相符时留作候选，继续往前找更吻合的
+            if loose.is_none() {
+                loose = Some(i);
+            }
         }
         if i == lower {
-            return Err(AppError::Corrupt("不是 zip：找不到中央目录结尾记录".into()));
+            return loose.ok_or_else(|| {
+                AppError::Corrupt("不是 zip：找不到中央目录结尾记录".into())
+            });
         }
         i -= 1;
     }
@@ -658,6 +677,67 @@ mod tests {
         zip.extend_from_slice(&[0x41u8; 300]);
         let a = open(&zip).expect("应在尾部搜索中找到 EOCD");
         assert_eq!(a.entries.len(), 1);
+    }
+
+    /// 注释里出现假的 EOCD 签名时，必须仍然选中真正的那个。
+    ///
+    /// zip 的注释字节是任意的（规范允许任何内容），因此注释里完全可能出现
+    /// `PK\x05\x06`。若从尾部向前只认「遇到的第一个签名」，遇到这种文件就会把
+    /// 假记录当成中央目录结尾：总条数、目录大小、目录偏移全取自假记录，
+    /// 结果是**打开成功但一条条目都找不到**，比直接报错更难排查。
+    ///
+    /// 真正的 EOCD 满足「起点 + 22 + 注释长度 == 文件长度」，假的那条不满足
+    /// （它后面还跟着注释的其余字节），因此能用这个条件区分开。
+    ///
+    /// 注意假记录必须**不在文件最末尾**：若它就压在最后 22 字节上，
+    /// 那条记录同样自洽，此时文件本身就是歧义的，任何实现都无法判定
+    /// （legacy-cpp 从尾部回扫，同样会先遇到它）。这里构造的是可判定的情形。
+    #[test]
+    fn fake_eocd_inside_comment_is_not_chosen() {
+        let mut b = ZipBuilder::new();
+        b.stored("a.txt", b"data");
+        let mut zip = b.finish();
+
+        // 注释 40 字节 = 假 EOCD（22 字节）+ 18 字节填充，
+        // 使假记录落在 n-40 处，其后再有内容，因此它不自洽
+        let mut comment: Vec<u8> = Vec::new();
+        comment.extend_from_slice(&EOCD_SIG.to_le_bytes());
+        comment.extend_from_slice(&0u16.to_le_bytes()); // disk
+        comment.extend_from_slice(&0u16.to_le_bytes()); // cd disk
+        comment.extend_from_slice(&0u16.to_le_bytes()); // 总条数 = 0（假）
+        comment.extend_from_slice(&0u16.to_le_bytes()); // 总条数 = 0（假）
+        comment.extend_from_slice(&0u32.to_le_bytes()); // cd_size = 0（假）
+        comment.extend_from_slice(&0u32.to_le_bytes()); // cd_off  = 0（假）
+        comment.extend_from_slice(&0u16.to_le_bytes()); // 注释长度 = 0（假）
+        comment.extend_from_slice(&[0x41u8; 18]); // 填充：让假记录不再位于末尾
+        assert_eq!(comment.len(), 40);
+
+        // 真实 EOCD 的注释长度字段写成注释的实际长度，文件才自洽
+        let eocd_at = zen(&zip);
+        zip[eocd_at + 20..eocd_at + 22].copy_from_slice(&(comment.len() as u16).to_le_bytes());
+        zip.extend_from_slice(&comment);
+
+        let a = open(&zip).expect("应找到真正的中央目录结尾记录");
+        assert_eq!(a.entries.len(), 1, "注释里的假记录总条数为 0，不能采信它");
+        assert!(
+            a.find("a.txt").is_some(),
+            "条目必须可被找到；打开成功却找不到任何条目说明选错了 EOCD"
+        );
+    }
+
+    /// 返回真实 EOCD 的偏移（测试辅助：从前往后找最后一条自洽的记录）
+    fn zen(data: &[u8]) -> usize {
+        let mut i = 0;
+        while i + 22 <= data.len() {
+            if u32le(data, i) == EOCD_SIG {
+                let clen = u16le(data, i + 20) as usize;
+                if i + 22 + clen == data.len() {
+                    return i;
+                }
+            }
+            i += 1;
+        }
+        panic!("测试构造的 zip 中没有自洽的 EOCD");
     }
 
     #[test]

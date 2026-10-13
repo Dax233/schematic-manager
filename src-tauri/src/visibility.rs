@@ -4,7 +4,7 @@
 //! 面遍历。这一层把解析层、模型解析与几何串起来，产出光栅化的输入。
 
 use crate::block_model::resolve_models;
-use crate::blockdb::{BlockDb, Face, VersionDef, NO_TEXTURE};
+use crate::blockdb::{BlockDb, Face, NO_TEXTURE};
 use crate::geometry::{build_face_corners, cull_neighbor_offset, face_shade, rotate_uv};
 use crate::transform::{rotate_cull_offset, to_world};
 use crate::litematic::{BlockState, Schematic};
@@ -18,7 +18,16 @@ use crate::litematic::{BlockState, Schematic};
 ///   - 六个面齐全，且每面贴图都存在、都不含透明通道
 ///
 /// 台阶、楼梯、玻璃、树叶等都不满足，因此不会错误地剔掉它们背后的面。
-pub fn is_opaque(db: &BlockDb, version: &VersionDef, state: &BlockState) -> bool {
+///
+/// 取 `version_idx` 而不是 `&VersionDef`：面的贴图字段是**字符串表下标**，
+/// 只有经 `BlockDb::texture_pool_index` 按版本解析后才能得到贴图池下标
+/// （见 `ModelFace::texture` 的说明）。持有版本引用并不足以完成这层解析，
+/// 会诱使调用者退化成把字符串下标当池下标用——那正是这里此前的缺陷：
+/// 树叶被误判为遮光，邻面被错误剔除，渲染出现空洞。
+pub fn is_opaque(db: &BlockDb, version_idx: usize, state: &BlockState) -> bool {
+    let Some(version) = db.versions.get(version_idx) else {
+        return false;
+    };
     let models = resolve_models(db, version, state);
     if models.len() != 1 {
         return false;
@@ -45,7 +54,9 @@ pub fn is_opaque(db: &BlockDb, version: &VersionDef, state: &BlockState) -> bool
         if f.texture == NO_TEXTURE {
             return false;
         }
-        match db.textures.get(f.texture as usize) {
+        // 先按版本把字符串表下标解析成贴图池下标，再取贴图属性
+        let pool = db.texture_pool_index(version_idx, f.texture);
+        match db.textures.get(pool as usize) {
             Some(t) if !t.has_alpha => {}
             _ => return false,
         }
@@ -166,7 +177,7 @@ pub fn collect_quads(sc: &Schematic, db: &BlockDb, ver_idx: usize) -> Vec<Quad> 
                                             let opaque = r
                                                 .palette
                                                 .get(idx)
-                                                .map_or(false, |s| is_opaque(db, version, s));
+                                                .map_or(false, |s| is_opaque(db, ver_idx, s));
                                             opaque_cache[idx] = if opaque { 1 } else { 0 };
                                         }
                                         if opaque_cache[idx] == 1 {
@@ -228,7 +239,7 @@ fn cullface_to_face(v: u8) -> Face {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blockdb::{Model, ModelElement, ModelFace, TextureInfo};
+    use crate::blockdb::{Model, ModelElement, ModelFace, TextureInfo, VersionDef};
 
     /// 造一个「完整不透明立方体」模型
     fn full_cube(texture: u32, has_alpha: bool) -> (Model, TextureInfo) {
@@ -461,60 +472,121 @@ mod tests {
 
     #[test]
     fn plain_full_cube_is_opaque() {
-        let (db, v) = build(false, |_| {});
-        assert!(is_opaque(&db, &v, &BlockState::new("minecraft:stone")));
+        let (db, _v) = build(false, |_| {});
+        assert!(is_opaque(&db, 0, &BlockState::new("minecraft:stone")));
+    }
+
+    /// 不透明判定必须**按版本解析**贴图字段，不能把字符串表下标当池下标用。
+    ///
+    /// 面的贴图字段是字符串表下标（见 ModelFace::texture 的说明），两者数值
+    /// 空间无关：随包库里字符串表 6263 项、贴图池只有 1685 项，约一半的取值
+    /// 超出池长度。误用会让半透明方块被判成「完全遮光」，进而剔除邻面、
+    /// 渲染出洞。
+    ///
+    /// 这里刻意构造「字符串下标 1 → 池下标 5」的错位，并让两个位置的
+    /// has_alpha 相反：只有走对解析路径才能得到「含透明 → 不遮光」的结论。
+    #[test]
+    fn opacity_resolves_texture_through_version_not_as_pool_index() {
+        // 池下标 5 的贴图含透明（树叶/玻璃），池下标 1 的不含。
+        // 面的字段是字符串表下标 1，字符串表 [1] = "block/leaves" 映射到池下标 5。
+        let (mut m, _) = full_cube(1, true);
+        for f in m.elements[0].faces.iter_mut() {
+            f.texture = 1;
+        }
+        let version = VersionDef {
+            name: "1.20.1".into(),
+            data_version: 3465,
+            lang_idx: 0,
+            texture_by_path: std::collections::HashMap::from([(
+                "block/leaves".to_string(),
+                5u32,
+            )]),
+            blocks: vec![crate::blockdb::BlockDef {
+                name: "minecraft:oak_leaves".into(),
+                variants: vec![crate::blockdb::Variant {
+                    when: String::new(),
+                    model_idx: 0,
+                    rot_x_div90: 0,
+                    rot_y_div90: 0,
+                    uvlock: false,
+                }],
+                multipart: Vec::new(),
+            }],
+            langs: Vec::new(),
+            is_overlay: false,
+        };
+        // 池下标 1 不透明，池下标 5 含透明
+        let opaque_tex = TextureInfo { w: 16, h: 16, offset: 0, len: 1024, has_alpha: false };
+        let alpha_tex = TextureInfo { w: 16, h: 16, offset: 0, len: 1024, has_alpha: true };
+        let mut textures = vec![opaque_tex; 6];
+        textures[1] = opaque_tex;
+        textures[5] = alpha_tex;
+        let db = BlockDb {
+            strings: vec![String::new(), "block/leaves".to_string()],
+            langs: Vec::new(),
+            textures,
+            models: vec![m],
+            versions: vec![version.clone()],
+            pixels: vec![0u8; 6 * 1024],
+        };
+
+        assert!(
+            !is_opaque(&db, 0, &BlockState::new("minecraft:oak_leaves")),
+            "贴图字段是字符串表下标，必须按版本解析到含透明的池下标 5；\
+             直接拿 1 当池下标会读到不透明贴图，从而错误地判定遮光并剔除邻面"
+        );
     }
 
     #[test]
     fn textured_transparency_is_not_opaque() {
         // 贴图含透明通道（玻璃、树叶）不能剔除邻居
-        let (db, v) = build(true, |_| {});
-        assert!(!is_opaque(&db, &v, &BlockState::new("minecraft:stone")));
+        let (db, _v) = build(true, |_| {});
+        assert!(!is_opaque(&db, 0, &BlockState::new("minecraft:stone")));
     }
 
     #[test]
     fn partial_and_rotated_elements_are_not_opaque() {
         // 非完整立方体（台阶）
-        let (db, v) = build(false, |m| m.elements[0].to[1] = 8.0);
-        assert!(!is_opaque(&db, &v, &BlockState::new("minecraft:stone")));
+        let (db, _v) = build(false, |m| m.elements[0].to[1] = 8.0);
+        assert!(!is_opaque(&db, 0, &BlockState::new("minecraft:stone")));
 
         // 带旋转
-        let (db, v) = build(false, |m| m.elements[0].has_rotation = true);
-        assert!(!is_opaque(&db, &v, &BlockState::new("minecraft:stone")));
+        let (db, _v) = build(false, |m| m.elements[0].has_rotation = true);
+        assert!(!is_opaque(&db, 0, &BlockState::new("minecraft:stone")));
 
         // 带 rescale
-        let (db, v) = build(false, |m| m.elements[0].rescale = true);
-        assert!(!is_opaque(&db, &v, &BlockState::new("minecraft:stone")));
+        let (db, _v) = build(false, |m| m.elements[0].rescale = true);
+        assert!(!is_opaque(&db, 0, &BlockState::new("minecraft:stone")));
     }
 
     #[test]
     fn missing_faces_are_not_opaque() {
         // 缺一个面（例如只有五个面的方块）不能剔除邻居
-        let (db, v) = build(false, |m| m.elements[0].face_mask = 0x1F);
-        assert!(!is_opaque(&db, &v, &BlockState::new("minecraft:stone")));
+        let (db, _v) = build(false, |m| m.elements[0].face_mask = 0x1F);
+        assert!(!is_opaque(&db, 0, &BlockState::new("minecraft:stone")));
     }
 
     #[test]
     fn translucent_model_is_not_opaque() {
-        let (db, v) = build(false, |m| m.translucent = true);
-        assert!(!is_opaque(&db, &v, &BlockState::new("minecraft:stone")));
+        let (db, _v) = build(false, |m| m.translucent = true);
+        assert!(!is_opaque(&db, 0, &BlockState::new("minecraft:stone")));
     }
 
     #[test]
     fn missing_texture_is_not_opaque() {
-        let (db, v) = build(false, |m| {
+        let (db, _v) = build(false, |m| {
             for f in m.elements[0].faces.iter_mut() {
                 f.texture = NO_TEXTURE;
             }
         });
-        assert!(!is_opaque(&db, &v, &BlockState::new("minecraft:stone")));
+        assert!(!is_opaque(&db, 0, &BlockState::new("minecraft:stone")));
     }
 
     #[test]
     fn unknown_block_is_not_opaque() {
-        let (db, v) = build(false, |_| {});
-        assert!(!is_opaque(&db, &v, &BlockState::new("mod:unknown")));
-        assert!(!is_opaque(&db, &v, &BlockState::new("minecraft:air")));
+        let (db, _v) = build(false, |_| {});
+        assert!(!is_opaque(&db, 0, &BlockState::new("mod:unknown")));
+        assert!(!is_opaque(&db, 0, &BlockState::new("minecraft:air")));
     }
 
     #[test]

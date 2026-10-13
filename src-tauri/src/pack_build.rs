@@ -215,8 +215,12 @@ where
                 let entry = Variant {
                     when: v.when.clone(),
                     model_idx: mi as u32,
-                    rot_x_div90: (v.rot_x_div90 % 4) as u8,
-                    rot_y_div90: (v.rot_y_div90 % 4) as u8,
+                    // blockstate 解析时已换算成 90 度倍数（见 get_rot_div90），
+                    // 磁盘格式也是这个口径，直接写出即可。
+                    // 曾经写成 `v.rot_x_div90 % 4`：在字段还是「角度」时，
+                    // 90 被写成 2（读回 180 度）、180 被写成 0（读回 0 度）。
+                    rot_x_div90: v.rot_x_div90 % 4,
+                    rot_y_div90: v.rot_y_div90 % 4,
                     uvlock: v.uvlock,
                 };
                 if *is_multipart {
@@ -837,9 +841,37 @@ mod tests {
         assert_eq!(db.models[0].elements.len(), 1);
     }
 
+    /// 变体旋转必须按磁盘格式（90 度倍数）写出，读回后与 blockstate 一致。
+    ///
+    /// blockstate 的 `x` / `y` 是角度，磁盘格式是「90 度倍数」。
+    /// 曾经写出端用 `角度 % 4`：y=90 写成 2（读回 180 度）、
+    /// y=180 写成 0（读回 0 度），导入资源包后楼梯、门、告示牌全转错方向。
     #[test]
-    fn block_name_comes_from_filename() {
-        assert_eq!(
+    fn variant_rotation_roundtrips_as_multiples_of_90() {
+        for (deg, want) in [(0u64, 0u8), (90, 1), (180, 2), (270, 3)] {
+            let json = format!(
+                r##"{{"variants":{{"":{{"model":"block/stone","x":{deg},"y":{deg}}}}}}}"##
+            );
+            let mut jar = minimal_jar();
+            jar.add("assets/minecraft/blockstates/spin.json", &json);
+            let built = build(&jar, "test", 0, false, no_texture).unwrap();
+            let db = BlockDb::load_from_bytes(&built.data, false).expect("读取失败");
+            let blk = db.versions[0]
+                .blocks
+                .iter()
+                .find(|b| b.name == "minecraft:spin")
+                .expect("应有 spin 方块");
+            let v = &blk.variants[0];
+            assert_eq!(
+                (v.rot_x_div90, v.rot_y_div90),
+                (want, want),
+                "blockstate 里的 {deg} 度应写出并读回 {want} 个 90 度"
+            );
+        }
+    }
+
+    #[test]
+    fn block_name_comes_from_filename() {        assert_eq!(
             block_name_of("assets/minecraft/blockstates/oak_stairs.json").unwrap(),
             "oak_stairs"
         );

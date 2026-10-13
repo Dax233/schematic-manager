@@ -318,10 +318,12 @@ pub fn summary_from_nbt(root: &Value) -> Summary {
         s.total_blocks = md.get("TotalBlocks").and_then(|v| v.as_i64()).unwrap_or(0);
         s.total_volume = md.get("TotalVolume").and_then(|v| v.as_i64()).unwrap_or(0);
         s.region_count = md.get("RegionCount").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-        s.entity_count = md.get("EntityCount").and_then(|v| v.as_i64()).unwrap_or(0);
-        s.tile_entity_count = md.get("TileEntityCount").and_then(|v| v.as_i64()).unwrap_or(0);
-        s.pending_ticks = md.get("PendingBlockTicks").and_then(|v| v.as_i64()).unwrap_or(0)
-            + md.get("PendingFluidTicks").and_then(|v| v.as_i64()).unwrap_or(0);
+        // 实体/方块实体/待处理刻**不在 Metadata 里**：实测真实投影的 Metadata
+        // 只有 TimeCreated、TimeModified、EnclosingSize、Description、
+        // RegionCount、TotalBlocks、TotalVolume、Author、Name 这几项。
+        // 这些数量必须按区域内的列表求和（legacy-cpp 的 Peek 也是这么做的，
+        // 见 legacy-cpp/src/litematic.cpp:274-284）。此前读 Metadata 的同名键，
+        // 一个都取不到，界面上「实体数量 / 方块实体 / 待处理刻」恒为 0。
         if let Some(es) = md.get("EnclosingSize") {
             if let Some(xyz) = es.as_xyz() {
                 s.enclosing = xyz;
@@ -332,10 +334,19 @@ pub fn summary_from_nbt(root: &Value) -> Summary {
         }
     }
 
-    // Regions 的键数量可能与 Metadata.RegionCount 不一致，以实际为准
+    // 按区域内的列表统计数量。RegionCount 与实体数量都以实际内容为准：
+    // Metadata 里可能缺失这些字段，而文件本身是有内容的。
     if let Some(Value::Compound(regs)) = root.get("Regions") {
         if s.region_count == 0 {
             s.region_count = regs.len() as i32;
+        }
+        for (_, rv) in regs.iter() {
+            let len = |k: &str| -> i64 {
+                rv.get(k).and_then(|x| x.as_list()).map_or(0, |l| l.len() as i64)
+            };
+            s.entity_count += len("Entities");
+            s.tile_entity_count += len("TileEntities");
+            s.pending_ticks += len("PendingBlockTicks") + len("PendingFluidTicks");
         }
     }
     s
@@ -550,7 +561,11 @@ impl Schematic {
                     for key in ["Entities", "TileEntities"] {
                         if let Some(list) = rv.get(key).and_then(|x| x.as_list()) {
                             for e in list {
-                                let id = e.get("Id").and_then(|x| x.as_str()).unwrap_or("unknown");
+                                // NBT 的键区分大小写，实体与方块实体的标识字段
+                                // 都是小写 `id`（legacy-cpp 也取 "id"）。
+                                // 写成 "Id" 会一个都匹配不到，全部归入 unknown，
+                                // 界面上就只剩一行 unknown。
+                                let id = e.get("id").and_then(|x| x.as_str()).unwrap_or("unknown");
                                 let map = if key == "Entities" {
                                     &mut a.entities_by_id
                                 } else {
@@ -1146,9 +1161,64 @@ mod tests {
         assert_eq!(root, back, "NBT 树在往返后必须完全一致");
     }
 
+    /// 实体与方块实体数量必须来自区域内的列表，而不是 Metadata。
+    ///
+    /// 真实投影的 Metadata 里**没有** EntityCount / TileEntityCount /
+    /// PendingBlockTicks 这几项（样本的 Metadata 只有 9 个键，全是名称、
+    /// 作者、时间、体积一类），数量只能按区域列表求和。
+    /// 此前读 Metadata 的同名键，界面上这三项恒为 0。
     #[test]
-    fn real_sample_loads_and_regions_are_wellformed() {
+    fn real_sample_counts_entities_from_region_lists() {
         let sc = Schematic::load(&sample_path()).expect("载入失败");
+        let s = sc.summary();
+
+        // 样本实测：5 个实体、131 个方块实体、0 个待处理刻
+        assert_eq!(s.entity_count, 5, "应按区域列表统计实体数，实际 {}", s.entity_count);
+        assert_eq!(
+            s.tile_entity_count, 131,
+            "应按区域列表统计方块实体数，实际 {}",
+            s.tile_entity_count
+        );
+        assert_eq!(s.pending_ticks, 0, "样本没有待处理刻");
+
+        // 汇总值必须等于各区域之和，而不是某个区域的值
+        let by_region: i64 = sc.regions.iter().map(|r| r.entity_count as i64).sum();
+        assert_eq!(
+            s.entity_count, by_region,
+            "汇总值应等于各区域实体数之和"
+        );
+    }
+
+    /// 实体的标识字段是小写 `id`，不是 `Id`。
+    ///
+    /// NBT 的键区分大小写。写成 "Id" 会一个都匹配不到，界面上的「实体」
+    /// 列表就只剩一行 unknown，用户看不到实际有哪些实体。
+    #[test]
+    fn real_sample_entity_ids_are_read_not_all_unknown() {
+        let sc = Schematic::load(&sample_path()).expect("载入失败");
+        let a = sc.analyze();
+
+        assert!(
+            !a.entities_by_id.contains_key("unknown"),
+            "实体标识必须能读到；全部落入 unknown 说明读错了键名，实际 {:?}",
+            a.entities_by_id
+        );
+        assert_eq!(
+            a.entities_by_id.get("minecraft:item").copied(),
+            Some(4),
+            "样本含 4 个 minecraft:item，实际 {:?}",
+            a.entities_by_id
+        );
+        assert_eq!(
+            a.entities_by_id.get("minecraft:hopper_minecart").copied(),
+            Some(1),
+            "样本含 1 个 minecraft:hopper_minecart，实际 {:?}",
+            a.entities_by_id
+        );
+    }
+
+    #[test]
+    fn real_sample_loads_and_regions_are_wellformed() {        let sc = Schematic::load(&sample_path()).expect("载入失败");
         assert!(!sc.regions.is_empty(), "应解析出至少一个区域");
 
         for r in &sc.regions {

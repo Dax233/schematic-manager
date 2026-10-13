@@ -113,11 +113,21 @@ pub fn normalize_when_multipart(when: &Value) -> String {
 }
 
 /// 取整数字段，缺失或类型不符时用默认值
-fn get_u8(obj: &serde_json::Map<String, Value>, key: &str, def: u8) -> u8 {
-    obj.get(key)
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u8)
-        .unwrap_or(def)
+/// 取 blockstate 里的旋转字段，换算成 90 度倍数。
+///
+/// JSON 里的 `x` / `y` 是**角度**（90、180、270），而字段语义与磁盘格式
+/// 都是「90 度倍数」（见 VariantEntry::rot_x_div90 的说明，
+/// legacy-cpp 写出时也是 `/ 90`，见 packbuild.cpp:513-514）。
+/// 这里不换算的话，写出端再按「倍数」解释会得到错误的旋转角：
+/// 例如 y=90 被当成 2 个 90 度（即 180 度），y=180 被当成 0 度。
+fn get_rot_div90(obj: &serde_json::Map<String, Value>, key: &str) -> u8 {
+    let deg = obj.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+    // 非 90 的整数倍（异常数据）按 0 处理：写出格式只支持 4 个朝向，
+    // 取整或取模都会得到看似合法却错误的角度。
+    if deg % 90 != 0 {
+        return 0;
+    }
+    ((deg / 90) % 4) as u8
 }
 
 /// 解析一个变体对象
@@ -132,8 +142,8 @@ fn parse_variant(when: String, v: &Value) -> AppResult<VariantEntry> {
     Ok(VariantEntry {
         when,
         model: model.to_string(),
-        rot_x_div90: get_u8(obj, "x", 0),
-        rot_y_div90: get_u8(obj, "y", 0),
+        rot_x_div90: get_rot_div90(obj, "x"),
+        rot_y_div90: get_rot_div90(obj, "y"),
         uvlock: obj.get("uvlock").and_then(|b| b.as_bool()).unwrap_or(false),
     })
 }
@@ -487,8 +497,36 @@ mod tests {
         assert!(def.multipart.is_empty());
         let east = def.variants.iter().find(|v| v.when == "facing=east").unwrap();
         assert_eq!(east.model, "block/stairs");
-        assert_eq!(east.rot_y_div90, 90);
+        // JSON 里 y=90（角度），字段语义是「90 度倍数」，因此存 1
+        assert_eq!(east.rot_y_div90, 1);
         assert!(east.uvlock);
+    }
+
+    #[test]
+    fn rotation_is_stored_as_multiples_of_90() {
+        // 四个朝向都要正确换算，否则写出后旋转角会整体错位
+        for (deg, want) in [(0u64, 0u8), (90, 1), (180, 2), (270, 3)] {
+            let json = format!(
+                r#"{{"variants":{{"":{{"model":"block/x","x":{deg},"y":{deg}}}}}}}"#
+            );
+            let def = parse_blockstate(json.as_bytes()).unwrap();
+            assert_eq!(
+                def.variants[0].rot_x_div90, want,
+                "x={deg} 度应存为 {want} 个 90 度"
+            );
+            assert_eq!(
+                def.variants[0].rot_y_div90, want,
+                "y={deg} 度应存为 {want} 个 90 度"
+            );
+        }
+        // 字段缺失时按 0
+        let def = parse_blockstate(br##"{"variants":{"":{"model":"block/x"}}}"##).unwrap();
+        assert_eq!(def.variants[0].rot_x_div90, 0);
+        assert_eq!(def.variants[0].rot_y_div90, 0);
+        // 非 90 的倍数属于异常数据：写出格式只支持 4 个朝向，
+        // 取模会得到看似合法却错误的角度，因此按 0 处理
+        let def = parse_blockstate(br##"{"variants":{"":{"model":"block/x","y":45}}}"##).unwrap();
+        assert_eq!(def.variants[0].rot_y_div90, 0, "45 度不是 90 的倍数，按 0 处理");
     }
 
     #[test]
@@ -533,7 +571,7 @@ mod tests {
         let def = parse_blockstate(json).unwrap();
         assert_eq!(def.multipart.len(), 2);
         assert_eq!(def.multipart[0].model, "m1");
-        assert_eq!(def.multipart[0].rot_y_div90, 90);
+        assert_eq!(def.multipart[0].rot_y_div90, 1, "y=90 度应存为 1 个 90 度");
         assert_eq!(def.multipart[1].model, "m2");
         assert_eq!(def.multipart[0].when, def.multipart[1].when);
     }

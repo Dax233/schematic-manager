@@ -24,6 +24,13 @@ const MAX_TEXTURES: u32 = 2_000_000;
 const MAX_MODELS: u32 = 5_000_000;
 const MAX_LANGS: u32 = 100_000;
 const MAX_STRINGS: u32 = 20_000_000;
+/// 单张语言表的条目数上限。
+///
+/// 不能沿用 MAX_STRINGS：语言条目是「三条字符串下标」共 12 字节的结构，
+/// 按 20_000_000 放行时，一个仅 240 MB 的构造文件就能让
+/// `Vec::with_capacity(n)` 直接申请约 1.4 GB 而 OOM 中止。
+/// legacy-cpp 对这一档的上限也是 5_000_000（blockdb.cpp:154）。
+const MAX_LANG_ENTRIES: u32 = 5_000_000;
 /// 单版本方块数上限。legacy-cpp 用的是 500000（blockdb.cpp:247），
 /// 与字符串表的 2000 万不是一个量级——误用后者会让损坏文件
 /// 通过校验并触发超大分配。
@@ -325,7 +332,7 @@ impl BlockDb {
         // ---- 语言表 ----
         let mut langs = Vec::with_capacity(lang_count as usize);
         for _ in 0..lang_count {
-            let n = r.count(MAX_STRINGS, "语言条目")?;
+            let n = r.count(MAX_LANG_ENTRIES, "语言条目")?;
             let mut group = Vec::with_capacity(n as usize);
             for _ in 0..n {
                 let bi = r.u32()?;
