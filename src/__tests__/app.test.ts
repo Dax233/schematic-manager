@@ -250,6 +250,78 @@ describe("主要操作流程", () => {
   });
 });
 
+describe("重新扫描后的选中项", () => {
+  /** 点工具栏的「添加目录」并等扫描完成 */
+  async function addDir(w: ReturnType<typeof mountApp>, dir: string) {
+    mockOpen.mockResolvedValue(dir);
+    const btn = w.findAll("button").find((b) => b.text().includes("添加目录"));
+    expect(btn, "应能定位到「添加目录」按钮").toBeTruthy();
+    await btn!.trigger("click");
+    await flushPromises();
+  }
+
+  it("换到另一个目录后，不再显示上一个目录的选中项", async () => {
+    // 这条防的是一个真实缺陷：pickDirectory 只替换 files 而不处理选中项，
+    // 于是详情面板继续显示**已不在列表中**的文件，「保存元数据」会把改动
+    // 写到那个路径上，而用户在列表里选中不了它，看不出改动写到了哪里。
+    const other: SchematicSummary = {
+      ...summary,
+      path: "/q/另一个.litematic",
+      fileName: "另一个.litematic",
+      dirName: "/q",
+      name: "另一个投影",
+    };
+
+    stubInvoke();
+    const w = mountApp();
+    await addDir(w, "/p");
+    // 选中第一个目录里的文件
+    const row = w.findAll("tr").find((r) => r.text().includes("测试.litematic"));
+    expect(row, "应能找到该文件所在的行").toBeTruthy();
+    await row!.trigger("click");
+    await flushPromises();
+    expect(w.text(), "选中后应出现详情页签").toContain("信息");
+
+    // 换一个目录重新扫描，新列表里没有原选中项
+    stubInvoke({
+      scan_litematics: { items: [other], skippedDirs: 0, skippedPaths: [] },
+    });
+    await addDir(w, "/q");
+
+    expect(w.text(), "旧目录的文件不应还留在列表里").not.toContain("测试.litematic");
+    expect(w.text(), "应显示新目录的文件").toContain("另一个.litematic");
+    expect(
+      w.text(),
+      "选中项已不在列表中，应回到空状态而不是继续显示旧文件的详情",
+    ).toContain("选择一个投影文件以查看详情");
+
+    // 依赖选中项的按钮必须同步禁用，否则点下去会作用到旧路径
+    const btn = (label: string) => w.findAll("button").find((b) => b.text().includes(label));
+    expect(btn("方块替换")?.attributes("disabled"), "切换后应禁用").toBeDefined();
+    expect(btn("版本转换")?.attributes("disabled"), "切换后应禁用").toBeDefined();
+    w.unmount();
+  });
+
+  it("同一目录重新扫描时保留选中项", async () => {
+    // 反过来的情形：重新扫描当前目录（例如文件没变），选中项应当保留，
+    // 不能一律清空——那会让用户每次刷新都丢掉正在查看的文件。
+    stubInvoke();
+    const w = mountApp();
+    await addDir(w, "/p");
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+    expect(w.text()).toContain("信息");
+
+    await addDir(w, "/p");
+
+    expect(w.text(), "同一目录重扫后应仍显示该文件").toContain("测试.litematic");
+    expect(w.text(), "选中项应保留").toContain("信息");
+    const btn = (label: string) => w.findAll("button").find((b) => b.text().includes(label));
+    expect(btn("方块替换")?.attributes("disabled"), "选中项保留，按钮应可用").toBeUndefined();
+    w.unmount();
+  });
+});
+
 describe("重复文件筛查", () => {
   /** 在整份文档里按文案找按钮。
    *

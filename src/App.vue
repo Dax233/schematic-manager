@@ -126,7 +126,10 @@ async function doConvert() {
     );
     convOpen.value = false;
     const res = await scanLitematics(cur.dirName, 1);
-    files.value = res.items.length > 0 ? res.items : files.value;
+    const items = res.items.length > 0 ? res.items : files.value;
+    files.value = items;
+    // 转换会生成新文件并可能改动原文件，因此同步刷新选中项记录
+    syncSelection(items);
   } catch (e) {
     Message.error(`转换失败：${e}`);
   } finally {
@@ -400,6 +403,34 @@ const statusText = computed(() => {
   return n === 0 ? status.value : `${status.value}　共 ${n} 个投影文件`;
 });
 
+/// 列表被新的扫描结果替换后，让选中项与新列表保持一致。
+///
+/// 选中项记录的是上一次扫描的路径。若只替换列表而不处理选中项，详情面板
+/// 会继续显示**已经不在列表中**的文件：「保存元数据」「方块替换」
+/// 「版本转换」都会作用到那个路径上，而用户在列表里选中不了它，
+/// 看不出自己的改动写到了哪里。
+///
+/// 按路径比对而不是一律清空：在同一目录重新扫描时该文件仍在列表中，
+/// 此时应保留选中并刷新记录（元数据与解析错误都可能已经变化）。
+/// 这与 onRowClick 的行为一致——切换查看对象时草稿一律重置。
+function syncSelection(items: SchematicSummary[]) {
+  const cur = selected.value;
+  if (!cur) return;
+  const hit = items.find((f) => f.path === cur.path);
+  if (hit) {
+    selected.value = hit;
+    resetDraft(hit);
+    return;
+  }
+  // 文件已不在新列表中：清空选中，以及只属于它的解析结果与预览，
+  // 否则右侧面板会显示上一个目录的数据
+  selected.value = null;
+  resetDraft(null);
+  analysis.value = null;
+  scene.value = null;
+  sceneError.value = "";
+}
+
 async function pickDirectory() {
   const dir = await open({ directory: true, multiple: false, title: "选择投影目录" });
   if (typeof dir !== "string") return;
@@ -407,6 +438,7 @@ async function pickDirectory() {
   try {
     const r = await scanLitematics(dir);
     files.value = r.items;
+    syncSelection(r.items);
     const parts: string[] = [];
     const bad = r.items.filter((f) => f.error).length;
     if (bad > 0) parts.push(`${bad} 个文件解析失败`);
