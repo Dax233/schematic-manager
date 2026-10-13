@@ -103,7 +103,16 @@ where
             }
             if dv <= 0 {
                 if let Some(n) = v.get("world_version").and_then(|x| x.as_i64()) {
-                    dv = n as i32;
+                    // 用 try_from 而不是 `n as i32`：后者静默截断，而截断结果
+                    // 可能落在一个**看似合法**的版本号上。例如
+                    // 4294970761 as i32 == 3465，正好是 1.20.1 的编号，
+                    // 于是损坏的版本号会被当成合法版本，把资源包归到错误的
+                    // 游戏版本上，后续的版本匹配与转换目标都会跟着错。
+                    // 超出 i32 时按「没有版本号」处理（dv 保持原值），
+                    // 与字段缺失一致，界面显示为未知版本。
+                    if let Ok(v32) = i32::try_from(n) {
+                        dv = v32;
+                    }
                 }
             }
         }
@@ -580,6 +589,59 @@ mod tests {
         let db = BlockDb::load_from_bytes(&built.data, true).unwrap();
         assert_eq!(db.versions[0].data_version, 9999, "显式给出的版本号应优先生效");
         assert!(db.versions[0].is_overlay, "叠加包标志应透传");
+    }
+
+    /// version.json 里的 world_version 超出 i32 时，
+    /// 必须按「没有版本号」处理，不能截断成一个看着合法的值。
+    ///
+    /// 4294970761 是刻意挑的：`4294970761 as i32 == 3465`，正好是 1.20.1 的
+    /// 编号。用 `as i32` 时这个损坏的版本号会被当成合法版本，把资源包
+    /// 归到错误的游戏版本上。
+    #[test]
+    fn out_of_range_world_version_is_treated_as_unknown() {
+        let mut jar = minimal_jar();
+        jar.add("version.json", r##"{"id":"1.20.1","world_version":4294970761}"##);
+        let built = build(&jar, "test", 0, false, no_texture).unwrap();
+        let db = BlockDb::load_from_bytes(&built.data, false).unwrap();
+
+        assert_eq!(
+            db.versions[0].data_version, 0,
+            "超出 i32 的 world_version 应视为未知，而不是截断成 3465"
+        );
+        // 版本名仍照常取自 id
+        assert_eq!(db.versions[0].name, "1.20.1");
+    }
+
+    /// 负数 world_version 应原样保留，不能被改写成某个看着合法的正数。
+    ///
+    /// 本项目里 dataVersion 为负表示「打包时缺少版本号」
+    /// （见 blockdb.rs 的说明与 legacy-cpp/tools/pack_blockdb.py），
+    /// 因此负值属于既定的「未知」表示，不应被替换成猜测值。
+    #[test]
+    fn negative_world_version_stays_negative() {
+        let mut jar = minimal_jar();
+        jar.add("version.json", r##"{"id":"1.20.1","world_version":-5}"##);
+        let built = build(&jar, "test", 0, false, no_texture).unwrap();
+        let db = BlockDb::load_from_bytes(&built.data, false).unwrap();
+        assert_eq!(
+            db.versions[0].data_version, -5,
+            "负值表示「未知」，应原样保留而不是改写成合法版本号"
+        );
+        assert_eq!(db.versions[0].name, "1.20.1");
+    }
+
+    /// 临界值 i32::MAX 应被接受，确认判据不是「一律拒绝大数」。
+    #[test]
+    fn world_version_at_i32_max_is_accepted() {
+        let mut jar = minimal_jar();
+        let max = i32::MAX;
+        jar.add(
+            "version.json",
+            &format!(r##"{{"id":"1.20.1","world_version":{max}}}"##),
+        );
+        let built = build(&jar, "test", 0, false, no_texture).unwrap();
+        let db = BlockDb::load_from_bytes(&built.data, false).unwrap();
+        assert_eq!(db.versions[0].data_version, max);
     }
 
     #[test]
