@@ -460,6 +460,127 @@ fn real_project_piston_culling_respects_geometry() {
 /// 这里用真实数据核对：把所有 piston / sticky_piston / piston_head /
 /// redstone_* 的实际状态串拿出来，逐个确认能解析出模型，
 /// 并统计覆盖到的 facing 与 extended 组合。
+/// 遍历全部真实投影，核对**每个方块**都没有丢掉不可剔除的面。
+///
+/// 这是「活塞缺面」这类问题最宽的一张网：不限定方块种类，而是对每个方块实例
+/// 独立算出「模型里 cullface=none 的面有几个」，再核对实际产出的四边形数
+/// 不少于它。cullface=none 表示「任何情况下都不剔除」，因此这些面必须出现
+/// 在输出里；少一个就说明该方块会缺一块。
+///
+/// 与只测活塞的用例互补：那一条覆盖各种朝向与邻居摆法，
+/// 这一条覆盖真实世界里出现的全部方块与全部实际摆法。
+#[test]
+#[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
+fn real_project_no_block_loses_a_non_cullable_face() {
+    use std::collections::BTreeMap;
+
+    let files = collect_litematic(&real_dir());
+    let db = bundled_db();
+
+    let mut total_blocks = 0usize;
+    let mut total_quads = 0usize;
+    // 失败样例：(方块名, 属性串, 应有面数, 实际面数, 投影名)
+    let mut failures: Vec<String> = Vec::new();
+    // 出现过的方块种类数，用于说明覆盖面
+    let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+
+    for f in &files {
+        let file_label = file_name(f);
+        let Ok(sc) = crate::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
+        let Some(vi) = db.pick_version(sc.summary().data_version) else { continue };
+        let version = &db.versions[vi];
+
+        // 每个方块状态算一次「不可剔除的面数」，同一状态只算一遍
+        let mut no_cull_cache: BTreeMap<i32, usize> = BTreeMap::new();
+
+        let quads = crate::visibility::collect_quads(&sc, &db, vi);
+        total_quads += quads.len();
+
+        // 按方块坐标统计实际产出的四边形数
+        let mut per_block: BTreeMap<[i32; 3], usize> = BTreeMap::new();
+        for q in &quads {
+            *per_block.entry(q.block_pos).or_insert(0) += 1;
+        }
+
+        for r in &sc.regions {
+            for (i, pi) in r.indices.iter().enumerate() {
+                let Some(st) = r.palette.get(*pi as usize) else { continue };
+                if crate::visibility::is_render_skipped(&st.name) {
+                    continue;
+                }
+                let local = r.pos_from_index(i);
+                let (Some(x), Some(y), Some(z)) = (
+                    r.pos[0].checked_add(local[0]),
+                    r.pos[1].checked_add(local[1]),
+                    r.pos[2].checked_add(local[2]),
+                ) else {
+                    continue;
+                };
+                total_blocks += 1;
+                *kinds.entry(st.name.clone()).or_insert(0) += 1;
+
+                // 该状态在模型里有多少个不可剔除的面
+                let expected = match no_cull_cache.get(pi) {
+                    Some(v) => *v,
+                    None => {
+                        let mut n = 0usize;
+                        for rm in crate::block_model::resolve_models(&db, version, st) {
+                            let Some(m) = db.models.get(rm.model_idx as usize) else { continue };
+                            for elem in &m.elements {
+                                for face_idx in 0..6u8 {
+                                    if elem.face_mask & (1u8 << face_idx) == 0 {
+                                        continue;
+                                    }
+                                    let fe = match face_idx {
+                                        0 => crate::blockdb::Face::Down,
+                                        1 => crate::blockdb::Face::Up,
+                                        2 => crate::blockdb::Face::North,
+                                        3 => crate::blockdb::Face::South,
+                                        4 => crate::blockdb::Face::West,
+                                        _ => crate::blockdb::Face::East,
+                                    };
+                                    if elem.face(fe).map(|mf| mf.cullface == 0xFF).unwrap_or(false)
+                                    {
+                                        n += 1;
+                                    }
+                                }
+                            }
+                        }
+                        no_cull_cache.insert(*pi, n);
+                        n
+                    }
+                };
+
+                let got = per_block.get(&[x, y, z]).copied().unwrap_or(0);
+                if got < expected {
+                    failures.push(format!(
+                        "{file_label}：{} [{}] 在 {:?} 只有 {got} 个面，\
+                         但模型里有 {expected} 个不可剔除的面",
+                        st.name,
+                        st.prop_str(),
+                        [x, y, z]
+                    ));
+                }
+            }
+        }
+    }
+
+    println!(
+        "  扫描 {} 个方块实例（{} 种方块）、{total_quads} 个四边形",
+        total_blocks,
+        kinds.len()
+    );
+    assert!(total_blocks > 0, "没有扫描到任何方块");
+    // 失败信息可能极多，只列前 20 条，避免刷屏掩盖真正的问题
+    let shown: Vec<String> = failures.iter().take(20).cloned().collect();
+    assert!(
+        failures.is_empty(),
+        "以下方块丢了不可剔除的面（共 {} 处，列前 20）：\n{}",
+        failures.len(),
+        shown.join("\n")
+    );
+}
+
 #[test]
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn real_project_piston_states_all_resolve() {

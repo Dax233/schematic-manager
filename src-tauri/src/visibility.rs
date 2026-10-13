@@ -86,7 +86,7 @@ pub struct Quad {
 /// 比统计口径多一个 structure_void：legacy-cpp 渲染时跳过它
 /// （render.cpp:316-317），而统计把它算作非空气（litematic.cpp:374）。
 /// 两处口径不同是有意的，改名以示区别，避免日后被「统一」掉。
-fn is_render_skipped(name: &str) -> bool {
+pub(crate) fn is_render_skipped(name: &str) -> bool {
     matches!(
         name,
         "minecraft:air"
