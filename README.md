@@ -112,15 +112,21 @@ pnpm tauri build    # 打包
 前端类型检查、单元测试与构建：
 
 ```bash
-pnpm typecheck      # vue-tsc
-pnpm test           # vitest：API 契约 + 界面挂载与交互流程
-pnpm check:ipc      # 前后端命令名与参数名的一致性检查
-pnpm check:notes    # Release 说明的格式（文件表与下载链接）
-pnpm build          # vite build
+pnpm typecheck       # vue-tsc
+pnpm test            # vitest：API 契约 + 界面挂载与交互流程
+pnpm check:ipc       # 前后端命令名与参数名的一致性检查
+pnpm check:notes     # Release 说明的格式（文件表与下载链接）
+pnpm check:workflow  # 工作流结构：needs / outputs / 矩阵键 / 表达式 / concurrency
+pnpm build           # vite build
 ```
 
-`pnpm check:notes` 自带一个假的 GitHub API，不联网、也不受仓库当前
-Release 状态影响，可在本地随时运行。
+`pnpm check:notes` 与 `pnpm check:workflow` 都不联网、也不需要 token，
+不受仓库当前 Release 状态影响，可在本地随时运行。
+
+`check:workflow` 补的是「YAML 能解析 ≠ GitHub 能执行」这段差距：
+`needs` 指向不存在的任务、引用未声明的 output、矩阵键没定义、
+表达式括号不配对、矩阵里未加引号的逗号（会被当成条目分隔符）——
+这些只在推送之后才由 GitHub 报出来，而本工作流的构建阶段要跑六个平台。
 
 后端的单元测试：
 
