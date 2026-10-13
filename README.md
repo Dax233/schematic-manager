@@ -96,6 +96,7 @@
   其中的 `.litematic` 解析、NBT 位打包、ZIP/PNG 解码、多版本方块库烘焙等
   已通过实测验证的语义，是 Rust 重写时的对照依据。
 - `tools/typecheck/` —— 无网络环境下的离线类型检查与单元测试脚本
+- `tools/render/` —— 用无头浏览器渲染构建产物、核对界面确实画得出来
 - `.github/workflows/release.yml` —— 多平台自动构建与发布
 
 ## 构建
@@ -126,6 +127,17 @@ Release 状态影响，可在本地随时运行。
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml --lib
 ```
+
+界面渲染检查（需先 `pnpm build`，且本机装有 Chrome / Edge / Chromium）：
+
+```bash
+python tools/render/check-render.py
+```
+
+它用无头浏览器加载 dist 产物、自动走一遍「添加目录 → 扫描 → 选中文件」，
+再从渲染结果里核对界面文案。单元测试跑在 jsdom 里，看不到真实浏览器中的
+渲染：构建配置写错时 `vite build` 依旧成功、dist 也生成了，打开却是一片
+空白。这一步专门守这种情况。浏览器路径可用 `CHROME_PATH` 指定。
 
 ## 版本号规则
 
