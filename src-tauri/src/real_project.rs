@@ -807,6 +807,119 @@ fn piston_head_all_property_combinations_resolve() {
     assert!(failures.is_empty(), "以下活塞头状态解析异常：\n{}", failures.join("\n"));
 }
 
+/// 真实投影里同时带 x 与 y 旋转的方块，其最终朝向必须与参考实现一致。
+///
+/// 变体旋转在 blockstate 里写作 `"x": 90, "y": 180`。参考实现
+/// legacy-cpp/render.cpp 的 RotateBlock 是**先 X 后 Y**，且各轴用 16 取补
+/// （绕方块中心 8,8,8 旋转）。若顺序写反，只有**两个都非零**的方块才会转错——
+/// 单独一个轴非零时两种顺序结果常常相同，因此这类缺陷容易漏掉，
+/// 表现正是「有时候会不对」。
+///
+/// 这里不复用 rotate_variant 的结果做参照（那等于自己和自己比），
+/// 而是照抄 legacy 的公式独立算一遍再比对。
+#[test]
+#[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
+fn real_project_two_axis_rotation_matches_reference() {
+    use crate::transform::rotate_variant;
+
+    /// 照抄 legacy-cpp/render.cpp 的 RotateBlock
+    fn legacy_rotate(p: [f32; 3], rot_x_div90: u8, rot_y_div90: u8) -> [f32; 3] {
+        let [mut x, mut y, mut z] = p;
+        match rot_x_div90 % 4 {
+            1 => {
+                let (ny, nz) = (16.0 - z, y);
+                y = ny;
+                z = nz;
+            }
+            2 => {
+                y = 16.0 - y;
+                z = 16.0 - z;
+            }
+            3 => {
+                let (ny, nz) = (z, 16.0 - y);
+                y = ny;
+                z = nz;
+            }
+            _ => {}
+        }
+        match rot_y_div90 % 4 {
+            1 => {
+                let (nx, nz) = (16.0 - z, x);
+                x = nx;
+                z = nz;
+            }
+            2 => {
+                x = 16.0 - x;
+                z = 16.0 - z;
+            }
+            3 => {
+                let (nx, nz) = (z, 16.0 - x);
+                x = nx;
+                z = nz;
+            }
+            _ => {}
+        }
+        [x, y, z]
+    }
+
+    let db = bundled_db();
+    let mut checked = 0usize;
+    let mut both_axis = 0usize;
+    let mut examples: Vec<String> = Vec::new();
+    let mut bad: Vec<String> = Vec::new();
+
+    // 用几个不对称的点，任何顺序/符号差异都会暴露
+    let probes: [[f32; 3]; 3] = [[1.0, 2.0, 3.0], [3.0, 12.0, 7.0], [15.0, 4.0, 0.5]];
+
+    for vi in 0..db.versions.len() {
+        let version = &db.versions[vi];
+        for bd in &version.blocks {
+            for v in bd.variants.iter().chain(bd.multipart.iter()) {
+                checked += 1;
+                if v.rot_x_div90 % 4 != 0 && v.rot_y_div90 % 4 != 0 {
+                    both_axis += 1;
+                    if examples.len() < 6 {
+                        examples.push(format!(
+                            "{} [{}] x={} y={}",
+                            bd.name, v.when, v.rot_x_div90, v.rot_y_div90
+                        ));
+                    }
+                }
+                for p in probes {
+                    let got = rotate_variant(p, v.rot_x_div90, v.rot_y_div90);
+                    let want = legacy_rotate(p, v.rot_x_div90, v.rot_y_div90);
+                    for a in 0..3 {
+                        if (got[a] - want[a]).abs() > 1e-4 {
+                            bad.push(format!(
+                                "{} [{}] x={} y={}：点 {p:?} 得到 {got:?}，\
+                                 按参考实现应为 {want:?}",
+                                bd.name, v.when, v.rot_x_div90, v.rot_y_div90
+                            ));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    println!("  变体共 {checked} 个，其中两轴都非零的 {both_axis} 个");
+    for e in &examples {
+        println!("    {e}");
+    }
+    assert!(checked > 0, "没有扫到任何变体");
+    assert!(
+        both_axis > 0,
+        "这批数据里没有两轴都非零的变体（只有 {both_axis} 个），\
+         无法验证旋转顺序——请换一批含此类方块的方块库"
+    );
+    assert!(
+        bad.is_empty(),
+        "以下变体的旋转与参考实现不一致：\n{}",
+        bad.join("\n")
+    );
+}
+
 #[test]
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn real_project_piston_states_all_resolve() {
