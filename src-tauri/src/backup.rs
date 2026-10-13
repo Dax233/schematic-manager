@@ -188,25 +188,35 @@ pub fn restore(backup: &Path, target: &Path) -> AppResult<()> {
     Ok(())
 }
 
-/// 删除一条备份，并清理因此变空的分组目录。
+/// 删除一条备份，并在分组内已无备份时清理该分组目录。
+///
+/// 顺序很重要：先删备份文件，**再**判断分组是否为空，最后才删记录原始路径的
+/// 旁文件与目录。同一次备份的多个副本共用一个分组和一份 .orig_path，若在删除
+/// 备份前就无条件删掉 .orig_path，同组其余备份会因 matches_target 读不到记录
+/// 而永远无法还原。
 pub fn delete(backup: &Path) -> AppResult<()> {
     if !backup.exists() {
         return Err(AppError::Parse(format!("备份文件不存在：{}", backup.display())));
     }
     std::fs::remove_file(backup)?;
-    // 分组目录里若只剩记录原始路径的旁文件，就连同目录一并清理，
-    // 避免 backups 下堆积空目录
-    if let Some(dir) = backup.parent() {
-        let _ = std::fs::remove_file(dir.join(ORIG_PATH_FILE));
-        if let Ok(mut it) = std::fs::read_dir(dir) {
-            if it.next().is_none() {
-                // 清理失败不静默：目录残留会让用户看到空分组，
-                // 但删除本身已成功，因此记为可忽略的失败仍要如实返回？
-                // 这里选择忽略并保留目录——删除失败不影响备份已删的事实。
-                let _ = std::fs::remove_dir(dir);
-            }
-        }
+    let Some(dir) = backup.parent() else { return Ok(()) };
+
+    // 分组里还有别的备份时到此为止：.orig_path 是整组共用的，不能删。
+    // 判空时必须把 .orig_path 本身排除掉，否则它会让目录看起来永远非空。
+    let remaining = match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .flatten()
+            .any(|e| e.file_name() != std::ffi::OsStr::new(ORIG_PATH_FILE)),
+        // 读不到目录时不敢当作「空」：宁可留下空分组，也不要误删同组记录
+        Err(_) => true,
+    };
+    if remaining {
+        return Ok(());
     }
+
+    // 只剩记录原始路径的旁文件：连同目录一起清理，避免 backups 下堆积空目录。
+    let _ = std::fs::remove_file(dir.join(ORIG_PATH_FILE));
+    let _ = std::fs::remove_dir(dir);
     Ok(())
 }
 
@@ -426,6 +436,38 @@ mod tests {
         assert!(!root.join("b").exists(), "空的分组目录应被清理");
 
         assert!(delete(&b.backup_path).is_err(), "删除不存在的备份应报错");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 同一文件的多份备份共用一个分组与一份 .orig_path。
+    /// 删掉其中一份不能影响其余备份的还原能力——否则用户删了旧备份之后，
+    /// 想还原较新的那份会被「不同源」错误地拒绝。
+    #[test]
+    fn deleting_one_backup_keeps_others_restorable() {
+        let base = temp_dir("delete_keeps_siblings");
+        let src = base.join("demo.litematic");
+        std::fs::write(&src, b"v1").unwrap();
+        let older = create(&base, &src, "metadata").unwrap();
+
+        std::fs::write(&src, b"v2").unwrap();
+        let newer = create(&base, &src, "replace").unwrap();
+
+        // 两份应在同一分组（同一文件的两次备份）
+        assert_eq!(older.backup_path.parent(), newer.backup_path.parent());
+
+        delete(&older.backup_path).unwrap();
+
+        // 剩下那份必须仍可还原
+        assert!(
+            matches_target(&newer.backup_path, &src),
+            "同组还有备份时，不能把 .orig_path 一起删掉，否则其余备份永远无法还原"
+        );
+        restore(&newer.backup_path, &src).unwrap();
+        assert_eq!(std::fs::read(&src).unwrap(), b"v2");
+
+        // 删掉最后一份时才应清理分组目录
+        delete(&newer.backup_path).unwrap();
+        assert!(!newer.backup_path.parent().unwrap().exists(), "最后一份删掉后分组目录应被清理");
         let _ = std::fs::remove_dir_all(&base);
     }
 
