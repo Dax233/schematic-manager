@@ -742,6 +742,8 @@ const colWidths = ref<Record<string, number>>({});
 /** 表头拖动结束：记录该列的新宽度 */
 function onColumnResize(dataIndex: string, width: number) {
   colWidths.value = { ...colWidths.value, [dataIndex]: width };
+  // 列宽属于「玩家对界面的修改」，同样要记住
+  persistUiState();
 }
 
 /** 计算实际用于渲染的列：把用户调整过的宽度套回去。 */
@@ -768,6 +770,7 @@ const tableKey = ref(0);
 function resetColumnWidths() {
   colWidths.value = {};
   tableKey.value += 1;
+  persistUiState();
 }
 
 const fileBusy = ref(false);
@@ -1545,6 +1548,8 @@ interface UiState {
   dirs: string[];
   /** 已勾选显示的目录；缺失时视为全部显示 */
   enabledDirs?: string[];
+  /** 用户拖动表头调整过的列宽（dataIndex -> 像素宽度） */
+  columnWidths?: Record<string, number>;
   activeView: string;
   brightness: number;
   exportSize: number;
@@ -1560,6 +1565,7 @@ function collectUiState(): UiState {
     sidebarWidth: sidebarWidth.value,
     dirs: loadedDirs.value,
     enabledDirs: Array.from(enabledDirs.value),
+    columnWidths: { ...colWidths.value },
     activeView: activeView.value,
     brightness: brightness.value,
     exportSize: exportSize.value,
@@ -1629,6 +1635,14 @@ async function restoreUiState() {
   }
   if (typeof st.searchText === "string") {
     searchText.value = st.searchText;
+  }
+  // 恢复列宽。只接受正数：0 或负数会让列不可见，损坏的值不该让界面变形
+  if (st.columnWidths && typeof st.columnWidths === "object") {
+    const clean: Record<string, number> = {};
+    for (const [k, v] of Object.entries(st.columnWidths)) {
+      if (typeof v === "number" && Number.isFinite(v) && v > 0) clean[k] = v;
+    }
+    colWidths.value = clean;
   }
 
   // 重新扫描上次的目录。逐个独立处理：某个目录已被删除或暂时不可读时，

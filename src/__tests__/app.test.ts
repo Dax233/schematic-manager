@@ -1237,6 +1237,69 @@ describe("界面状态记忆", () => {
     w.unmount();
   });
 
+  it("记住用户调整过的列宽，并能在重启后恢复", async () => {
+    // 用户要求「记忆玩家对程序界面的修改」，列宽属于其中一项
+    const state = {
+      version: 1,
+      sidebarWidth: 666,
+      dirs: [],
+      columnWidths: { fileName: 420, mcVersionName: 120 },
+      activeView: "left45",
+      brightness: 1.45,
+      exportSize: 1024,
+      searchText: "",
+    };
+    mockInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === "load_ui_state") return JSON.stringify(state);
+      if (cmd === "save_ui_state") return undefined;
+      if (cmd === "scan_litematics") return { items: [summary], skippedDirs: 0, skippedPaths: [] };
+      return undefined;
+    }) as never);
+
+    const w = mountApp();
+    await flushPromises();
+    await flushPromises();
+
+    // jsdom 没有布局，量不到像素；改读 colgroup 里的内联宽度（Arco 会写进去）
+    const cols = w.findAll(".sidebar colgroup col");
+    const widths = cols.map((c) => (c.element as HTMLElement).style.width);
+    expect(widths, "名称列应恢复为用户拖过的 420px").toContain("420px");
+    expect(widths, "制作版本列应恢复为用户拖过的 120px").toContain("120px");
+    w.unmount();
+  });
+
+  it("列宽里的非法值不应让界面变形", async () => {
+    // 损坏的列宽（0、负数、非数字）必须被丢弃，否则列会消失或撑破布局
+    const state = {
+      version: 1,
+      sidebarWidth: 666,
+      dirs: [],
+      columnWidths: { fileName: 0, mcVersionName: -50, dims: "宽", totalBlocks: 900 },
+      activeView: "left45",
+      brightness: 1.45,
+      exportSize: 1024,
+      searchText: "",
+    };
+    mockInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === "load_ui_state") return JSON.stringify(state);
+      if (cmd === "save_ui_state") return undefined;
+      if (cmd === "scan_litematics") return { items: [summary], skippedDirs: 0, skippedPaths: [] };
+      return undefined;
+    }) as never);
+
+    const w = mountApp();
+    await flushPromises();
+    await flushPromises();
+
+    const widths = w.findAll(".sidebar colgroup col").map((c) => (c.element as HTMLElement).style.width);
+    expect(widths, "0 应被丢弃，用回默认宽度").not.toContain("0px");
+    expect(widths, "负数应被丢弃").not.toContain("-50px");
+    expect(widths, "非数字应被丢弃").not.toContain("宽");
+    // 合法的 900 应保留
+    expect(widths, "合法宽度应保留").toContain("900px");
+    w.unmount();
+  });
+
   it("保存内容损坏时按默认界面继续，并提示用户", async () => {
     // 用 spy 断言：Arco 的 Message 走 portal 渲染，查 document.body 不可靠
     // （本仓库既有的做法就是 vi.spyOn(Message, ...)）
