@@ -721,6 +721,92 @@ fn real_project_textures_do_contain_partial_alpha() {
     );
 }
 
+/// 活塞头（piston_head）的全部状态组合都必须解析出模型且确实有面。
+///
+/// 活塞头是活塞伸出后显示的部件，模型按 `short`（杆长短）与 `type`
+/// （normal / sticky）切换。这些组合在真实投影采样里未必齐全，
+/// 而「缺面」最可能出现在某些组合上——一旦某组合解析失败，
+/// 该方块就一个面都不画。
+#[test]
+#[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
+fn piston_head_all_property_combinations_resolve() {
+    let db = bundled_db();
+    let vi = db.pick_version(3465).expect("内置库缺少 1.20.1");
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+    let mut shapes: Vec<(String, usize, usize, Vec<u32>)> = Vec::new();
+
+    for facing in ["north", "south", "east", "west", "up", "down"] {
+        for short in ["true", "false"] {
+            for ty in ["normal", "sticky"] {
+                let propstr = format!("facing={facing},short={short},type={ty}");
+                let props: Vec<(String, String)> = propstr
+                    .split(',')
+                    .map(|kv| {
+                        let mut it = kv.splitn(2, '=');
+                        (it.next().unwrap().into(), it.next().unwrap_or("").into())
+                    })
+                    .collect();
+                let st = BlockState { name: "minecraft:piston_head".into(), props };
+                let models = crate::block_model::resolve_models(&db, &db.versions[vi], &st);
+                checked += 1;
+
+                if models.is_empty() {
+                    failures.push(format!("piston_head [{propstr}] 解析出 0 个模型"));
+                    continue;
+                }
+                let mut elems = 0usize;
+                let mut faces = 0usize;
+                for rm in &models {
+                    let Some(m) = db.models.get(rm.model_idx as usize) else { continue };
+                    elems += m.elements.len();
+                    faces += m
+                        .elements
+                        .iter()
+                        .map(|e| (0..6u8).filter(|b| e.face_mask & (1u8 << b) != 0).count())
+                        .sum::<usize>();
+                }
+                if faces == 0 {
+                    failures.push(format!("piston_head [{propstr}] 模型没有任何面"));
+                }
+                // 记录 model_idx：short/type 若真的生效，不同组合应解析到
+                // 不同的模型。四种组合实测为 short=true 用 568/569、
+                // short=false 用 566/567，杆长分别到 z=16 与 z=20。
+                let mut idxs: Vec<u32> = Vec::new();
+                for rm in &models {
+                    idxs.push(rm.model_idx);
+                }
+                shapes.push((propstr, elems, faces, idxs));
+            }
+        }
+    }
+
+    println!("  piston_head 状态组合共 {} 种：", shapes.len());
+    for (p, e, f, idxs) in &shapes {
+        println!("    {p}  元素 {e}  面 {f}  模型 {idxs:?}");
+    }
+    // short 必须真的换模型：长短杆若解析到同一个模型，杆长就不会变。
+    let long: std::collections::BTreeSet<Vec<u32>> = shapes
+        .iter()
+        .filter(|(p, _, _, _)| p.contains("short=false"))
+        .map(|(_, _, _, i)| i.clone())
+        .collect();
+    let short: std::collections::BTreeSet<Vec<u32>> = shapes
+        .iter()
+        .filter(|(p, _, _, _)| p.contains("short=true"))
+        .map(|(_, _, _, i)| i.clone())
+        .collect();
+    assert!(
+        long.is_disjoint(&short),
+        "short=true 与 short=false 解析到了相同的模型，说明 short 属性没被用上：\
+         long={long:?} short={short:?}"
+    );
+
+    assert_eq!(checked, 6 * 2 * 2, "应覆盖全部朝向 × short × type 组合");
+    assert!(failures.is_empty(), "以下活塞头状态解析异常：\n{}", failures.join("\n"));
+}
+
 #[test]
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn real_project_piston_states_all_resolve() {
