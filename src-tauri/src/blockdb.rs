@@ -1023,6 +1023,61 @@ mod tests {
         assert!(e.contains("超出像素池"), "应报贴图范围越界：{e}");
     }
 
+    /// 随程序分发的内置方块库必须能正常载入。
+    ///
+    /// 这是全应用最关键的资源：它一旦损坏、容器不对或与读取端格式不兼容，
+    /// 所有投影都会显示不出方块与贴图，而且是在用户那里才暴露。
+    /// 此前没有任何测试读这份真实文件——测试都用手工构造的小样本，
+    /// 因此「构造出来的能读」并不等于「实际发布的那份能读」。
+    ///
+    /// 这里同时是校验规则的回归防线：读取端新增了「版本引用的语言表下标
+    /// 必须落在语言表池内」，若该规则对真实数据误报，这条测试会立刻失败。
+    #[test]
+    fn bundled_block_database_loads() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("blocks.dat.z");
+        let db = BlockDb::load(path.to_str().unwrap(), false)
+            .unwrap_or_else(|e| panic!("内置方块库 {} 无法载入：{e}", path.display()));
+
+        assert_eq!(db.format_version, FORMAT_VERSION);
+        assert!(!db.versions.is_empty(), "应含版本");
+        assert!(!db.textures.is_empty(), "应含贴图");
+        assert!(!db.models.is_empty(), "应含模型");
+        assert!(!db.pixels.is_empty(), "像素池不应为空");
+        assert!(!db.langs.is_empty(), "应含语言表");
+
+        // 每个版本引用的语言表下标都必须落在池内，且真的挂上了表
+        for (i, v) in db.versions.iter().enumerate() {
+            assert!(
+                (v.lang_idx as usize) < db.langs.len(),
+                "版本 {i}（{}）的语言表下标 {} 超出语言表数量 {}",
+                v.name,
+                v.lang_idx,
+                db.langs.len()
+            );
+            assert!(
+                !v.langs.is_empty(),
+                "版本 {i}（{}）应挂上语言表，否则方块显示不出中文名",
+                v.name
+            );
+        }
+
+        // 方块与贴图的引用必须自洽：这是「能载入」之外的第二层保障
+        for (i, v) in db.versions.iter().enumerate() {
+            for b in &v.blocks {
+                for var in b.variants.iter().chain(b.multipart.iter()) {
+                    assert!(
+                        (var.model_idx as usize) < db.models.len(),
+                        "版本 {i} 的方块 {} 引用了不存在的模型 {}",
+                        b.name,
+                        var.model_idx
+                    );
+                }
+            }
+        }
+    }
+
     /// 负的 dataVersion 不等于「叠加包」。
     ///
     /// 打包脚本会把缺少 data_version 的**普通版本**记为 -1

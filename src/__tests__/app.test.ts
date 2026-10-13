@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
-import ArcoVue from "@arco-design/web-vue";
+import ArcoVue, { Message } from "@arco-design/web-vue";
 
 // Tauri 的全部出口都换掉：测试跑在 jsdom 里，没有 Tauri 运行时。
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -209,6 +209,60 @@ describe("主要操作流程", () => {
 
     // 扫描结果应出现在列表里
     expect(w.text(), "列表应显示扫描到的文件").toContain("测试.litematic");
+
+    // ---- 选中并真的编辑、保存 ----
+    // 之前这条测试只验证到「列表显示了文件」，与标题里承诺的
+    // 「可编辑元数据」并不相符：编辑框、保存按钮、写回的参数都没被检查。
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+
+    // 元数据输入框应带出文件里的现有值
+    const inputs = w.findAll("input");
+    const nameInput = inputs.find((i) => (i.element as HTMLInputElement).value === "测试投影");
+    expect(nameInput, "投影名称输入框应带出原值").toBeTruthy();
+
+    // 未改动时「保存」不可用，改动后才可用
+    const saveBtn = () => w.findAll("button").find((b) => b.text().includes("保存"));
+    expect(saveBtn()?.attributes("disabled"), "未改动时不应可保存").toBeDefined();
+
+    await nameInput!.setValue("改过的名字");
+    await flushPromises();
+    expect(saveBtn()?.attributes("disabled"), "改动后应可保存").toBeUndefined();
+
+    // 保存：应把编辑框里的值原样写给后端，并在成功后重新读取
+    let saved: unknown = null;
+    mockInvoke.mockImplementation((async (cmd: string, args: Record<string, unknown>) => {
+      if (cmd === "save_metadata") {
+        saved = args;
+        return { backupPath: "/p/备份/测试.litematic.bak" };
+      }
+      switch (cmd) {
+        case "scan_litematics":
+          return { items: [summary], skippedDirs: 0, skippedPaths: [] };
+        case "build_scene":
+          return scene;
+        case "analyze_schematic":
+          return {
+            blocks: [], entities: [], tileEntities: [],
+            nonAirTotal: 0, airTotal: 0, distinctBlockTypes: 0, distinctStates: 0,
+          };
+        default:
+          return [];
+      }
+    }) as never);
+
+    await saveBtn()!.trigger("click");
+    await flushPromises();
+
+    expect(saved, "应调用 save_metadata").toBeTruthy();
+    // 参数是平铺的：{ path, name, author, description }（见 api.ts 的 saveMetadata）
+    const args = saved as { path: string; name: string; author: string; description: string };
+    expect(args.path, "应写回被选中的那个文件").toBe(summary.path);
+    expect(args.name, "编辑框里的名字应原样提交").toBe("改过的名字");
+    expect(args.author, "未改动的字段应保持原值").toBe("作者");
+
+    // 保存结果必须告知用户备份位置，否则改动看起来像是没发生
+    expect(document.body.textContent, "应提示备份路径").toContain("备份");
     w.unmount();
   });
 
@@ -327,8 +381,14 @@ describe("对话框失败时的提示", () => {
     // 这条防的是：pickDirectory 把 `await open(...)` 放在 try 之外，
     // 插件报错时这个 Promise 会静默 reject——用户点了「添加目录」
     // 却什么都没发生，也收不到任何提示。
+    //
+    // 断言用 spy 而不是查 document.body：Arco 的 Message 通过 portal 渲染，
+    // 在同一次运行里先跑过别的用例后，它的容器状态会让文本断言变得不稳定
+    // （本条曾单独通过、全量运行却失败）。直接断言「确实报告了错误」
+    // 既精确又不依赖 portal 的内部实现。
     stubInvoke();
     mockOpen.mockRejectedValue(new Error("对话框不可用"));
+    const errSpy = vi.spyOn(Message, "error");
     const w = mountApp();
 
     const btn = w.findAll("button").find((b) => b.text().includes("添加目录"));
@@ -336,12 +396,15 @@ describe("对话框失败时的提示", () => {
     await btn!.trigger("click");
     await flushPromises();
 
+    const reported = errSpy.mock.calls.map((c) => String(c[0]));
     expect(
-      document.body.textContent,
-      "应提示选择框打开失败，实际正文：" + (document.body.textContent ?? "").slice(0, 200),
-    ).toContain("打开目录选择框失败");
+      reported.some((t) => t.includes("打开目录选择框失败")),
+      `应报告选择框打开失败，实际报告了：${JSON.stringify(reported)}`,
+    ).toBe(true);
     // 失败时不应误报正在扫描
     expect(w.text(), "不应进入扫描状态").not.toContain("正在扫描");
+
+    errSpy.mockRestore();
     w.unmount();
   });
 });
