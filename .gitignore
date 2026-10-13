@@ -60,3 +60,9 @@ build_out.log
 # 其中是测试运行产生的临时文件，不应入库。
 _temp/
 
+
+# Python 编译产物：产生自 legacy-cpp/tools 下的脚本，
+# 属于生成物而非参考源码。
+__pycache__/
+*.pyc
+
