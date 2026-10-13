@@ -1109,6 +1109,13 @@ mod tests {
     // 校验不通过时必须直接拒绝，因此下面这些用例**不会触碰磁盘**——
     // 合法文件名才会走到读写清单那一步，而那些需要真实 packs 目录，
     // 不适合在单元测试里构造。
+    //
+    // 用例必须在 Windows 与 Linux 上得到**相同**结论：CI 的单元测试跑在
+    // Linux 上，本地开发在 Windows 上。最初用 `Path::components()` 实现时，
+    // `C:x.pack` 在 Windows 被判为盘符前缀而拒绝、在 Linux 只是普通字符而
+    // 放过，于是本地通过、CI 失败。因此实现改为纯字符串判断。
+    // 下面把带盘符的名字列进「必须拒绝」的清单，若有人改回组件解析，
+    // Linux 上的 CI 会立刻失败。
 
     /// 各种「不是单一文件名」的输入都必须被拒绝。
     #[test]
@@ -1178,18 +1185,28 @@ mod tests {
 pub fn delete_pack(file: String) -> Result<(), String> {
     // 只接受单一文件名，不接受任何路径形式。
     //
-    // 用路径组件解析而不是字符串匹配：`C:x.pack` 这类**盘符相对路径**不含
-    // `/`、`\`、`..`，能通过朴素的字符串检查，但 `Path::join` 遇到带前缀的
-    // 路径会**直接替换掉基础目录**，于是删除目标跑出了 packs 目录。
-    // 组件解析能一并挡住盘符、UNC 前缀、`.`、`..`、空串等全部形式。
-    let mut comps = std::path::Path::new(&file).components();
-    let single_normal = matches!(comps.next(), Some(std::path::Component::Normal(_)))
-        && comps.next().is_none();
-    // 反斜杠在 Unix 上只是普通字符，会被判成一个正常组件，
-    // 因此额外挡一次，保证两个平台接受的文件名集合一致。
-    // 另外拒绝「全是空白」的名字：它们不含可见字符，只会是手工改清单的结果。
-    // 注意只拒绝**整体**为空白，中间含空格的正常文件名仍应允许。
-    if !single_normal || file.contains('\\') || file.trim().is_empty() {
+    // 这里刻意用**显式且与平台无关**的判断，而不是 `Path::components()`：
+    // 后者在 Windows 上把 `C:` 解析成盘符前缀、在 Unix 上只是一个普通字符，
+    // 于是同一个输入在两个系统上得到不同结论。而清单是跨平台共用的文本
+    // 文件，同一份内容可能在两个系统上被读取，校验结果必须一致。
+    //
+    // 危险点（Windows 实测）：
+    //   Path::new(r"C:\app\packs").join("C:x.pack") == "C:x.pack"
+    // `join` 遇到带盘符前缀的路径会**直接替换掉基础目录**，删除目标就跑出
+    // 了 packs 目录。而 `C:x.pack` 不含 `/`、`\`、`..`，朴素的字符串检查
+    // 会放过它。
+    //
+    // 因此拒绝：空串、纯空白、含路径分隔符、含冒号、以及 `.` 与 `..`。
+    // 程序自己生成的文件名源自 jar 名加 `.pack` 后缀，不含这些字符，
+    // 所以不会误伤正常用法。
+    let bad = file.is_empty()
+        || file.trim().is_empty()
+        || file == "."
+        || file == ".."
+        || file.contains('/')
+        || file.contains('\\')
+        || file.contains(':');
+    if bad {
         return Err(format!("资源包文件名不合法：{file}"));
     }
     let mut entries = read_manifest_for_write().map_err(|e| e.to_string())?;

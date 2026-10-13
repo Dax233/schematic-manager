@@ -114,6 +114,7 @@ if ($cmdsTestErr -gt 0 -or -not (Test-Path $cmdsExe)) {
     exit $cmdsTestErr
 }
 $cmdsTestOut = & $cmdsExe --test-threads=4 2>&1
+$cmdsTestExit = $LASTEXITCODE
 # 受桩限制：DTO 的字段名契约靠 serde 的 `rename_all` 生成，而本地 serde 桩
 # 没有过程宏，`to_value` 只能返回空对象。这些测试因此在本地必然失败，
 # 但**必须保留并运行**：CI 用真实 serde，它们在那里才真正生效；
@@ -125,6 +126,14 @@ if ($cmdsReal.Count -gt 0) {
     Write-Host "  命令层测试失败（与代码相关）："
     $cmdsReal | ForEach-Object { Write-Host "    $_" }
     exit $cmdsReal.Count
+}
+# 与第 5 步同样的道理：失败项靠正则从输出里捞，若测试进程崩溃或提前 abort，
+# 输出中没有可匹配的行，$cmdsReal 为空，脚本会继续往下走并把整件事说成通过。
+# 因此这里也以进程退出码兜底。
+if ($cmdsTestExit -ne 0 -and $cmdsFailed.Count -eq 0) {
+    Write-Host "  命令层测试进程退出码为 $cmdsTestExit，但输出中未找到失败项（可能是崩溃或超时）"
+    $cmdsTestOut | Select-Object -Last 20 | ForEach-Object { Write-Host "    $_" }
+    exit $cmdsTestExit
 }
 # 只报告与本步相关的结论，不打印原始失败清单：
 # 那 6 项在本地注定失败，原样铺开会让人以为出了问题
