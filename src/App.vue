@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { join } from "@tauri-apps/api/path";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { ImportOutcome, PackEntry, PackLoadFailure } from "./types";
 import { writeFile } from "@tauri-apps/plugin-fs";
@@ -34,6 +35,7 @@ import {
 } from "./api";
 import SceneViewer from "./components/SceneViewer.vue";
 import { OffscreenRenderer, EXPORT_SIZES } from "./render/scene3d";
+import { NamePool, previewStem } from "./render/export_name";
 import type {
   AnalysisResult,
   BackupEntry,
@@ -1454,8 +1456,7 @@ async function pickExportDir(): Promise<string | null> {
  *
  * 单个文件失败不中断整批——某个投影读不出来（被占用、格式异常）时
  * 其余文件仍应导出成功，最后把失败清单如实报出来。
- */
-async function exportBatch() {
+ */async function exportBatch() {
   const list = checkedFiles.value.filter((f) => !f.error);
   if (list.length === 0) {
     Message.warning("请先勾选要导出的投影文件");
@@ -1471,6 +1472,9 @@ async function exportBatch() {
   let renderer: OffscreenRenderer | null = null;
   const failures: string[] = [];
   let ok = 0;
+  // 不同目录下可能有同名投影，直接按文件名写会互相覆盖——
+  // 导出 10 张最后只剩 1 张，而且没有任何提示。因此用带序号的命名池。
+  const names = new NamePool();
 
   try {
     renderer = new OffscreenRenderer();
@@ -1478,8 +1482,11 @@ async function exportBatch() {
       try {
         const data = await buildScene(f.path);
         const bytes = await renderer.renderPng(data, size, view);
-        const stem = f.fileName.replace(/\.litematic$/i, "");
-        await writeFile(`${dir}/${stem}_preview_${size}.png`, bytes);
+        const name = names.take(previewStem(f.fileName, size), ".png");
+        // 用 path.join 而不是手写 `${dir}/${name}`：Windows 的分隔符是 \，
+        // 手写斜杠虽然多数情况下也能识别，但混用分隔符在部分 API 上会出错，
+        // 交给平台 API 更稳。
+        await writeFile(await join(dir, name), bytes);
         ok += 1;
       } catch (e) {
         failures.push(`${f.fileName}：${e}`);
