@@ -121,8 +121,18 @@ exit 0
 // sleep 桩：立即返回，避免测试真的等待
 writeFileSync(join(stub, "sleep"), "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
 
-/** Windows 路径转 Git Bash 可识别的形式 */
+/**
+ * 把工作目录转成 bash 能用的路径。
+ *
+ * Windows 上 node 给出的是 `C:\a\b`，得转成 Git Bash 认的 `/c/a/b`；
+ * Linux / macOS 上本来就是 POSIX 路径，**不能**再转换。
+ * 第一版无条件按 Windows 规则转（`C:\...` 之外也拼上前导斜杠并小写），
+ * 在 Linux 上得到 `/home/runner/...`→`/home/runner/...` 被改写、
+ * 于是桩目录找不到、gh 根本没被执行——CI 上 11 项断言里 6 项失败、
+ * 实际尝试次数全是 0。本地（Windows）因此完全看不出来。
+ */
 function posix(p) {
+  if (process.platform !== "win32") return p;
   const s = "/" + p.replace(/\\/g, "/").replace(/:/g, "");
   return s[0] + s.slice(1).toLowerCase();
 }
