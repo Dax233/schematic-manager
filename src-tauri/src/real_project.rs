@@ -53,11 +53,21 @@ fn file_name(p: &Path) -> String {
     p.file_name().unwrap().to_string_lossy().to_string()
 }
 
-/// 临时工作目录，测试结束即删除
+/// 临时工作目录，测试结束即删除。
+///
+/// 用 `std::env::temp_dir()`（即 TEMP/TMP 指向的位置）。注意在本仓库的
+/// Windows 开发环境里系统临时目录不可写，需要先把 TEMP 指到仓库内的
+/// `_temp`（`tools/typecheck/run.ps1` 也是这么做的），否则这里会失败——
+/// 因此把实际路径与底层错误一并写进提示，而不是只说「无法创建」。
 fn work_dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("sm_real_{tag}"));
     let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).expect("无法创建临时目录");
+    std::fs::create_dir_all(&d).unwrap_or_else(|e| {
+        panic!(
+            "无法创建临时目录 {}：{e}\n（系统临时目录不可写时，请把 TEMP/TMP 指向可写目录）",
+            d.display()
+        )
+    });
     d
 }
 
@@ -450,4 +460,114 @@ fn duplicate_scan_recognises_copies_but_not_distinct_projects() {
     );
     let _ = std::fs::remove_dir_all(&dir);
     assert!(failed.is_empty(), "以下判定不符预期：\n{}", failed.join("\n"));
+}
+
+/// 备份与还原：改坏文件后必须能**逐字节**还原回原样。
+///
+/// 这是所有破坏性操作的唯一退路（替换、版本转换、改元数据都会先备份）。
+/// 备份坏了不会立刻暴露——用户要等到某次替换出错、想还原时才发现回不去，
+/// 那时原件已经没了。因此在真实文件上验证「备份 → 破坏 → 还原 → 逐字节比对」。
+#[test]
+#[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
+fn every_real_project_backs_up_and_restores_byte_for_byte() {
+    let files = collect_litematic(&real_dir());
+    let exe_dir = work_dir("backup_exe");
+    let work = work_dir("backup_src");
+    let mut failed: Vec<String> = Vec::new();
+    let mut checked = 0;
+
+    for src in &files {
+        let name = file_name(src);
+        // 在实际会被改写的那个文件上操作：先拷到工作目录，避免动到原始收藏
+        let target = work.join(&name);
+        std::fs::copy(src, &target).expect("拷贝到工作目录失败");
+        let target_s = target.to_string_lossy().to_string();
+        let original_bytes = std::fs::read(&target).expect("读取失败");
+
+        // 1) 备份
+        let outcome = match crate::backup::create(&exe_dir, &target, "test") {
+            Ok(o) => o,
+            Err(e) => {
+                failed.push(format!("{name}: 备份失败 {e}"));
+                continue;
+            }
+        };
+        if !outcome.backup_path.is_file() {
+            failed.push(format!("{name}: 备份文件不存在"));
+            continue;
+        }
+        if std::fs::read(&outcome.backup_path).expect("读备份失败") != original_bytes {
+            failed.push(format!("{name}: 备份内容与原件不一致"));
+            continue;
+        }
+
+        // 2) 让它出现在列表里（备份管理的入口就是 list）
+        let listed = crate::backup::list(&crate::backup::backup_root(&exe_dir));
+        if !listed.iter().any(|e| e.path == outcome.backup_path) {
+            failed.push(format!("{name}: 备份未出现在 list() 里，用户看不到"));
+        }
+
+        // 3) 破坏文件：真的跑一遍替换并写回，模拟用户的正常操作
+        if let Ok(mut sc) = crate::litematic::Schematic::load(&target_s) {
+            let db = bundled_db();
+            if let Some(vi) = db.pick_version(sc.summary().data_version) {
+                let info = crate::block_model::DbBlockInfo { db: &db, version: &db.versions[vi] };
+                let before = sc.analyze();
+                if let Some((key, _)) = before.blocks_by_state.iter().max_by_key(|(_, n)| **n) {
+                    let from = key.split('[').next().unwrap_or(key).to_string();
+                    if !from.is_empty() && !from.ends_with(":air") {
+                        let rule = crate::replace::ReplaceRule {
+                            from_name: from,
+                            to_name: "minecraft:stone".into(),
+                            ..Default::default()
+                        };
+                        let out = crate::replace::replace_blocks(&mut sc, &rule, &info, 0);
+                        if out.replaced > 0 {
+                            let _ = sc.save_to(&target_s);
+                        }
+                    }
+                }
+            }
+        }
+        let damaged = std::fs::read(&target).expect("读改写后文件失败");
+        if damaged == original_bytes {
+            // 没能改成也不影响还原结论，但这样就没验到「被破坏后能还原」
+            println!("  [跳过] {name}（未能造成改动，无法验证还原）");
+            let _ = crate::backup::delete(&outcome.backup_path);
+            continue;
+        }
+
+        // 4) 还原，必须逐字节回到原样
+        if let Err(e) = crate::backup::restore(&outcome.backup_path, &target) {
+            failed.push(format!("{name}: 还原失败 {e}"));
+            continue;
+        }
+        let restored = std::fs::read(&target).expect("读还原后文件失败");
+        if restored != original_bytes {
+            failed.push(format!(
+                "{name}: 还原后与原件不一致（{} 字节 vs {} 字节）",
+                restored.len(),
+                original_bytes.len()
+            ));
+            continue;
+        }
+        // 还原出来的文件必须仍是合法投影，而不是「字节对了但读不了」
+        if crate::litematic::Schematic::load(&target_s).is_err() {
+            failed.push(format!("{name}: 还原后无法解析"));
+        }
+
+        // 5) 删除备份
+        if let Err(e) = crate::backup::delete(&outcome.backup_path) {
+            failed.push(format!("{name}: 删除备份失败 {e}"));
+        }
+
+        checked += 1;
+        println!("  [OK]   {name}  备份 → 改写 → 还原，逐字节一致");
+    }
+
+    let _ = std::fs::remove_dir_all(&exe_dir);
+    let _ = std::fs::remove_dir_all(&work);
+    println!("\n  实际验证 {checked} 个，未通过 {}", failed.len());
+    assert!(checked > 0, "没有一个文件走完备份还原，这组用例没验到东西");
+    assert!(failed.is_empty(), "以下文件未通过：\n{}", failed.join("\n"));
 }
