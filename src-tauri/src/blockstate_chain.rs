@@ -406,25 +406,77 @@ mod tests {
         ];
         let mut l = loader(&table);
         let ch = build_chain("a", "minecraft", &mut l);
-        // 只要求能终止并返回，不规定具体取到哪一级的数据
-        assert!(ch.textures.contains_key("x") || ch.textures.contains_key("y"));
+
+        // 断言确切结果，而不是「x 或 y 至少有一个」这种析取式——
+        // 后者在只取到一半数据时也会通过，等于没测。
+        //
+        // 成环的处理方式：递归到再次遇到 "a" 时返回空链，但外层两级
+        // 各自的 textures 仍会正常合并，因此最终两级都拿到。
+        // 这既是确定行为，也是合理的尽力而为：宁可给出部分数据，
+        // 也不因为一个环就整条链作废。
+        assert_eq!(
+            ch.textures.get("x").map(|v| v.sprite.as_str()),
+            Some("block/1"),
+            "A 自己的贴图变量应保留"
+        );
+        assert_eq!(
+            ch.textures.get("y").map(|v| v.sprite.as_str()),
+            Some("block/2"),
+            "B 的贴图变量也应合并进来"
+        );
+        assert_eq!(ch.textures.len(), 2, "不应多出别的条目");
     }
 
     #[test]
     fn deep_chain_terminates_at_limit() {
-        // 构造超过上限的链，必须能终止
-        let mut table: Vec<(String, ModelDef)> = Vec::new();
+        // 构造超过上限的链：既要能终止，也要真的在上限处截断。
+        //
+        // 每一级用**不同的贴图变量名**，这样「递归到第几级」可以从结果里
+        // 数出来。若各级同名（原写法都是 "all"），截断与不截断的合并结果
+        // 完全一样，测试就只能证明「不 panic」，证明不了上限生效。
         let n = MAX_DEPTH + 5;
+        let mut table: Vec<(String, ModelDef)> = Vec::new();
         for i in 0..n {
+            // 直接构造 ModelDef，以便用动态生成的变量名（辅助函数只收 &str）
             let parent = if i + 1 < n { format!("block/m{}", i + 1) } else { String::new() };
             table.push((
                 format!("minecraft:block/m{i}"),
-                model(&parent, &[("all", "block/x")], vec![]),
+                ModelDef {
+                    parent,
+                    textures: vec![(format!("k{i}"), format!("block/{i}"), false)],
+                    elements: Vec::new(),
+                    ambientocclusion: true,
+                },
             ));
         }
         let pairs: Vec<(&str, ModelDef)> = table.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
         let mut l = loader(&pairs);
-        let _ = build_chain("block/m0", "minecraft", &mut l); // 不 panic 即可
+        let ch = build_chain("block/m0", "minecraft", &mut l);
+
+        // build_inner 在 depth > MAX_DEPTH 时返回空链；depth 从 0 起算，
+        // 因此实际处理的是 m0..=m{MAX_DEPTH}，共 MAX_DEPTH + 1 级。
+        assert_eq!(
+            ch.textures.len(),
+            MAX_DEPTH + 1,
+            "应恰好处理 MAX_DEPTH + 1（{}）级，实际 {} 级",
+            MAX_DEPTH + 1,
+            ch.textures.len()
+        );
+        assert!(ch.textures.contains_key("k0"), "第 0 级应在结果里");
+        assert!(
+            ch.textures.contains_key(&format!("k{MAX_DEPTH}")),
+            "第 {MAX_DEPTH} 级（最后一个在范围内的）应在结果里"
+        );
+        assert!(
+            !ch.textures.contains_key(&format!("k{}", MAX_DEPTH + 1)),
+            "第 {} 级超出上限，不应出现在结果里",
+            MAX_DEPTH + 1
+        );
+        assert!(
+            !ch.textures.contains_key(&format!("k{}", n - 1)),
+            "最末一级（深度 {}）远离上限，不应出现",
+            n - 1
+        );
     }
 
     #[test]
