@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { join } from "@tauri-apps/api/path";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { ImportOutcome, PackEntry, PackLoadFailure } from "./types";
 import { writeFile } from "@tauri-apps/plugin-fs";
@@ -35,7 +34,7 @@ import {
 } from "./api";
 import SceneViewer from "./components/SceneViewer.vue";
 import { OffscreenRenderer, EXPORT_SIZES } from "./render/scene3d";
-import { NamePool, previewStem } from "./render/export_name";
+import { NamePool, joinPath, previewStem } from "./render/export_name";
 import type {
   AnalysisResult,
   BackupEntry,
@@ -1483,10 +1482,7 @@ async function pickExportDir(): Promise<string | null> {
         const data = await buildScene(f.path);
         const bytes = await renderer.renderPng(data, size, view);
         const name = names.take(previewStem(f.fileName, size), ".png");
-        // 用 path.join 而不是手写 `${dir}/${name}`：Windows 的分隔符是 \，
-        // 手写斜杠虽然多数情况下也能识别，但混用分隔符在部分 API 上会出错，
-        // 交给平台 API 更稳。
-        await writeFile(await join(dir, name), bytes);
+        await writeFile(joinPath(dir, name), bytes);
         ok += 1;
       } catch (e) {
         failures.push(`${f.fileName}：${e}`);

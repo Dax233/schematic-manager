@@ -1,5 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { NamePool, previewStem } from "../render/export_name";
+import { joinPath, NamePool, previewStem } from "../render/export_name";
+
+describe("输出路径拼接", () => {
+  it("跟随目标目录自己的分隔符，不混用", () => {
+    // Windows 路径：目录选择框返回的是反斜杠形式
+    expect(joinPath("C:\\dir", "a.png")).toBe("C:\\dir\\a.png");
+    // Unix / 多数 Tauri 返回的正斜杠形式
+    expect(joinPath("/home/u/dir", "a.png")).toBe("/home/u/dir/a.png");
+    // 驱动器根目录：不应漏掉分隔符
+    expect(joinPath("C:\\", "a.png")).toBe("C:\\a.png");
+    expect(joinPath("/", "a.png")).toBe("/a.png");
+  });
+
+  it("目录已带结尾分隔符时不重复添加", () => {
+    expect(joinPath("C:\\dir\\", "a.png")).toBe("C:\\dir\\a.png");
+    expect(joinPath("/home/u/dir/", "a.png")).toBe("/home/u/dir/a.png");
+  });
+
+  it("路径含中文与空格也正确拼接", () => {
+    expect(joinPath("D:\\我的 目录", "投影_preview_512.png")).toBe(
+      "D:\\我的 目录\\投影_preview_512.png",
+    );
+  });
+});
 
 describe("导出文件名", () => {
   it("去掉 .litematic 后缀并带上尺寸", () => {

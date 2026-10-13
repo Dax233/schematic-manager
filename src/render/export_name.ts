@@ -46,3 +46,20 @@ export function previewStem(fileName: string, size: number): string {
   // 保留后缀会得到 `A.litematic_preview_512.png`
   return `${fileName.replace(/\.litematic$/i, "")}_preview_${size}`;
 }
+
+/**
+ * 拼一个输出文件路径。
+ *
+ * 刻意**不用** `@tauri-apps/api/path` 的 `join`：它内部走
+ * `invoke("plugin:path|join")`，而本项目只注册了 dialog 与 fs 两个插件,
+ * 没有 tauri-plugin-path（已核对 Cargo.lock 与 lib.rs），Tauri 2 自身
+ * 也不提供 `plugin:path|*` 命令。调用它会在运行时以「命令不存在」失败，
+ * 表现为批量导出一张图都写不出来。
+ *
+ * 改为按目标目录已有分隔符拼接：目录选择框返回的路径已经是平台形式
+ * （Windows 上是 `C:\foo`），跟随它自己的分隔符即可，不混用。
+ */
+export function joinPath(dir: string, name: string): string {
+  const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
+  return dir.endsWith(sep) ? `${dir}${name}` : `${dir}${sep}${name}`;
+}
