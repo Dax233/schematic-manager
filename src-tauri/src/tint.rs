@@ -78,26 +78,12 @@ pub fn tint_color(name: &str, props: &[(String, String)], tintindex: i16) -> [f3
 
     match tintindex {
         // 树叶：原版里云杉与白桦用固定色，其余走生物群系
-        1 => {
-            if name_has(name, "spruce_leaves") {
-                SPRUCE
-            } else if name_has(name, "birch_leaves") {
-                BIRCH
-            } else {
-                FOLIAGE
-            }
-        }
+        1 => leaves_color(name),
         // 草类
         0 => {
             if name_has(name, "leaves") || name_has(name, "vine") {
                 // 藤蔓与原版一致走树叶色
-                if name_has(name, "spruce_leaves") {
-                    SPRUCE
-                } else if name_has(name, "birch_leaves") {
-                    BIRCH
-                } else {
-                    FOLIAGE
-                }
+                leaves_color(name)
             } else if name_is(name, "lily_pad") {
                 LILY_PAD
             } else if name_is(name, "water") {
@@ -110,6 +96,28 @@ pub fn tint_color(name: &str, props: &[(String, String)], tintindex: i16) -> [f3
         2 => WATER,
         // 其余下标原版没有默认着色器，保持原样
         _ => NO_TINT,
+    }
+}
+
+/// 树叶的染色。
+///
+/// 特例：**樱花树叶不染色**。它的贴图本身就是粉色（实测最大通道
+/// [252, 218, 239]、86% 的像素明显饱和），再乘树叶绿会得到橄榄色——
+/// 与实际观感明显不符。原版里樱花树确实是粉色，因此这里保持贴图原色。
+///
+/// 注：不能靠「贴图是否已有颜色」来通用判断该不该染色——
+/// 实测甘蔗贴图 94% 饱和、草方块侧面 97% 饱和，但它们都该按原版染色
+/// （前者草色、后者 tintindex 本就是 -1）。模型里的 tintindex 才是权威依据，
+/// 樱花是唯一的例外，所以按方块名单独列出。
+fn leaves_color(name: &str) -> [f32; 3] {
+    if name_has(name, "cherry_leaves") {
+        NO_TINT
+    } else if name_has(name, "spruce_leaves") {
+        SPRUCE
+    } else if name_has(name, "birch_leaves") {
+        BIRCH
+    } else {
+        FOLIAGE
     }
 }
 
@@ -140,6 +148,21 @@ mod tests {
     #[test]
     fn vines_are_foliage_colored() {
         assert_eq!(tint_color("minecraft:vine", &[], 0), FOLIAGE);
+    }
+
+    #[test]
+    fn cherry_leaves_keep_their_own_pink() {
+        // 樱花树叶的贴图本身就是粉色。若按树叶绿染色，粉 × 绿 会得到橄榄色，
+        // 与实际观感明显不符，因此这一种必须保持原色。
+        assert_eq!(
+            tint_color("minecraft:cherry_leaves", &[], 0),
+            NO_TINT,
+            "樱花树叶不应被染成树叶绿"
+        );
+        // 同组的其它树叶仍然要染色，别把整类都关掉
+        assert_eq!(tint_color("minecraft:oak_leaves", &[], 0), FOLIAGE);
+        assert_eq!(tint_color("minecraft:jungle_leaves", &[], 0), FOLIAGE);
+        assert_eq!(tint_color("minecraft:mangrove_leaves", &[], 0), FOLIAGE);
     }
 
     #[test]

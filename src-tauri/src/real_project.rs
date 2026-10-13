@@ -130,11 +130,235 @@ fn every_real_project_parses_and_roundtrips() {
     assert!(failed.is_empty(), "以下文件未通过：\n{}", failed.join("\n"));
 }
 
-/// 每个真实投影：用随包方块库构建 3D 场景，且必须真的产出网格。
+/// 真实投影里的染色方块必须真的被染色，且是**按通道**染色。
+///
+/// 这条对应界面上的「红石、树叶、藤蔓没颜色」：贴图是灰度的，
+/// 靠逐顶点颜色乘上去才成形。只测 tint 函数的单元测试不足以证明
+/// 「整条链路真的把颜色带到了顶点上」——中间任何一环漏掉，
+/// 单元测试仍然全绿，而画面依旧灰。因此这里走真实数据：
+/// 从真实投影取出这些方块产生的四边形，核对它们的颜色值。
 #[test]
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
-fn every_real_project_builds_a_scene() {
+fn real_project_tinted_blocks_actually_get_colored() {
+    use std::collections::BTreeMap;
+
     let files = collect_litematic(&real_dir());
+    let db = bundled_db();
+    // 方块名 -> (四边形数, 第一个染色值)
+    let mut seen: BTreeMap<String, (usize, [f32; 3])> = BTreeMap::new();
+    let mut total_quads = 0usize;
+    let mut tinted_quads = 0usize;
+
+    for f in &files {
+        let Ok(sc) = crate::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
+        let Some(vi) = db.pick_version(sc.summary().data_version) else { continue };
+        let quads = crate::visibility::collect_quads(&sc, &db, vi);
+        // 逐四边形反查它属于哪个方块（按 block_pos 对应回调色板）
+        let mut name_at: BTreeMap<[i32; 3], String> = BTreeMap::new();
+        for r in &sc.regions {
+            for (i, pi) in r.indices.iter().enumerate() {
+                let Some(st) = r.palette.get(*pi as usize) else { continue };
+                let local = r.pos_from_index(i);
+                let (Some(x), Some(y), Some(z)) = (
+                    r.pos[0].checked_add(local[0]),
+                    r.pos[1].checked_add(local[1]),
+                    r.pos[2].checked_add(local[2]),
+                ) else {
+                    continue;
+                };
+                name_at.insert([x, y, z], st.name.clone());
+            }
+        }
+        for q in &quads {
+            total_quads += 1;
+            let is_tinted = q.tint != crate::tint::NO_TINT;
+            if is_tinted {
+                tinted_quads += 1;
+            }
+            if let Some(n) = name_at.get(&q.block_pos) {
+                seen.entry(n.clone()).or_insert((0, q.tint)).0 += 1;
+            }
+        }
+    }
+
+    assert!(total_quads > 0, "真实投影没有产出任何四边形");
+    println!("  四边形合计 {total_quads}，其中染色 {tinted_quads}");
+
+    // 逐个方块核对**具体颜色**，而不是只核对「不是全 1」。
+    // 只查「有没有变色」会漏掉「染成了错误的颜色」——樱花树叶被染成
+    // 树叶绿时仍然是「变了色」，但观感明显不对。
+    let expect = |name: &str, want: [f32; 3]| -> Result<(), String> {
+        match seen.get(name) {
+            None => Ok(()), // 这批投影里没出现该方块，不算失败
+            Some((cnt, got)) => {
+                if *got == want {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "{name}（{cnt} 个四边形）染色为 ({:.3},{:.3},{:.3})，\
+                         应为 ({:.3},{:.3},{:.3})",
+                        got[0], got[1], got[2], want[0], want[1], want[2]
+                    ))
+                }
+            }
+        }
+    };
+
+    let mut wrong: Vec<String> = Vec::new();
+    let leaf = crate::tint::tint_color("minecraft:oak_leaves", &[], 0);
+    let grass = crate::tint::tint_color("minecraft:grass_block", &[], 0);
+    let no_tint = crate::tint::NO_TINT;
+
+    let mut checked = 0usize;
+    println!("  --- 出现过的染色方块 ---");
+    for (name, (cnt, tint)) in &seen {
+        if *tint == no_tint {
+            continue;
+        }
+        println!("  {cnt:>6}  {name}  tint=({:.3}, {:.3}, {:.3})", tint[0], tint[1], tint[2]);
+    }
+
+    for pair in [
+        ("minecraft:oak_leaves", leaf),
+        ("minecraft:jungle_leaves", leaf),
+        ("minecraft:acacia_leaves", leaf),
+        ("minecraft:dark_oak_leaves", leaf),
+        ("minecraft:mangrove_leaves", leaf),
+        ("minecraft:vine", leaf),
+        ("minecraft:sugar_cane", grass),
+        // 樱花树叶必须保持原色（贴图自带粉色）
+        ("minecraft:cherry_leaves", no_tint),
+    ] {
+        if seen.contains_key(pair.0) {
+            checked += 1;
+        }
+        if let Err(e) = expect(pair.0, pair.1) {
+            wrong.push(e);
+        }
+    }
+
+    // 红石线单独核对：必须是红色系（红通道最高），且随信号强度变化
+    if let Some((cnt, t)) = seen.get("minecraft:redstone_wire") {
+        checked += 1;
+        println!("  {cnt:>6}  minecraft:redstone_wire  tint=({:.3}, {:.3}, {:.3})", t[0], t[1], t[2]);
+        if !(t[0] > t[1] && t[0] > t[2]) {
+            wrong.push(format!("redstone_wire 染色 ({:.3},{:.3},{:.3}) 不是红色系", t[0], t[1], t[2]));
+        }
+    }
+
+    assert!(
+        checked >= 2,
+        "这批投影里只找到 {checked} 种待验证的染色方块，样本不足；\
+         请换一批含树叶/草/红石的投影再跑"
+    );
+    assert!(wrong.is_empty(), "以下染色方块未正确上色：\n{}", wrong.join("\n"));
+}
+
+/// 每个真实投影：用随包方块库构建 3D 场景，且必须真的产出网格。
+/// 真实投影里活塞与红石类方块的状态必须都能解析出模型。
+///
+/// 对应界面上的「活塞有时候会缺面」：活塞是**按状态切换模型**的方块
+/// （extended 决定底座是完整立方体还是短了一截；facing 决定朝向；
+/// piston_head 还分 short 与 type）。只要状态解析失败，
+/// 这个方块就一个面都不画——表现就是「凭空少了一块」。
+///
+/// 这里用真实数据核对：把所有 piston / sticky_piston / piston_head /
+/// redstone_* 的实际状态串拿出来，逐个确认能解析出模型，
+/// 并统计覆盖到的 facing 与 extended 组合。
+#[test]
+#[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
+fn real_project_piston_states_all_resolve() {
+    use std::collections::BTreeMap;
+
+    let files = collect_litematic(&real_dir());
+    let db = bundled_db();
+    // (方块名, 属性串) -> 出现次数
+    let mut states: BTreeMap<(String, String), usize> = BTreeMap::new();
+
+    for f in &files {
+        let Ok(sc) = crate::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
+        for r in &sc.regions {
+            for st in &r.palette {
+                let n = st.name.as_str();
+                let interesting = n.contains("piston") || n.contains("redstone");
+                if !interesting {
+                    continue;
+                }
+                *states.entry((st.name.clone(), st.prop_str())).or_insert(0) += 1;
+            }
+        }
+    }
+
+    assert!(
+        !states.is_empty(),
+        "这批投影里没有活塞/红石类方块，样本不足；请换一批再跑"
+    );
+
+    // 版本按每个投影自己的 data_version 选，避免用错版本比对
+    let mut piston_found = 0usize;
+    let mut broken: Vec<String> = Vec::new();
+    let mut facings: BTreeMap<String, usize> = BTreeMap::new();
+    let mut extended: BTreeMap<String, usize> = BTreeMap::new();
+
+    for ((name, propstr), cnt) in &states {
+        let props: Vec<(String, String)> = propstr
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(|kv| {
+                let mut it = kv.splitn(2, '=');
+                (it.next().unwrap().into(), it.next().unwrap_or("").into())
+            })
+            .collect();
+
+        // 找一个能查到该方块定义的版本（内置库里 1.20.1 有全部这些方块）
+        let vi = db
+            .pick_version(3465)
+            .expect("内置库缺少 1.20.1");
+        if crate::block_model::find_block(&db, &db.versions[vi], name).is_none() {
+            broken.push(format!("{name}: 方块库里查不到定义"));
+            continue;
+        }
+        let st = crate::litematic::BlockState { name: name.clone(), props: props.clone() };
+        let models = crate::block_model::resolve_models(&db, &db.versions[vi], &st);
+        if models.is_empty() {
+            broken.push(format!("{name} [{propstr}]（{cnt} 次）解析出 0 个模型"));
+            continue;
+        }
+        if name.contains("piston") {
+            piston_found += models.len().min(*cnt);
+            for (k, v) in &props {
+                if k == "facing" {
+                    *facings.entry(v.clone()).or_insert(0) += 1;
+                }
+                if k == "extended" {
+                    *extended.entry(v.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
+    println!("  活塞/红石状态共 {} 种，活塞解析出 {piston_found} 个模型", states.len());
+    println!("  facing 覆盖：{facings:?}");
+    println!("  extended 覆盖：{extended:?}");
+
+    assert!(broken.is_empty(), "以下状态解析不出模型（会导致该方块凭空消失）：\n{}", broken.join("\n"));
+
+    // 活塞的两个关键状态都应被真实数据覆盖到，否则这条用例等于没测到
+    // 「状态切换」这件事
+    assert!(
+        facings.len() >= 2,
+        "真实数据里只出现了 {} 种 facing，样本不足以验证朝向切换",
+        facings.len()
+    );
+    assert!(
+        extended.contains_key("true") && extended.contains_key("false"),
+        "真实数据里没有同时覆盖 extended 的两种取值，无法验证状态切换：{extended:?}"
+    );
+}
+
+#[test]
+#[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
+fn every_real_project_builds_a_scene() {    let files = collect_litematic(&real_dir());
     let db = bundled_db();
     let mut failed: Vec<String> = Vec::new();
 
