@@ -1045,9 +1045,13 @@ mod tests {
         assert!(!db.textures.is_empty(), "应含贴图");
         assert!(!db.models.is_empty(), "应含模型");
         assert!(!db.pixels.is_empty(), "像素池不应为空");
-        assert!(!db.langs.is_empty(), "应含语言表");
+        assert!(!db.langs.is_empty(), "应含语言表池");
 
-        // 每个版本引用的语言表下标都必须落在池内，且真的挂上了表
+        // 每个版本引用的语言表下标都必须落在池内。
+        //
+        // 注意不能断言「每个版本的 langs 都非空」：语言表可以是**空表**
+        // （打包时确实没有该版本的译名），那时下标合法但解析出来就是空的。
+        // 运行期新建的包正是这种情况（pack_build 会放一张空表）。
         for (i, v) in db.versions.iter().enumerate() {
             assert!(
                 (v.lang_idx as usize) < db.langs.len(),
@@ -1056,12 +1060,21 @@ mod tests {
                 v.lang_idx,
                 db.langs.len()
             );
-            assert!(
-                !v.langs.is_empty(),
-                "版本 {i}（{}）应挂上语言表，否则方块显示不出中文名",
-                v.name
-            );
         }
+
+        // 内置库必须真的带译名，否则界面全是英文标识符。
+        // 用行为断言而不是「条目数大于某个数」：直接看 display_name 是否
+        // 能把方块名翻成别的东西，这才是用户能感知的结果。
+        let translated = db.versions.iter().any(|v| {
+            v.blocks.iter().any(|b| {
+                let shown = v.display_name(&b.name);
+                !shown.is_empty() && shown != b.name
+            })
+        });
+        assert!(
+            translated,
+            "内置方块库应至少能把一个方块显示成译名，否则贴图与方块清单都会显示英文标识符"
+        );
 
         // 方块与贴图的引用必须自洽：这是「能载入」之外的第二层保障
         for (i, v) in db.versions.iter().enumerate() {
@@ -1222,6 +1235,27 @@ mod tests {
             base.strings[idx], "block/thing",
             "模型面的贴图字符串下标必须平移，否则指向基础库里无关的字符串"
         );
+    }
+
+    /// 语言表**存在但为空**是合法状态，合并不应报错。
+    ///
+    /// 运行期新建的资源包就是这样：pack_build 会放一张空语言表
+    /// （没有译名，但下标有效）。语言表越界校验若把「表是空的」误判成
+    /// 「下标越界」，这类包就再也合并不进来。
+    #[test]
+    fn merge_accepts_empty_but_valid_lang_table() {
+        let mut base = tiny_db("1.20.1", 3465, "minecraft:stone", "block/stone", 255);
+        let mut pack = tiny_db("mymod", 3465, "mymod:thing", "block/thing", 128);
+        // 池里保留一张空表；版本仍指向下标 0
+        pack.langs = vec![Vec::new()];
+        pack.versions[0].lang_idx = 0;
+
+        base.merge_from(&pack, true)
+            .expect("空语言表是合法状态，不应报错");
+
+        let merged = base.versions.last().unwrap();
+        assert_eq!(merged.lang_idx as usize, base.langs.len() - 1, "下标应指向并入的那张空表");
+        assert!(merged.langs.is_empty(), "空表解析出来就是空的");
     }
 
     #[test]
