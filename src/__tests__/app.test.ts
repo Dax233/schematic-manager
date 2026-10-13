@@ -4,16 +4,25 @@ import ArcoVue, { Message } from "@arco-design/web-vue";
 
 // Tauri 的全部出口都换掉：测试跑在 jsdom 里，没有 Tauri 运行时。
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({
+// 主题相关的能力要做成可替换的 mock：测试需要分别模拟深色、浅色、
+// 以及读取失败三种情形。用一个真实函数包着，默认返回浅色。
+const fakeWindow = () =>
+  ({
     minimize: vi.fn(),
     toggleMaximize: vi.fn(),
     close: vi.fn(),
     startDragging: vi.fn(),
     isMaximized: vi.fn().mockResolvedValue(false),
     onResized: vi.fn().mockResolvedValue(() => {}),
-  }),
+    theme: vi.fn().mockResolvedValue("light"),
+    onThemeChanged: vi.fn().mockResolvedValue(() => {}),
+  }) as never;
+
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: vi.fn(() => fakeWindow()),
 }));
+
+const mockGetCurrentWindow = vi.mocked(getCurrentWindow);
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn().mockResolvedValue(null),
   save: vi.fn().mockResolvedValue(null),
@@ -32,6 +41,7 @@ vi.mock("../components/SceneViewer.vue", () => ({
 
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "../App.vue";
 import type { SchematicSummary, SceneData, DuplicateGroup, ConvertItem } from "../types";
 
@@ -134,7 +144,12 @@ beforeEach(() => {
   mockInvoke.mockReset();
   mockOpen.mockReset();
   mockOpen.mockResolvedValue(null);
+  // 主题用例会替换 getCurrentWindow 的返回值；不复位的话，
+  // 那个「读不到主题」的替身会泄漏到后面的用例里（实测泄漏了 5 条告警）
+  mockGetCurrentWindow.mockReset();
+  mockGetCurrentWindow.mockImplementation(() => fakeWindow());
   document.body.innerHTML = "";
+  document.body.removeAttribute("arco-theme");
 });
 
 describe("界面外壳", () => {
@@ -300,6 +315,80 @@ describe("主要操作流程", () => {
     const btn = (label: string) => w.findAll("button").find((b) => b.text().includes(label));
     expect(btn("方块替换")?.attributes("disabled"), "选中后应可用").toBeUndefined();
     expect(btn("版本转换")?.attributes("disabled"), "选中后应可用").toBeUndefined();
+    w.unmount();
+  });
+});
+
+describe("跟随系统深浅色", () => {
+  // Arco 的深色取值挂在 body[arco-theme="dark"] 上。样式表里两套都写好了，
+  // 但没人设置这个属性的话深色永远不会生效——系统开了深色，界面仍是白的。
+  beforeEach(() => {
+    document.body.removeAttribute("arco-theme");
+  });
+
+  it("系统为深色时给 body 打上 arco-theme，界面才真的变深", async () => {
+    vi.mocked(getCurrentWindow).mockReturnValue({
+      theme: vi.fn().mockResolvedValue("dark"),
+      onThemeChanged: vi.fn().mockResolvedValue(() => {}),
+    } as never);
+    stubInvoke();
+    const w = mountApp();
+    await flushPromises();
+    expect(document.body.getAttribute("arco-theme"), "应设为 dark").toBe("dark");
+    w.unmount();
+  });
+
+  it("系统为浅色时不加该属性", async () => {
+    vi.mocked(getCurrentWindow).mockReturnValue({
+      theme: vi.fn().mockResolvedValue("light"),
+      onThemeChanged: vi.fn().mockResolvedValue(() => {}),
+    } as never);
+    stubInvoke();
+    const w = mountApp();
+    await flushPromises();
+    expect(document.body.getAttribute("arco-theme"), "不应有 dark 属性").toBeNull();
+    w.unmount();
+  });
+
+  it("系统切换主题时跟随变化", async () => {
+    let fire: ((e: { payload: string }) => void) | undefined;
+    vi.mocked(getCurrentWindow).mockReturnValue({
+      theme: vi.fn().mockResolvedValue("light"),
+      onThemeChanged: vi.fn().mockImplementation(async (cb: (e: { payload: string }) => void) => {
+        fire = cb;
+        return () => {};
+      }),
+    } as never);
+    stubInvoke();
+    const w = mountApp();
+    await flushPromises();
+    expect(document.body.getAttribute("arco-theme")).toBeNull();
+
+    // 系统切到深色
+    expect(fire, "应注册了主题变化回调").toBeTruthy();
+    fire!({ payload: "dark" });
+    await flushPromises();
+    expect(document.body.getAttribute("arco-theme"), "应跟随变为 dark").toBe("dark");
+
+    // 再切回浅色
+    fire!({ payload: "light" });
+    await flushPromises();
+    expect(document.body.getAttribute("arco-theme"), "应跟随去掉 dark").toBeNull();
+    w.unmount();
+  });
+
+  it("读不到主题时不崩，按浅色显示", async () => {
+    // 浏览器里跑前端、或平台不提供该能力时都会走到这里
+    vi.mocked(getCurrentWindow).mockReturnValue({
+      theme: vi.fn().mockRejectedValue(new Error("不支持")),
+      onThemeChanged: vi.fn().mockResolvedValue(() => {}),
+    } as never);
+    stubInvoke();
+    const w = mountApp();
+    await flushPromises();
+    expect(document.body.getAttribute("arco-theme"), "失败时应保持浅色").toBeNull();
+    // 其余功能不受影响
+    expect(w.text(), "界面仍应正常渲染").toContain("添加目录");
     w.unmount();
   });
 });
