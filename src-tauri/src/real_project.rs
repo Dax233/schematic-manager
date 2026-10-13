@@ -581,6 +581,74 @@ fn real_project_no_block_loses_a_non_cullable_face() {
     );
 }
 
+/// 真实投影里不应出现「贴图解不出来」的面。
+///
+/// mesh::build 会把贴图为 NO_TEXTURE 的四边形**直接跳过**——因为拿不到贴图
+/// 就画不出正确的颜色。这本身是合理的降级，但它的表现正是「某个方块少了
+/// 一块」：几何算出来了，却因为贴图没解析到而被静默丢弃。
+/// 因此这里核对真实数据里一个这样的面都没有。
+#[test]
+#[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
+fn real_project_has_no_unresolved_texture_faces() {
+    let files = collect_litematic(&real_dir());
+    let db = bundled_db();
+
+    let mut total = 0usize;
+    let mut unresolved = 0usize;
+    // (投影名, 方块名, 属性串) -> 次数
+    let mut samples: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+
+    for f in &files {
+        let label = file_name(f);
+        let Ok(sc) = crate::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
+        let Some(vi) = db.pick_version(sc.summary().data_version) else { continue };
+
+        // 按坐标反查方块名，便于报告是哪个方块出的问题
+        let mut name_at: std::collections::BTreeMap<[i32; 3], String> =
+            std::collections::BTreeMap::new();
+        for r in &sc.regions {
+            for (i, pi) in r.indices.iter().enumerate() {
+                let Some(st) = r.palette.get(*pi as usize) else { continue };
+                let local = r.pos_from_index(i);
+                let (Some(x), Some(y), Some(z)) = (
+                    r.pos[0].checked_add(local[0]),
+                    r.pos[1].checked_add(local[1]),
+                    r.pos[2].checked_add(local[2]),
+                ) else {
+                    continue;
+                };
+                name_at.insert([x, y, z], format!("{} [{}]", st.name, st.prop_str()));
+            }
+        }
+
+        for q in crate::visibility::collect_quads(&sc, &db, vi) {
+            total += 1;
+            if q.texture == crate::blockdb::NO_TEXTURE {
+                unresolved += 1;
+                let who = name_at
+                    .get(&q.block_pos)
+                    .cloned()
+                    .unwrap_or_else(|| "<未知方块>".to_string());
+                *samples.entry(format!("{label} :: {who}")).or_insert(0) += 1;
+            }
+        }
+    }
+
+    println!("  四边形合计 {total}，贴图解不出的 {unresolved}");
+    if !samples.is_empty() {
+        let mut top: Vec<_> = samples.iter().collect();
+        top.sort_by(|a, b| b.1.cmp(a.1));
+        for (k, v) in top.iter().take(10) {
+            println!("    {v:>5}  {k}");
+        }
+    }
+    assert!(total > 0, "真实投影没有产出任何四边形");
+    assert_eq!(
+        unresolved, 0,
+        "有 {unresolved} 个面因贴图解不出而被静默丢弃——表现就是「方块缺面」"
+    );
+}
+
 #[test]
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn real_project_piston_states_all_resolve() {
