@@ -391,9 +391,19 @@ fn region_from_nbt(name: &str, v: &Value) -> AppResult<Region> {
     // 此时原点要相应前移，尺寸取绝对值，否则后续索引计算全部错位。
     for a in 0..3 {
         if size[a] < 0 {
+            // 取绝对值必须检查：i32::MIN 的相反数无法用 i32 表示。
+            // 不检查的话，debug 构建会 panic，release 构建回绕后仍是负数，
+            // 于是 r.pos 已被写成错位的值，区域却以「尺寸为 0」被放行，
+            // 后续按 r.pos 计算场景原点就会把整个预览框到别处去。
+            //
+            // 顺序很重要：必须先用**原始负值**算出前移后的原点，再取绝对值。
+            // 反过来会把正的尺寸当成偏移量，原点被推远一个尺寸（实测
+            // Size.x=-16、Position.x=15 时得到 32 而非 0）。
             let new_pos = pos[a].wrapping_add(size[a]).wrapping_add(1);
+            size[a] = size[a]
+                .checked_neg()
+                .ok_or_else(|| AppError::Corrupt(format!("区域 {name} 的 Size 分量无法取绝对值")))?;
             r.pos[a] = new_pos;
-            size[a] = -size[a];
         } else {
             r.pos[a] = pos[a];
         }
@@ -922,6 +932,24 @@ mod tests {
         // 原点应移动到负方向的起点：15 + (-16) + 1 = 0，9 + (-10) + 1 = 0
         assert_eq!(r.pos, [0, 0, -8]);
         assert_eq!(r.volume, 2560);
+    }
+
+    /// Size 为 i32::MIN 时不能 panic，也不能放行一个位置错乱的区域。
+    ///
+    /// i32::MIN 的相反数无法用 i32 表示：不检查时 debug 构建在取负处 panic，
+    /// release 构建回绕后仍是负数，区域会以「尺寸为 0」被放行，而 r.pos 已经
+    /// 被写成 -2147483647 之类的值——后续按它计算场景原点，整个预览会被
+    /// 框到极远处。这里要求明确报错。
+    #[test]
+    fn integer_min_size_is_rejected_not_wrapped() {
+        let region = region_fixture([0, 0, 0], [i32::MIN, 1, 1], 8);
+        let e = region_from_nbt("neg", &region)
+            .expect_err("i32::MIN 无法取绝对值，必须报错而不是静默放行");
+        let msg = e.to_string();
+        assert!(
+            msg.contains("绝对值") || msg.contains("Size"),
+            "错误信息应指出问题所在，实际：{msg}"
+        );
     }
 
     /// 构造一个用于测试区域解析的最小 NBT 结构。
