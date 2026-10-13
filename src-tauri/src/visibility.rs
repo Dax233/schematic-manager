@@ -232,33 +232,71 @@ pub fn collect_quads(sc: &Schematic, db: &BlockDb, ver_idx: usize) -> Vec<Quad> 
 
 /// 求一个面的明暗系数。
 ///
-/// 底数是该面在**模型空间**的固定系数（顶面最亮、底面最暗），
-/// 再乘一个按**世界空间法线**算的方向光——后者不能省：
+/// 只按该面在**世界空间**的朝向取固定系数，这正是原版的做法：
+/// Minecraft 的方块光照不看真实光源方向，而是按面朝向给一个固定明暗
+/// （顶面最亮、底面最暗、四个侧面居中且各不相同），因此同一朝向的面
+/// 无论在哪都同样亮。
 ///
-/// 模型空间的面号在方块被变体旋转后已不再对应该面的实际朝向。
-/// 例如活塞 `facing=up` 时绕 X 转 270°，模型的「顶面」在世界里朝下；
-/// 若仍按模型面号取系数，就会把朝下的面照成最亮、朝上的面照成最暗——
-/// 观感上就是「旋转过的方块明暗不对」。对照 legacy-cpp/render.cpp 的
-/// emitQuad，它同样在 FaceShade 之上再乘一次按几何法线的 lambert。
+/// 之前这里还额外乘过一次 legacy-cpp 的「方向光」lambert，那是**错的**：
+/// legacy 那套系数会让西面（0.886）比顶面（0.620）更亮、南面比顶面更亮，
+/// 与游戏里「顶面最亮」的观感相反。用户要求「参考游戏内渲染方式」，
+/// 因此改为完全按世界朝向取系数。
+///
+/// 「按世界朝向」这一点不能省：模型空间的面号在方块被变体旋转后
+/// 已不对应实际朝向。例如活塞 `facing=up` 时绕 X 转 270°，模型的
+/// 「顶面」在世界里朝下；若仍按模型面号取系数，会把朝下的面照成最亮。
 fn shade_for(face: Face, corners: &[[f32; 3]; 4]) -> f32 {
-    let base = face_shade(face);
-    let Some(n) = face_normal(corners) else {
-        return base;
-    };
-    // 方向光：与 legacy 保持一致，让结构有稳定的立体感
-    let lambert = 0.62
-        + 0.38 * (-n[1] * 0.65 + n[2] * 0.25 - n[0] * 0.2 + 0.5).max(0.0);
-    base * lambert.clamp(0.6, 1.15)
+    match face_normal(corners) {
+        // 用法线所属的主轴方向反推它是哪个面，再取该面的系数
+        Some(n) => face_shade(dominant_face(n)),
+        // 退化面（面积为 0，本身不可见）退回按模型面号取
+        None => face_shade(face),
+    }
 }
 
-/// 由四个角点求面的单位法线（前三点构成三角形）。
+/// 由单位法线求它最接近的那个面。
+///
+/// 法线是轴向的（模型的面永远平行于坐标平面，旋转也只是 90° 的倍数），
+/// 因此取绝对值最大的分量即可；平局时按 X→Y→Z 的固定顺序取值，
+/// 保证结果确定。
+fn dominant_face(n: [f32; 3]) -> Face {
+    let ax = n[0].abs();
+    let ay = n[1].abs();
+    let az = n[2].abs();
+    if ay >= ax && ay >= az {
+        if n[1] >= 0.0 {
+            Face::Up
+        } else {
+            Face::Down
+        }
+    } else if ax >= az {
+        if n[0] >= 0.0 {
+            Face::East
+        } else {
+            Face::West
+        }
+    } else if n[2] >= 0.0 {
+        Face::South
+    } else {
+        Face::North
+    }
+}
+
+/// 由四个角点求面的单位法线（**朝外**）。
+///
+/// 注意取三角形的顺序必须是 `0-2-1`，与 mesh::build 实际输出的绕序一致。
+/// `build_face_corners` 给出的角点顺序 (0,1,2) 按右手法则算出来是**朝内**的
+/// （这正是 mesh 要把索引改成 0-2-1 / 0-3-2 的原因，见 mesh.rs 的说明）。
+/// 起初这里按 (0,1,2) 算，得到的法线全部朝内，于是「顶面」被算成朝下：
+/// 明暗全部反过来。测试 shading_follows_world_facing_and_keeps_up_brightest
+/// 正是抓到了这一点。
 ///
 /// 退化三角形（面积为 0）返回 None，由调用方退回按面号取系数——
 /// 这类面本身不可见，不值得为它编一个方向。
 fn face_normal(corners: &[[f32; 3]; 4]) -> Option<[f32; 3]> {
     let a = corners[0];
-    let b = corners[1];
-    let c = corners[2];
+    let b = corners[2];
+    let c = corners[1];
     let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
     let n = [
@@ -355,6 +393,93 @@ mod tests {
             pixels: vec![0u8; 1024],
         };
         (db, version)
+    }
+
+    /// 明暗必须按**世界空间**的面朝向定，顶面永远最亮、底面永远最暗。
+    ///
+    /// 这条守住两件事：
+    /// 1. 朝向顺序正确。曾经在面系数之上又乘了一个 legacy 的方向光
+    ///    lambert，结果西面（0.780）比顶面（0.620）更亮、南面也比顶面亮，
+    ///    与游戏里「顶面最亮」完全相反。
+    /// 2. 用的是**世界**朝向而不是模型面号。方块被变体旋转后，模型面号
+    ///    已不对应实际朝向；活塞 facing=up 时模型的顶面在世界里朝下，
+    ///    若按面号取系数就会把朝下的面照成最亮。
+    #[test]
+    fn shading_follows_world_facing_and_keeps_up_brightest() {
+        use crate::geometry::build_face_corners;
+
+        // 未旋转的完整立方块
+        let from = [0.0f32, 0.0, 0.0];
+        let to = [16.0f32, 16.0, 16.0];
+        let uv = [0.0f32, 0.0, 16.0, 16.0];
+        let all = [
+            Face::Down,
+            Face::Up,
+            Face::North,
+            Face::South,
+            Face::West,
+            Face::East,
+        ];
+        let mut shades: Vec<(Face, f32)> = Vec::new();
+        for f in all {
+            let c = build_face_corners(f, from, to, uv);
+            shades.push((f, shade_for(f, &c.pos)));
+        }
+        let by = |f: Face| shades.iter().find(|(x, _)| *x == f).unwrap().1;
+
+        // 顶面最亮、底面最暗
+        for (f, s) in &shades {
+            if *f != Face::Up {
+                assert!(
+                    by(Face::Up) > *s,
+                    "顶面应比其他面都亮，但 {f:?} 是 {s}、顶面是 {}",
+                    by(Face::Up)
+                );
+            }
+            if *f != Face::Down {
+                assert!(
+                    by(Face::Down) < *s,
+                    "底面应比其他面都暗，但 {f:?} 是 {s}、底面是 {}",
+                    by(Face::Down)
+                );
+            }
+        }
+
+        // 旋转后仍按世界朝向取系数：把每个面用 rotate_variant 转 90°，
+        // 再核对它的明暗等于「它转到的新朝向」在未旋转时的明暗。
+        // 这样即使面号没变，只要朝向变了，明暗也必须跟着变。
+        for (f, base) in &shades {
+            for rx in 0..4u8 {
+                for ry in 0..4u8 {
+                    let c = build_face_corners(*f, from, to, uv);
+                    let rotated: [[f32; 3]; 4] = std::array::from_fn(|k| {
+                        crate::transform::rotate_variant(c.pos[k], rx, ry)
+                    });
+                    let got = shade_for(*f, &rotated);
+                    // 该面旋转后的实际朝向
+                    let want_face = dominant_face(face_normal(&rotated).expect("非退化面"));
+                    let want = by(want_face);
+                    assert!(
+                        (got - want).abs() < 1e-6,
+                        "rx={rx} ry={ry} 时 {f:?} 的明暗为 {got}，\
+                         但它此刻朝向 {want_face:?}（应为 {want}）——\
+                         说明明暗是按模型面号而非世界朝向取的"
+                    );
+                    let _ = base;
+                }
+            }
+        }
+    }
+
+    /// dominant_face 对六个轴向法线都要给出对应面。
+    #[test]
+    fn dominant_face_maps_axis_normals() {
+        assert_eq!(dominant_face([0.0, 1.0, 0.0]), Face::Up);
+        assert_eq!(dominant_face([0.0, -1.0, 0.0]), Face::Down);
+        assert_eq!(dominant_face([0.0, 0.0, -1.0]), Face::North);
+        assert_eq!(dominant_face([0.0, 0.0, 1.0]), Face::South);
+        assert_eq!(dominant_face([-1.0, 0.0, 0.0]), Face::West);
+        assert_eq!(dominant_face([1.0, 0.0, 0.0]), Face::East);
     }
 
     /// 收集到的四边形必须已经落到该方块的世界坐标上。
