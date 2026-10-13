@@ -449,15 +449,35 @@ body,
   // 信息列：占满预览右侧的剩余宽度，并在很宽的窗口下拉住上限，
   // 否则单行文字会长到难以阅读。
   //
-  // 高度与预览舞台对齐（400px）并内部滚动：内容比舞台高时若任其撑开，
+  // 高度与预览舞台对齐（400px）：内容比舞台高时若任其撑开，
   // 下方的控制条会被推下去，预览与按钮之间出现大片空白（实测被推到 637px）。
-  // 定高后无论表单多长，控制条都稳定紧贴舞台底部。
+  // 面板本身是纵向 flex：中间可滚，操作行钉在底部。
   &__info {
+    display: flex;
+    flex-direction: column;
     flex: 1 1 auto;
     min-width: 0;
     max-width: 620px;
     max-height: 400px;
+  }
+
+  // 可滚动区：基本信息 + 输入框。内容实测 513px > 400px，
+  // 因此保存按钮必须放在这层外面（见 &__actions）。
+  &__info-body {
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
+  }
+
+  // 操作行钉在底部，不随内容滚动。
+  // 不钉住的话保存按钮会落到折叠线以下 113px，用户得先滚动才能保存。
+  &__actions {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--color-border-2);
   }
 
   // 只读基本信息：两列（标签 + 值），字号比正文小一档，

@@ -1887,6 +1887,9 @@ void followSystemTheme();
               </a-spin>
             </div>
             <div class="preview__info" v-if="selected">
+              <!-- 可滚动区：基本信息 + 三个输入框。操作行在它外面，
+                   因此内容再长也不会把保存按钮挤出可视范围。 -->
+              <div class="preview__info-body">
               <!-- 只读基本信息。用紧凑的两列排布并缩小字号，
                    把纵向空间让给下面的描述框。 -->
               <dl class="preview__facts">
@@ -1933,25 +1936,30 @@ void followSystemTheme();
                     @input="dirty = true"
                   />
                 </a-form-item>
-                <a-space>
-                  <a-button
-                    type="primary"
-                    size="small"
-                    :loading="saving"
-                    :disabled="!dirty || !!selected.error"
-                    @click="saveDraft"
-                  >
-                    保存
-                  </a-button>
-                  <a-button size="small" :disabled="!dirty" @click="resetDraft(selected)">
-                    撤销
-                  </a-button>
-                  <span v-if="dirty" class="hint-warn">有未保存的修改</span>
-                  <span v-else-if="!selected.error" class="hint-dim">
-                    保存前会自动备份原件
-                  </span>
-                </a-space>
-              </a-form>
+                </a-form>
+              </div>
+              <!-- 操作行钉在面板底部，不随内容一起滚。
+                   面板高度与预览舞台对齐（400px），而「基本信息 + 三个输入框 +
+                   多行描述」实测有 513px：不钉住的话保存按钮会落到折叠线以下
+                   113px，用户得先滚动才能保存，等于按钮藏起来了。 -->
+              <div class="preview__actions">
+                <a-button
+                  type="primary"
+                  size="small"
+                  :loading="saving"
+                  :disabled="!dirty || !!selected.error"
+                  @click="saveDraft"
+                >
+                  保存
+                </a-button>
+                <a-button size="small" :disabled="!dirty" @click="resetDraft(selected)">
+                  撤销
+                </a-button>
+                <span v-if="dirty" class="hint-warn">有未保存的修改</span>
+                <span v-else-if="!selected.error" class="hint-dim">
+                  保存前会自动备份原件
+                </span>
+              </div>
             </div>
             <div class="preview__info" v-else>
               <a-empty description="选择一个投影文件以查看详情" />

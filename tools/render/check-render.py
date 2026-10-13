@@ -388,6 +388,20 @@ SHIM = r"""
         cvBox.top < stBox.top - 1 || cvBox.bottom > stBox.bottom + 1;
     }
 
+    // 保存按钮必须无需滚动就能点到。
+    // 信息面板与预览舞台同为 400px，而「基本信息 + 三个输入框 + 多行描述」
+    // 实测 485px：操作行若跟着内容一起滚，按钮会落到折叠线以下 113px，
+    // 用户得先滚动才能保存——等于按钮藏起来了。
+    var actEl = document.querySelector(".preview__actions");
+    var actBtn = actEl ? actEl.querySelector("button") : null;
+    var infoEl2 = document.querySelector(".preview__info");
+    var saveOk = false, saveGap = -9999;
+    if (actBtn && infoEl2) {
+      var ab = actBtn.getBoundingClientRect(), ib = infoEl2.getBoundingClientRect();
+      saveGap = Math.round(ab.bottom - ib.bottom);
+      saveOk = ab.height > 0 && ab.bottom <= ib.bottom + 1 && ab.top >= ib.top;
+    }
+
     // ---- 新界面要素 ----
     // 1) 选中行是否有高亮类（用户要求点左侧文件时该条目变蓝）
     var selRow = sb.querySelector("tbody tr.row-selected");
@@ -440,6 +454,8 @@ SHIM = r"""
       + ",barOk=" + barOk
       + ",gapBar=" + gapBar
       + ",selOk=" + selOk
+      + ",saveOk=" + saveOk
+      + ",saveGap=" + saveGap
       + ",infoRight=" + infoRight
       + ",infoLeft=" + (infoBox ? Math.round(infoBox.left) : -1)
       + ",stageRight=" + (stBox ? Math.round(stBox.right) : -1)
@@ -986,6 +1002,8 @@ def main():
             claim("描述框为多行大输入框", desc_h >= 100,
                   f"  textarea 高 {desc_h}px（要求方便多行显示）")
             claim("描述标签标注了（备注）", fields.get("labelOk") == "true")
+            claim("保存按钮无需滚动即可点到", fields.get("saveOk") == "true",
+                  f"  按钮底边相对面板底边 {fields.get('saveGap')}px（>0 表示被挤出可视范围）")
             claim("预览控制条未被挤压（按钮不竖排）", fields.get("barOk") == "true",
                   f"  视角按钮 {fields.get('barBtnW')}×{bar_h}px；高度超过 30 说明文字折行了")
             # 与「加宽名称以显示更多内容」的目的相反。
