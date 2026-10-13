@@ -226,6 +226,138 @@ mod tests {
         }
     }
 
+    /// 绕序朝外这件事**在所有变体旋转下**都必须成立。
+    ///
+    /// 上一条只覆盖未旋转的方块，而用户报告的症状恰恰是「旋转过的方块」出问题
+    /// （活塞 facing=up/down 等）。剔除方向会随旋转改，绕序若也跟着被镜像，
+    /// 就会看到「有时候缺面」——取决于方块转到哪个朝向。
+    ///
+    /// 这里对全部 4×4 种 X/Y 旋转组合逐面核对：把旋转后的角点交给 mesh，
+    /// 算出各三角形的实际法线，再与「该面旋转后应有的朝向」比较。
+    /// 这条能发现「某个旋转角引入了镜像（行列式为 -1）」这类错误——
+    /// 那会让所有面由朝外变成朝内。
+    #[test]
+    fn face_winding_survives_every_variant_rotation() {
+        use crate::blockdb::Face;
+        use crate::geometry::build_face_corners;
+        use crate::transform::rotate_variant;
+
+        let from = [0.0f32, 0.0, 0.0];
+        let to = [16.0f32, 16.0, 16.0];
+        let uv = [0.0f32, 0.0, 16.0, 16.0];
+        let faces: [(Face, [f32; 3]); 6] = [
+            (Face::Down, [0.0, -1.0, 0.0]),
+            (Face::Up, [0.0, 1.0, 0.0]),
+            (Face::North, [0.0, 0.0, -1.0]),
+            (Face::South, [0.0, 0.0, 1.0]),
+            (Face::West, [-1.0, 0.0, 0.0]),
+            (Face::East, [1.0, 0.0, 0.0]),
+        ];
+
+        let mut checked = 0usize;
+        for rx in 0..4u8 {
+            for ry in 0..4u8 {
+                let quads: Vec<Quad> = faces
+                    .iter()
+                    .map(|(f, _)| {
+                        let c = build_face_corners(*f, from, to, uv);
+                        // 与产品同样的方式旋转角点（含 0..16 取补）
+                        let rotated: [[f32; 3]; 4] =
+                            std::array::from_fn(|k| rotate_variant(c.pos[k], rx, ry));
+                        Quad {
+                            corners: rotated,
+                            uv: c.uv,
+                            texture: 1,
+                            shade: 1.0,
+                            tint: [1.0, 1.0, 1.0],
+                            block_pos: [0, 0, 0],
+                        }
+                    })
+                    .collect();
+
+                let m = build(&quads);
+                assert_eq!(m.batches.len(), 1, "rx={rx} ry={ry} 应只有一个批次");
+                let b = &m.batches[0];
+                let v = |i: u32| -> [f32; 3] {
+                    let i = i as usize * 3;
+                    [b.positions[i], b.positions[i + 1], b.positions[i + 2]]
+                };
+                let sub = |a: [f32; 3], c: [f32; 3]| [a[0] - c[0], a[1] - c[1], a[2] - c[2]];
+                let cross = |a: [f32; 3], c: [f32; 3]| {
+                    [
+                        a[1] * c[2] - a[2] * c[1],
+                        a[2] * c[0] - a[0] * c[2],
+                        a[0] * c[1] - a[1] * c[0],
+                    ]
+                };
+                let dot = |a: [f32; 3], c: [f32; 3]| a[0] * c[0] + a[1] * c[1] + a[2] * c[2];
+
+                // 该面旋转**之后**应朝的方向：对朝外法线做同样的旋转。
+                // 旋转是绕方块中心、坐标 0..16，因此法线（方向量）无需平移，
+                // 直接按同一角度转动方向即可。
+                let rotate_dir = |d: [f32; 3]| -> [f32; 3] {
+                    // 方向量在 0..16 空间下按中心 8 的补变换；等价于把
+                    // 向量绕中心旋转，用与角点同一套公式（先 X 再 Y）
+                    let [mut x, mut y, mut z] = [d[0], d[1], d[2]];
+                    match rx % 4 {
+                        1 => {
+                            let (ny, nz) = (-z, y);
+                            y = ny;
+                            z = nz;
+                        }
+                        2 => {
+                            y = -y;
+                            z = -z;
+                        }
+                        3 => {
+                            let (ny, nz) = (z, -y);
+                            y = ny;
+                            z = nz;
+                        }
+                        _ => {}
+                    }
+                    match ry % 4 {
+                        1 => {
+                            let (nx, nz) = (-z, x);
+                            x = nx;
+                            z = nz;
+                        }
+                        2 => {
+                            x = -x;
+                            z = -z;
+                        }
+                        3 => {
+                            let (nx, nz) = (z, -x);
+                            x = nx;
+                            z = nz;
+                        }
+                        _ => {}
+                    }
+                    [x, y, z]
+                };
+
+                for (qi, (_face, out)) in faces.iter().enumerate() {
+                    let want = rotate_dir(*out);
+                    for t in [
+                        &b.indices[qi * 6..qi * 6 + 3],
+                        &b.indices[qi * 6 + 3..qi * 6 + 6],
+                    ] {
+                        let n = cross(sub(v(t[1]), v(t[0])), sub(v(t[2]), v(t[0])));
+                        assert!(
+                            dot(n, want) > 0.0,
+                            "rx={rx} ry={ry} 的第 {qi} 个面法线朝内：\
+                             法线 {n:?} 与应有朝向 {want:?} 点积为 {}。\
+                             旋转引入了镜像，所有面会被 FrontSide 剔除",
+                            dot(n, want)
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 16 * 6 * 2, "应覆盖 4×4 种旋转 × 6 个面 × 2 个三角形");
+    }
+
     #[test]
     fn same_texture_shares_one_batch() {
         let m = build(&[quad(7, 0.8), quad(7, 0.8), quad(7, 0.8)]);
