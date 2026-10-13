@@ -215,6 +215,22 @@ body,
     }
   }
 
+  // 选中行高亮。
+  //
+  // 用主色的浅色底 + 左侧主色条：只改背景时在浅色主题下对比度偏弱，
+  // 加一条左侧色条后一眼能看出选的是哪一行。颜色取 Arco 变量，
+  // 深色主题下自动换成对应的深色系。
+  .row-selected {
+    > .arco-table-td {
+      background-color: var(--color-primary-light-1);
+      box-shadow: inset 2px 0 0 0 rgb(var(--primary-6));
+    }
+
+    &:hover > .arco-table-td {
+      background-color: var(--color-primary-light-2);
+    }
+  }
+
   // 目录栏字号收紧，同宽下能多显示内容。
   // 只改目录栏，右侧详情与对话框保持原字号：那里的文字是逐字阅读的，
   // 缩到 12px 会明显费力。
@@ -403,22 +419,79 @@ body,
   border-bottom: 1px solid var(--color-border-1);
   background: var(--color-bg-2);
 
-  // 预览舞台固定为 200×200 并靠左显示。
+  // 预览舞台固定为 400×400 并靠左显示。
   //
   // 之前是 height:400px 且宽度铺满整个详情栏（实测 862px），
-  // 即「满了整个右侧窗口」。投影是体素模型，正方形容器更贴合，
-  // 也不会把下方的信息面板挤出视野。
+  // 即「满了整个右侧窗口」。投影是体素模型，正方形容器更贴合。
+  // 400 是用户要求的边长：同屏看清结构，同时给右侧信息区留出空间。
   //
-  // 固定尺寸而不是 flex:1，是为了让「靠左 + 限定 200」这条要求
-  // 不随窗口宽度变化：无论右侧多宽，预览区始终是左上角那块 200×200。
+  // 固定尺寸而不是 flex:1，是为了让「靠左 + 限定边长」这条要求
+  // 不随窗口宽度变化：无论右侧多宽，预览区始终是左上角那块 400×400。
   &__stage {
-    width: 200px;
-    height: 200px;
+    width: 400px;
+    height: 400px;
     flex: 0 0 auto;
     align-self: flex-start;
     min-width: 0;
     overflow: hidden;
     background: var(--color-fill-1);
+  }
+
+  // 预览与信息并排
+  &__main {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 8px;
+    min-width: 0;
+  }
+
+  // 信息列：占满预览右侧的剩余宽度，并在很宽的窗口下拉住上限，
+  // 否则单行文字会长到难以阅读。
+  //
+  // 高度与预览舞台对齐（400px）并内部滚动：内容比舞台高时若任其撑开，
+  // 下方的控制条会被推下去，预览与按钮之间出现大片空白（实测被推到 637px）。
+  // 定高后无论表单多长，控制条都稳定紧贴舞台底部。
+  &__info {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 620px;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  // 只读基本信息：两列（标签 + 值），字号比正文小一档，
+  // 以便把纵向空间让给下面的描述框
+  &__facts {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 2px 10px;
+    margin: 0 0 10px;
+    font-size: 12px;
+
+    dt {
+      color: var(--color-text-3);
+      white-space: nowrap;
+    }
+
+    dd {
+      margin: 0;
+      overflow: hidden;
+      color: var(--color-text-1);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  // 表单项收紧间距，否则三个输入框加描述框会顶到页面底部
+  &__form {
+    :deep(.arco-form-item) {
+      margin-bottom: 8px;
+    }
+
+    :deep(.arco-form-item-label-col) {
+      padding-bottom: 2px;
+    }
   }
 
   &__bar {

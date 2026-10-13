@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { ImportOutcome, PackEntry, PackLoadFailure } from "./types";
@@ -13,6 +13,8 @@ import {
   copyFilesToDir,
   deleteFiles,
   deletePack,
+  loadUiState,
+  saveUiState,
   importJar,
   listBlockVersions,
   listPacks,
@@ -33,7 +35,7 @@ import {
   searchBlocks,
 } from "./api";
 import SceneViewer from "./components/SceneViewer.vue";
-import { OffscreenRenderer, EXPORT_SIZES } from "./render/scene3d";
+import { OffscreenRenderer, EXPORT_SIZES, VIEW_PRESETS } from "./render/scene3d";
 import { NamePool, joinPath, previewStem } from "./render/export_name";
 import type {
   AnalysisResult,
@@ -159,10 +161,17 @@ const NAME_COL_W = 352;
 const SIDEBAR_MIN_W = 320;
 const SIDEBAR_MAX_W = 1200;
 /** 各列默认宽度之和，含选择列与 1px 占位列。改列宽时要同步。 */
-const SIDEBAR_FIT_W = 40 + NAME_COL_W + 90 + 110 + 90 + 130 + 1;
-/** 目录栏默认宽度。至少 560（保证右侧仍有可用空间），
- *  但要足够放下全部列，否则最后一列会被挤出可视区。 */
-const SIDEBAR_DEFAULT_W = Math.max(560, SIDEBAR_FIT_W);
+const SIDEBAR_FIT_W = 40 + NAME_COL_W + 90 + 110 + 73 + 1;
+/** 目录栏默认宽度。
+ *
+ * 取参考截图的实测值：截图宽 2047 设备像素、缩放 1.25（由已知的标题栏 32px
+ * 与工具栏 44px 反推），表头里的竖直分隔线在设备像素 52/492/605/742/833，
+ * 换算成 CSS 像素是 41.6 / 393.6 / 484 / 593.6 / 666.4，
+ * 即各列 40（选择）/ 352 / 90 / 110 / 73，合计正好 666。
+ *
+ * 仍保留 SIDEBAR_FIT_W 兜底：万一以后把某列调宽到放不下，
+ * 目录栏跟着变宽，而不是把末列挤出可视区。 */
+const SIDEBAR_DEFAULT_W = Math.max(666, SIDEBAR_FIT_W);
 const sidebarWidth = ref(SIDEBAR_DEFAULT_W);
 /** 是否正在拖动分隔条。拖动期间禁用过渡并屏蔽文本选择 */
 const resizing = ref(false);
@@ -250,6 +259,9 @@ onMounted(() => {
   // 拦截浏览器默认右键菜单（capture 阶段，确保在组件处理之前生效）
   document.addEventListener("contextmenu", onDocumentContextMenu, true);
   onWindowResize();
+  // 恢复上次的界面状态与已添加目录。放在最后：先把界面建起来，
+  // 恢复只改状态，不必等它完成就能显示
+  void restoreUiState();
 });
 
 // 组件卸载时摘掉 window 上的监听，避免拖动中关闭窗口而留下悬挂的监听
@@ -599,14 +611,14 @@ const columns = computed<TableColumnData[]>(() => [
   { title: "制作版本", dataIndex: "mcVersionName", width: 90 },
   // 110 是实测值：`16 × 12 × 16` 在 100px 下会折成两行
   { title: "尺寸", dataIndex: "dims", slotName: "dims", width: 110 },
-  { title: "方块总数", dataIndex: "totalBlocks", width: 90 },
-  { title: "来源目录", dataIndex: "dirName", width: 130, ellipsis: true, tooltip: true },
-  // 1px 占位列，只为让「来源目录」也能拖动。
+  // 方块总数收窄到参考图的 73px：这几列加起来正好等于参考里的目录栏宽度 666
+  { title: "方块总数", dataIndex: "totalBlocks", width: 73 },
+  // 1px 占位列，只为让最后一列（方块总数）也能拖动。
   //
   // Arco 判定可拖动时要求 `index2 < row.length - 1`（table.js:1247）：
   // **最后一列永远不能拖**，因为它的宽度被当成「剩余空间」。
   // 而用户要求每一列都能调宽。补一个 1px 宽的占位列放在最右侧，
-  // 「来源目录」就不再是最后一列，从而获得拖动手柄；
+  // 它就不再是最后一列，从而获得拖动手柄；
   // 占位列自身没有 dataIndex，本来也不参与拖动，且被样式隐藏。
   { title: "", dataIndex: "__filler", width: 1, className: "sidebar__filler-col" },
 ]);
@@ -1509,6 +1521,149 @@ async function pickExportDir(): Promise<string | null> {
   }
 }
 
+/** 列表行的样式类：当前选中项高亮。
+ *
+ * 用 a-table 的 rowClass 而不是自己拼 tr：行的 DOM 由 Arco 生成，
+ * 手改会在排序/筛选重新渲染后丢失。
+ */
+function rowClass(raw: TableData): string {
+  const rec = raw as unknown as SchematicSummary;
+  return selected.value?.path === rec.path ? "row-selected" : "";
+}
+
+// ---------------------------------------------------------------- 界面状态记忆
+
+/** 会被记住的界面状态。
+ *
+ * 只记「用户调过的界面形态」，不记业务数据（备份、资源包等有自己的文件）。
+ * 版本号用于日后改结构时丢弃旧数据，而不是把不认识的字段硬套上去。
+ */
+interface UiState {
+  version: 1;
+  sidebarWidth: number;
+  /** 已添加的目录（顺序保持），下次启动自动重新扫描 */
+  dirs: string[];
+  /** 已勾选显示的目录；缺失时视为全部显示 */
+  enabledDirs?: string[];
+  activeView: string;
+  brightness: number;
+  exportSize: number;
+  searchText: string;
+}
+
+const UI_STATE_VERSION = 1;
+
+/** 把当前界面形态收集成可保存的对象 */
+function collectUiState(): UiState {
+  return {
+    version: UI_STATE_VERSION,
+    sidebarWidth: sidebarWidth.value,
+    dirs: loadedDirs.value,
+    enabledDirs: Array.from(enabledDirs.value),
+    activeView: activeView.value,
+    brightness: brightness.value,
+    exportSize: exportSize.value,
+    searchText: searchText.value,
+  };
+}
+
+let saveStateTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 保存界面状态（合并短时间内的多次改动）。
+ *
+ * 用防抖：拖动分隔条会连续改动侧栏宽度，逐次写盘既无必要也拖慢拖动。
+ */
+function persistUiState() {
+  if (saveStateTimer !== null) clearTimeout(saveStateTimer);
+  saveStateTimer = setTimeout(() => {
+    saveStateTimer = null;
+    void (async () => {
+      try {
+        await saveUiState(JSON.stringify(collectUiState()));
+      } catch (e) {
+        // 记不住界面不是致命问题，但要留下线索：静默失败会让用户以为
+        // 「记住了」，下次启动发现设置全丢却无从判断
+        console.warn("保存界面状态失败：", e);
+      }
+    })();
+  }, 400);
+}
+
+/** 恢复界面状态并重新扫描上次的目录 */
+async function restoreUiState() {
+  let raw: string | null = null;
+  try {
+    raw = await loadUiState();
+  } catch (e) {
+    console.warn("读取界面状态失败，使用默认界面：", e);
+    return;
+  }
+  if (!raw) return;
+
+  let st: Partial<UiState>;
+  try {
+    st = JSON.parse(raw) as Partial<UiState>;
+  } catch (e) {
+    // 内容损坏时不应让程序起不来，也不该静默：明确告知并按默认界面继续
+    console.warn("界面状态内容无法解析，已忽略：", e);
+    Message.warning("上次的界面设置无法读取，已恢复默认界面");
+    return;
+  }
+  // 版本不匹配时丢弃：旧结构硬套会得到难以解释的界面
+  if (st.version !== UI_STATE_VERSION) {
+    console.warn(`界面状态版本为 ${String(st.version)}，当前为 ${UI_STATE_VERSION}，已忽略`);
+    return;
+  }
+
+  if (typeof st.sidebarWidth === "number") {
+    sidebarWidth.value = clampSidebar(st.sidebarWidth);
+  }
+  if (typeof st.activeView === "string" && st.activeView in VIEW_PRESETS) {
+    activeView.value = st.activeView;
+  }
+  if (typeof st.brightness === "number") {
+    brightness.value = Math.min(2, Math.max(0.5, st.brightness));
+  }
+  if (typeof st.exportSize === "number" && EXPORT_SIZES.includes(st.exportSize as never)) {
+    exportSize.value = st.exportSize;
+  }
+  if (typeof st.searchText === "string") {
+    searchText.value = st.searchText;
+  }
+
+  // 重新扫描上次的目录。逐个独立处理：某个目录已被删除或暂时不可读时，
+  // 其余目录仍应恢复，并如实说明少了哪个。
+  const dirs = Array.isArray(st.dirs) ? st.dirs.filter((d) => typeof d === "string") : [];
+  if (dirs.length === 0) return;
+
+  const next: Record<string, SchematicSummary[]> = {};
+  const missing: string[] = [];
+  for (const dir of dirs) {
+    try {
+      const r = await scanLitematics(dir);
+      next[dir] = r.items;
+    } catch {
+      // 目录不存在或不可读：这是常见情况（用户移动/删除了目录），
+      // 不必报错刷屏，但要把它从记忆里去掉，否则每次启动都会重试
+      missing.push(dir);
+    }
+  }
+  dirItems.value = next;
+  // 勾选状态跟随恢复；记录里没有的目录（新增的）默认勾选
+  const keep = new Set(
+    Array.isArray(st.enabledDirs) ? st.enabledDirs.filter((d) => typeof d === "string") : [],
+  );
+  enabledDirs.value = new Set(
+    Object.keys(next).filter((d) => !Array.isArray(st.enabledDirs) || keep.has(d)),
+  );
+  if (missing.length > 0) {
+    Message.warning(`以下目录已无法读取，未恢复：\n${missing.join("\n")}`);
+    // 把失效目录从记忆里清掉
+    persistUiState();
+  }
+  status.value = `已恢复 ${Object.keys(next).length} 个目录`;
+}
+
 async function onRowClick(raw: TableData) {
   const record = raw as unknown as SchematicSummary;
   selected.value = record;
@@ -1529,6 +1684,20 @@ async function onRowClick(raw: TableData) {
 const minimize = () => appWindow.minimize();
 const toggleMaximize = () => appWindow.toggleMaximize();
 const close = () => appWindow.close();
+
+// 记住界面改动。逐个监听而不是 watch 一个大对象：后者要么深比较整棵状态树，
+// 要么在 restoreUiState 写入时也触发一次无谓回写。
+//
+// 这些 watch 都在模块作用域注册（不在 onMounted 里）：组件挂载与卸载是
+// 一对一的，放在挂载里反而会在重复挂载时叠加监听。
+watch(sidebarWidth, persistUiState);
+watch(activeView, persistUiState);
+watch(brightness, persistUiState);
+watch(exportSize, persistUiState);
+watch(searchText, persistUiState);
+// 目录集合变化（添加/移除/勾选）同样要记住
+watch(dirItems, persistUiState, { deep: false });
+watch(enabledDirs, persistUiState, { deep: false });
 
 // 启动即跟随系统主题；不等它完成，免得拖慢首屏
 void followSystemTheme();
@@ -1642,6 +1811,7 @@ void followSystemTheme();
           column-resizable
           :row-selection="{ type: 'checkbox', showCheckedAll: false, width: 40 }"
           :selected-keys="checkedKeys"
+          :row-class="rowClass"
           @selection-change="onSelectionChange"
           @column-resize="onColumnResize"
           @row-click="onRowClick"
@@ -1704,14 +1874,88 @@ void followSystemTheme();
 
       <div class="detail">
         <div class="preview">
-          <div class="preview__stage">
-            <a-spin :loading="sceneLoading" style="width: 100%; height: 100%">
-              <SceneViewer
-                ref="viewer"
-                :scene="scene"
-                :brightness="brightness"
-              />
-            </a-spin>
+          <!-- 预览与信息并排：左边是 3D 视图，右边是该投影的基本信息与元数据。
+               用横向 flex 让「信息在预览右侧」这条要求不随窗口宽度漂移。 -->
+          <div class="preview__main">
+            <div class="preview__stage">
+              <a-spin :loading="sceneLoading" style="width: 100%; height: 100%">
+                <SceneViewer
+                  ref="viewer"
+                  :scene="scene"
+                  :brightness="brightness"
+                />
+              </a-spin>
+            </div>
+            <div class="preview__info" v-if="selected">
+              <!-- 只读基本信息。用紧凑的两列排布并缩小字号，
+                   把纵向空间让给下面的描述框。 -->
+              <dl class="preview__facts">
+                <dt>文件名</dt>
+                <dd :title="selected.fileName">{{ selected.fileName }}</dd>
+                <dt>制作版本</dt>
+                <dd :title="`数据版本 ${selected.dataVersion}`">
+                  {{ selected.mcVersionName || "未知" }}（数据版本 {{ selected.dataVersion }}）
+                </dd>
+                <dt>投影格式</dt>
+                <dd>v{{ selected.formatVersion }}</dd>
+                <dt>尺寸</dt>
+                <dd>{{ formatDims(selected.enclosing) }}</dd>
+                <dt>区域数量</dt>
+                <dd>{{ selected.regionCount }}</dd>
+                <dt>方块总数</dt>
+                <dd>{{ selected.totalBlocks }}</dd>
+                <dt>实体数量</dt>
+                <dd>{{ selected.entityCount }}</dd>
+              </dl>
+
+              <!-- 可编辑元数据。描述按需求做成多行大输入框 -->
+              <a-form :model="draft" layout="vertical" size="small" class="preview__form">
+                <a-form-item label="投影名称">
+                  <a-input
+                    v-model="draft.name"
+                    :disabled="!!selected.error"
+                    @input="dirty = true"
+                  />
+                </a-form-item>
+                <a-form-item label="作者">
+                  <a-input
+                    v-model="draft.author"
+                    :disabled="!!selected.error"
+                    @input="dirty = true"
+                  />
+                </a-form-item>
+                <a-form-item label="描述（备注）">
+                  <a-textarea
+                    v-model="draft.description"
+                    :auto-size="{ minRows: 6, maxRows: 14 }"
+                    placeholder="可多行填写，保存后写入投影文件"
+                    :disabled="!!selected.error"
+                    @input="dirty = true"
+                  />
+                </a-form-item>
+                <a-space>
+                  <a-button
+                    type="primary"
+                    size="small"
+                    :loading="saving"
+                    :disabled="!dirty || !!selected.error"
+                    @click="saveDraft"
+                  >
+                    保存
+                  </a-button>
+                  <a-button size="small" :disabled="!dirty" @click="resetDraft(selected)">
+                    撤销
+                  </a-button>
+                  <span v-if="dirty" class="hint-warn">有未保存的修改</span>
+                  <span v-else-if="!selected.error" class="hint-dim">
+                    保存前会自动备份原件
+                  </span>
+                </a-space>
+              </a-form>
+            </div>
+            <div class="preview__info" v-else>
+              <a-empty description="选择一个投影文件以查看详情" />
+            </div>
           </div>
           <div class="preview__bar">
             <a-radio-group
@@ -1774,51 +2018,8 @@ void followSystemTheme();
         </div>
         <a-tabs default-active-key="info" style="padding: 0 8px">
           <a-tab-pane key="info" title="信息">
-            <template v-if="selected">
-              <a-form :model="draft" layout="vertical" size="small">
-                <a-form-item label="投影名称">
-                  <a-input
-                    v-model="draft.name"
-                    :disabled="!!selected.error"
-                    @input="dirty = true"
-                  />
-                </a-form-item>
-                <a-form-item label="作者">
-                  <a-input
-                    v-model="draft.author"
-                    :disabled="!!selected.error"
-                    @input="dirty = true"
-                  />
-                </a-form-item>
-                <a-form-item label="描述">
-                  <a-textarea
-                    v-model="draft.description"
-                    :auto-size="{ minRows: 3, maxRows: 8 }"
-                    :disabled="!!selected.error"
-                    @input="dirty = true"
-                  />
-                </a-form-item>
-                <a-space>
-                  <a-button
-                    type="primary"
-                    size="small"
-                    :loading="saving"
-                    :disabled="!dirty || !!selected.error"
-                    @click="saveDraft"
-                  >
-                    保存
-                  </a-button>
-                  <a-button size="small" :disabled="!dirty" @click="resetDraft(selected)">
-                    撤销
-                  </a-button>
-                  <span v-if="dirty" class="hint-warn">有未保存的修改</span>
-                  <span v-else-if="!selected.error" class="hint-dim">
-                    保存前会自动备份原件
-                  </span>
-                </a-space>
-              </a-form>
-              <a-divider style="margin: 12px 0" />
-            </template>
+            <!-- 只读明细。可编辑的元数据与最常用的几项已移到预览区右侧，
+                 这里保留其余的详细信息，避免两处重复显示同一字段。 -->
             <a-descriptions
               v-if="selected"
               :column="1"
@@ -1826,28 +2027,19 @@ void followSystemTheme();
               :label-style="{ width: '110px' }"
               bordered
             >
-              <a-descriptions-item label="文件名">{{ selected.fileName }}</a-descriptions-item>
-              <a-descriptions-item label="制作版本">
-                {{ selected.mcVersionName || "未知" }}（数据版本 {{ selected.dataVersion }}）
-              </a-descriptions-item>
-              <a-descriptions-item label="投影格式">v{{ selected.formatVersion }}</a-descriptions-item>
-              <a-descriptions-item label="尺寸(X×Y×Z)">
-                {{ formatDims(selected.enclosing) }}
-              </a-descriptions-item>
-              <a-descriptions-item label="区域数量">{{ selected.regionCount }}</a-descriptions-item>
-              <a-descriptions-item label="方块总数">{{ selected.totalBlocks }}</a-descriptions-item>
-              <a-descriptions-item label="实体数量">{{ selected.entityCount }}</a-descriptions-item>
               <a-descriptions-item label="方块实体">{{ selected.tileEntityCount }}</a-descriptions-item>
               <a-descriptions-item label="待处理刻">{{ selected.pendingTicks }}</a-descriptions-item>
               <a-descriptions-item label="内含预览图">
                 {{ selected.hasPreview ? "是" : "否" }}
               </a-descriptions-item>
               <a-descriptions-item label="文件大小">{{ formatSize(selected.fileSize) }}</a-descriptions-item>
+              <a-descriptions-item label="所在目录">{{ selected.dirName }}</a-descriptions-item>
               <a-descriptions-item v-if="selected.error" label="解析错误">
                 <span style="color: rgb(var(--danger-6))">{{ selected.error }}</span>
               </a-descriptions-item>
             </a-descriptions>
             <a-empty v-else description="选择一个投影文件以查看详情" />
+
           </a-tab-pane>
 
           <a-tab-pane key="blocks" title="方块">

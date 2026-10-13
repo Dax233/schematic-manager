@@ -44,20 +44,36 @@ function disposeScene() {
   built = null;
 }
 
-/** 把相机拉到能完整看到整个投影的位置 */
+/** 模型包围盒的中心；没有模型时返回 null */
+function modelCenter(): THREE.Vector3 | null {
+  if (!built) return null;
+  const box = new THREE.Box3().setFromObject(built.group);
+  if (box.isEmpty()) return null;
+  return box.getCenter(new THREE.Vector3());
+}
+
+/**
+ * 把相机拉到能完整看到整个投影的位置，并把**旋转轴心**放到模型中心。
+ *
+ * 轴心必须一起设：OrbitControls 绕 `target` 旋转，而 target 默认在原点。
+ * 若只移动相机不改 target，结构偏离原点时就会「绕着世界原点转」——
+ * 表现为拖动时模型绕着画面外的一个点甩动，越大的结构越明显。
+ */
 function fitCamera() {
-  if (camera && built) fitCameraTo(camera, built.group);
+  if (!camera || !built) return;
+  fitCameraTo(camera, built.group);
+  const c = modelCenter();
+  if (c) controls?.target.copy(c);
+  controls?.update();
+  renderSoon();
 }
 
 function applyPreset(name: string) {
   if (!camera || !built) return;
   applyPresetTo(camera, built.group, name);
-  controls?.target.copy(camera.position).add(
-    camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(-1),
-  );
-  // 重新取景后要把控制的注视点放到模型中心，否则旋转会绕错点
-  const box = new THREE.Box3().setFromObject(built.group);
-  if (!box.isEmpty()) controls?.target.copy(box.getCenter(new THREE.Vector3()));
+  // 换视角同样要把轴心留在模型中心，否则换完视角再拖动就会绕错点
+  const c = modelCenter();
+  if (c) controls?.target.copy(c);
   controls?.update();
   renderSoon();
 }

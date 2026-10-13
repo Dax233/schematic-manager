@@ -52,6 +52,14 @@ pub mod path {
         ) -> Result<std::path::PathBuf, super::Error> {
             Ok(path.as_ref().to_path_buf())
         }
+
+        /// 应用配置目录。界面状态存在这里（见 commands::ui_state_path）。
+        ///
+        /// 真实 tauri 由平台约定决定具体路径；离线检查只验证类型与调用形态，
+        /// 因此这里给一个合法且确定的位置即可。
+        pub fn app_config_dir(&self) -> Result<std::path::PathBuf, super::Error> {
+            Ok(std::path::PathBuf::from("config"))
+        }
     }
 }
 

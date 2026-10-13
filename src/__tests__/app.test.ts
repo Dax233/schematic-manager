@@ -104,6 +104,13 @@ function stubInvoke(overrides: Record<string, unknown> = {}) {
   mockInvoke.mockImplementation((async (cmd: string) => {
     if (cmd in overrides) return overrides[cmd];
     switch (cmd) {
+      case "load_ui_state":
+        // 契约是 string | null。默认「从未保存过」，因此回 null；
+        // 回数组会让 App.vue 走进 JSON 解析失败分支并弹出警告，
+        // 那是替身给错类型造成的噪声，不是真实行为。
+        return null;
+      case "save_ui_state":
+        return undefined;
       case "scan_litematics":
         return { items: [summary], skippedDirs: 0, skippedPaths: [] };
       case "build_scene":
@@ -1034,17 +1041,17 @@ describe("多目录与列宽复位", () => {
     // jsdom 不做布局，所有元素尺寸都是 0，量出来只会得到 0 比 0。
     // colgroup 的 <col> 带的是 Arco 实际使用的列宽，也就是渲染依据本身。
     const cols = w.findAll(".sidebar colgroup col");
-    // 选择列 + 5 个数据列 + 1 个 1px 占位列（让最后一列也能拖动）
-    expect(cols.length, "应有 7 列（含选择列与占位列）").toBe(7);
+    // 选择列 + 4 个数据列 + 1 个 1px 占位列（让最后一列也能拖动）
+    expect(cols.length, "应有 6 列（含选择列与占位列）").toBe(6);
     const widthOf = (i: number) => {
       const style = cols[i].attributes("style") ?? "";
       const m = /width:\s*([\d.]+)px/.exec(style);
       expect(m, `第 ${i} 列应带宽度：${style}`).toBeTruthy();
       return Number(m![1]);
     };
-    // 顺序：选择列、名称、制作版本、尺寸、方块总数、来源目录、占位列
+    // 顺序：选择列、名称、制作版本、尺寸、方块总数、占位列
     const name = widthOf(1);
-    const others = [widthOf(2), widthOf(3), widthOf(4), widthOf(5)];
+    const others = [widthOf(2), widthOf(3), widthOf(4)];
     // 用关系而不是绝对值：绝对值会随后续样式微调而失效，
     // 这里要保证的是「名称确实是被加宽的那一列」。
     expect(
@@ -1142,6 +1149,135 @@ describe("多目录与列宽复位", () => {
     expect(w.text(), "文件已不显示，应回到空状态").toContain("选择一个投影文件以查看详情");
     const btn = (label: string) => w.findAll("button").find((x) => x.text().includes(label));
     expect(btn("方块替换")?.attributes("disabled"), "依赖选中项的按钮应禁用").toBeDefined();
+    w.unmount();
+  });
+});
+
+/** 界面状态记忆。用户要求「下次打开保持记忆」，
+ *  这里的重点是：记住的确实被写出去、能读回来、脏数据不炸。
+ */
+describe("界面状态记忆", () => {
+  /** 取最后一次 save_ui_state 的 JSON */
+  function lastSaved(): Record<string, unknown> | null {
+    const calls = mockInvoke.mock.calls.filter((c) => c[0] === "save_ui_state");
+    if (calls.length === 0) return null;
+    const arg = calls[calls.length - 1][1] as { json: string };
+    return JSON.parse(arg.json) as Record<string, unknown>;
+  }
+
+  it("改变目录栏宽度后会保存，且能被读回", async () => {
+    vi.useFakeTimers();
+    try {
+      const w = mountApp();
+      await flushPromises();
+      const before = mockInvoke.mock.calls.filter((c) => c[0] === "save_ui_state").length;
+
+      // 拖动分隔条改宽度
+      const splitter = w.find(".splitter").element as HTMLElement;
+      splitter.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 0 }),
+      );
+      window.dispatchEvent(new PointerEvent("pointermove", { clientX: 900 }));
+      window.dispatchEvent(new PointerEvent("pointerup", { clientX: 900 }));
+      await flushPromises();
+      // 防抖：要推进定时器才会真正写盘
+      vi.advanceTimersByTime(500);
+      await flushPromises();
+
+      const after = mockInvoke.mock.calls.filter((c) => c[0] === "save_ui_state").length;
+      expect(after, "改宽度后应触发保存").toBeGreaterThan(before);
+      const saved = lastSaved();
+      expect(saved, "应能解析出保存内容").toBeTruthy();
+      expect(saved!.version, "应带版本号").toBe(1);
+      expect(typeof saved!.sidebarWidth, "应记住侧栏宽度").toBe("number");
+      expect(saved!.sidebarWidth, "记住的应是拖动后的宽度").toBeGreaterThan(666);
+      w.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("记住已添加的目录，重启时自动重新扫描", async () => {
+    // 上次保存的内容
+    const state = {
+      version: 1,
+      sidebarWidth: 700,
+      dirs: ["/p", "/q"],
+      enabledDirs: ["/p"],
+      activeView: "front",
+      brightness: 1.0,
+      exportSize: 2048,
+      searchText: "",
+    };
+    const scanned: string[] = [];
+    mockInvoke.mockImplementation((async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "load_ui_state") return JSON.stringify(state);
+      if (cmd === "save_ui_state") return undefined;
+      if (cmd === "scan_litematics") {
+        const d = String((args as { dir?: string } | undefined)?.dir ?? "");
+        scanned.push(d);
+        return { items: [{ ...summary, path: `${d}/${d.replace(/\//g, "")}.litematic`, fileName: `${d.replace(/\//g, "")}.litematic`, dirName: d }], skippedDirs: 0, skippedPaths: [] };
+      }
+      if (cmd === "analyze_schematic") {
+        return { blocks: [], entities: [], tileEntities: [], nonAirTotal: 0, airTotal: 0, distinctBlockTypes: 0, distinctStates: 0 };
+      }
+      return undefined;
+    }) as never);
+
+    const w = mountApp();
+    await flushPromises();
+    await flushPromises();
+
+    expect(scanned, "应重新扫描上次记住的两个目录").toEqual(["/p", "/q"]);
+    expect(w.find(".sidebar").element.getAttribute("style"), "应恢复侧栏宽度").toContain("700");
+    expect(w.text(), "应显示恢复出来的文件").toContain("p.litematic");
+    // enabledDirs 只勾了 /p：/q 的文件不应出现，计数也只算勾选的那一个
+    expect(w.text(), "未勾选的目录不应显示其文件").not.toContain("q.litematic");
+    expect(w.text(), "计数应只算勾选的目录").toContain("共 1 个投影");
+    w.unmount();
+  });
+
+  it("保存内容损坏时按默认界面继续，并提示用户", async () => {
+    // 用 spy 断言：Arco 的 Message 走 portal 渲染，查 document.body 不可靠
+    // （本仓库既有的做法就是 vi.spyOn(Message, ...)）
+    const warnSpy = vi.spyOn(Message, "warning");
+    mockInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === "load_ui_state") return "{ 这不是合法 JSON";
+      if (cmd === "scan_litematics") return { items: [summary], skippedDirs: 0, skippedPaths: [] };
+      return undefined;
+    }) as never);
+
+    try {
+      const w = mountApp();
+      await flushPromises();
+      // 不应抛错、界面仍可用，且明确告知
+      expect(w.find(".sidebar").exists(), "界面应仍然正常").toBe(true);
+      expect(
+        warnSpy.mock.calls.some((c) => String(c[0]).includes("界面设置")),
+        "应提示设置无法读取，而不是静默按默认界面启动",
+      ).toBe(true);
+      w.unmount();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("版本号不匹配时丢弃旧数据，不硬套到新结构上", async () => {
+    mockInvoke.mockImplementation((async (cmd: string) => {
+      // 未来版本写的状态
+      if (cmd === "load_ui_state") {
+        return JSON.stringify({ version: 99, sidebarWidth: 111, dirs: ["/p"] });
+      }
+      if (cmd === "scan_litematics") return { items: [summary], skippedDirs: 0, skippedPaths: [] };
+      return undefined;
+    }) as never);
+
+    const w = mountApp();
+    await flushPromises();
+    expect(
+      w.find(".sidebar").element.getAttribute("style"),
+      "不认识的版本不应被套用".replace("不应被套用", "不应被采用"),
+    ).not.toContain("111");
     w.unmount();
   });
 });

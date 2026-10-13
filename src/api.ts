@@ -184,3 +184,15 @@ export function copyFilesToDir(paths: string[], destDir: string): Promise<FileOp
 export function revealInFileManager(path: string): Promise<void> {
   return invoke<void>("reveal_in_file_manager", { path });
 }
+
+// ---------------------------------------------------------------- 界面状态记忆
+
+/** 读取上次保存的界面状态；从未保存过时为 null */
+export function loadUiState(): Promise<string | null> {
+  return invoke<string | null>("load_ui_state");
+}
+
+/** 保存界面状态（一段前端解释的 JSON） */
+export function saveUiState(json: string): Promise<void> {
+  return invoke<void>("save_ui_state", { json });
+}

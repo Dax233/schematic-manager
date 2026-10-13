@@ -77,6 +77,8 @@ pub fn run() {
             commands::copy_files_to_clipboard,
             commands::copy_files_to_dir,
             commands::reveal_in_file_manager,
+            commands::load_ui_state,
+            commands::save_ui_state,
         ])
         .run(tauri::generate_context!());
 

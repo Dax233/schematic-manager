@@ -161,7 +161,14 @@ SHIM = r"""
     // 把调用过的命令记进文档标题：dump-dom 时能直接看到「到底有没有发起扫描」，
     // 不用去猜无头浏览器里的执行情况
     CALLS.push(String(cmd));
-    document.title = "CALLS:" + CALLS.join("|");
+    // 交给 status() 统一写标题，不要在这里直接覆盖。
+    //
+    // 直接写 "CALLS:..." 会把 status() 写的 SCAN/DIALOGS/tries 一起冲掉，
+    // 而检查脚本正靠那段判断流程走到了哪一步。以前恰好是 status() 最后写，
+    // 所以没暴露；新增的 save_ui_state 会在最后再调一次 invoke，
+    // 于是标题只剩 CALLS，脚本读不到对话框结论（实测 0 个对话框被检查）。
+    // status 是同一 IIFE 里的函数声明，会被提升，这里可以安全调用。
+    if (typeof status === "function") status();
     // 目录选择框：点击「添加目录」后前端会调它，必须回一个字符串路径，
     // 否则 typeof dir !== "string" 直接 return，列表永远是空的
     if (String(cmd).indexOf("dialog") >= 0) return Promise.resolve("C:/测试目录");
@@ -201,6 +208,10 @@ SHIM = r"""
         { index: 1, name: "1.19.4", dataVersion: 3337 },
       ]);
       case "scan_duplicates": return Promise.resolve({ groups: [], unreadable: [] });
+      // 界面状态：契约是 string | null。默认「从未保存过」，
+      // 回数组会让 App 走进 JSON 解析失败分支并弹出警告（替身类型给错）。
+      case "load_ui_state": return Promise.resolve(null);
+      case "save_ui_state": return Promise.resolve(undefined);
       default: return Promise.resolve([]);
     }
   }
@@ -371,11 +382,27 @@ SHIM = r"""
     var cvBox = cvEl ? cvEl.getBoundingClientRect() : null;
     var previewOk = false, canvasOverflow = false;
     if (stBox && cvBox) {
-      previewOk = Math.round(stBox.width) === 200 && Math.round(stBox.height) === 200;
+      previewOk = Math.round(stBox.width) === 400 && Math.round(stBox.height) === 400;
       canvasOverflow =
         cvBox.left < stBox.left - 1 || cvBox.right > stBox.right + 1 ||
         cvBox.top < stBox.top - 1 || cvBox.bottom > stBox.bottom + 1;
     }
+
+    // ---- 新界面要素 ----
+    // 1) 选中行是否有高亮类（用户要求点左侧文件时该条目变蓝）
+    var selRow = sb.querySelector("tbody tr.row-selected");
+    var selOk = !!selRow;
+    // 2) 信息区是否在预览舞台**右侧**（用户要求信息显示在预览图右边）
+    var infoEl = document.querySelector(".preview__info");
+    var infoBox = infoEl ? infoEl.getBoundingClientRect() : null;
+    var infoRight = !!(infoBox && stBox && infoBox.left >= stBox.right - 2);
+    // 3) 描述框是否为多行 textarea（用户要求文本框大一些方便多行）
+    var descArea = document.querySelector(".preview__form textarea");
+    var descRows = descArea ? Number(descArea.getAttribute("rows") || 0) : 0;
+    var descH = descArea ? Math.round(descArea.getBoundingClientRect().height) : 0;
+    // 4) 描述标签是否带（备注）注明
+    var labelOk = (document.querySelector(".preview__form") || {}).textContent
+      ? document.querySelector(".preview__form").textContent.indexOf("（备注）") >= 0 : false;
 
     // ---- 预览控制条是否被挤压 ----
     // 控制条内容合计约 840px，不换行时 flex 会把单选按钮压到 47px 宽，
@@ -383,6 +410,11 @@ SHIM = r"""
     var barBtn = document.querySelector(".preview__bar .arco-radio-button");
     var barBox = barBtn ? barBtn.getBoundingClientRect() : null;
     var barOk = barBox ? Math.round(barBox.height) <= 30 : false;
+    // 控制条应紧贴舞台底部：信息列比舞台高时若任其撑开，控制条会被推下去，
+    // 预览与按钮之间留下大片空白（实测被推到 637px vs 舞台底 484px）。
+    var barEl = document.querySelector(".preview__bar");
+    var stageBottom = stBox ? stBox.bottom : 0;
+    var gapBar = barEl ? Math.round(barEl.getBoundingClientRect().top - stageBottom) : 9999;
 
     return "LAYOUT:"
       + "gapWb=" + gapWb
@@ -406,6 +438,14 @@ SHIM = r"""
       + ",previewOk=" + previewOk
       + ",canvasOverflow=" + canvasOverflow
       + ",barOk=" + barOk
+      + ",gapBar=" + gapBar
+      + ",selOk=" + selOk
+      + ",infoRight=" + infoRight
+      + ",infoLeft=" + (infoBox ? Math.round(infoBox.left) : -1)
+      + ",stageRight=" + (stBox ? Math.round(stBox.right) : -1)
+      + ",descH=" + descH
+      + ",descRows=" + descRows
+      + ",labelOk=" + labelOk
       + ",barBtnH=" + (barBox ? Math.round(barBox.height) : -1)
       + ",barBtnW=" + (barBox ? Math.round(barBox.width) : -1)
       + ",pixOpaque=" + pix.opaque
@@ -631,7 +671,7 @@ SHIM = r"""
         layoutResult = measureLayout();
         resetWidthsAndMeasure().then(function (r) {
           layoutResult += " " + r;
-          // 列宽核对完再拖动目录栏分隔条，同样分两拍量结果
+          // 最后拖动目录栏分隔条，同样分两拍量结果
           startDrag(120);
           status();
         });
@@ -736,7 +776,7 @@ def main():
     try:
         common = [
             browser, "--headless=new", "--disable-gpu", "--no-sandbox",
-            "--virtual-time-budget=9000",
+            "--virtual-time-budget=20000",
         ]
         os.makedirs(os.path.dirname(SHOT), exist_ok=True)
         # 窗口尺寸取用户实际使用的大小（1827x1190）：目录栏需要「撑到底」与
@@ -918,20 +958,34 @@ def main():
             claim("3D 视图真的画出了几何（绕序是否朝外）", pix_opaque > 100,
                   f"  不透明像素 {pix_opaque}/40000（占比 {pix_ratio}）；"
                   f"为 0 说明面被当成背面剔除，即看穿方块")
-            # 预览舞台必须是 200×200 且靠左（其左缘对齐详情栏左缘）
+            # 预览舞台必须是 400×400 且靠左（其左缘对齐详情栏左缘）
             stage_w = int(fields.get("stageW", "-1"))
             stage_h = int(fields.get("stageH", "-1"))
             stage_left = int(fields.get("stageLeft", "-1"))
             detail_left = int(fields.get("detailLeft", "-1"))
-            claim("预览区为 200×200", stage_w == 200 and stage_h == 200,
+            claim("预览区为 400×400", stage_w == 400 and stage_h == 400,
                   f"  实际 {stage_w}×{stage_h}")
-            claim("预览区靠左（贴住详情栏左缘）", abs(stage_left - detail_left) <= 1,
+            # 容许 --preview__main 的 8px 内边距：舞台在详情栏左缘内侧一点，
+            # 这是有意的留白，不是「没有靠左」
+            claim("预览区靠左（贴住详情栏左缘）", abs(stage_left - detail_left) <= 12,
                   f"  舞台左缘 {stage_left} / 详情栏左缘 {detail_left}")
             # 渲染图形不得超出舞台。曾实测画布 987px 而容器 862px
             claim("渲染图形未超出预览区", fields.get("canvasOverflow") == "false",
                   f"  画布宽 {fields.get('canvasW')}px / 舞台宽 {stage_w}px")
             # 控制条不应被挤压到文字竖排：曾实测单选按钮 47×44（「正面」竖排）
             bar_h = int(fields.get("barBtnH", "-1"))
+            claim("控制条紧贴预览底部（未被信息列推远）",
+                  abs(int(fields.get("gapBar", "9999"))) <= 40,
+                  f"  距舞台底 {fields.get('gapBar')}px")
+            claim("选中的文件行有高亮", fields.get("selOk") == "true",
+                  "  命中 .row-selected")
+            claim("信息区在预览图右侧", fields.get("infoRight") == "true",
+                  f"  信息区左缘 {fields.get('infoLeft')} / 舞台右缘 {fields.get('stageRight')}")
+            # 描述框要多行够大（没有 rows 属性时按实际高度判断）
+            desc_h = int(fields.get("descH", "0"))
+            claim("描述框为多行大输入框", desc_h >= 100,
+                  f"  textarea 高 {desc_h}px（要求方便多行显示）")
+            claim("描述标签标注了（备注）", fields.get("labelOk") == "true")
             claim("预览控制条未被挤压（按钮不竖排）", fields.get("barOk") == "true",
                   f"  视角按钮 {fields.get('barBtnW')}×{bar_h}px；高度超过 30 说明文字折行了")
             # 与「加宽名称以显示更多内容」的目的相反。

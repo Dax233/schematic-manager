@@ -40,6 +40,8 @@
 #[path = "../../src-tauri/src/pool.rs"] mod pool;
 #[path = "../../src-tauri/src/replace.rs"] mod replace;
 #[path = "../../src-tauri/src/scene.rs"] mod scene;
+// 方块染色：visibility 用它给四边形算着色系数
+#[path = "../../src-tauri/src/tint.rs"] mod tint;
 #[path = "../../src-tauri/src/transform.rs"] mod transform;
 #[path = "../../src-tauri/src/visibility.rs"] mod visibility;
 #[path = "../../src-tauri/src/zip.rs"] mod zip;

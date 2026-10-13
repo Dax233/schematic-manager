@@ -41,6 +41,7 @@
 #[path = "../../src-tauri/src/pack_registry.rs"] mod pack_registry;
 #[path = "../../src-tauri/src/replace.rs"] mod replace;
 #[path = "../../src-tauri/src/scene.rs"] mod scene;
+#[path = "../../src-tauri/src/tint.rs"] mod tint;
 #[path = "../../src-tauri/src/transform.rs"] mod transform;
 #[path = "../../src-tauri/src/visibility.rs"] mod visibility;
 #[path = "../../src-tauri/src/zip.rs"] mod zip;
