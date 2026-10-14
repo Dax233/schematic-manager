@@ -1549,8 +1549,14 @@ describe("方块栏渲染图", () => {
       .filter((c) => c[0] === "render_block_icons")
       .map((c) => (c[1] as { states: string[] }).states);
     expect(calls.length).toBe(1);
-    expect(calls[0].length, "一页 50 行，只该请求这 50 个").toBe(50);
-    expect(calls[0]).not.toContain("minecraft:b60");
+    // 断言的判据是「请求的正好是当前渲染出来的那些行」，而不是写死 50：
+    // 写死页大小只是在核对配置常量，页大小改了这条测试就要跟着改，
+    // 却并不能说明「有没有多请求」。
+    const rendered = w.findAll(".block-table tbody tr").length;
+    expect(rendered, "应渲染出下一页数量的行").toBeGreaterThan(0);
+    expect(calls[0].length, "请求的方块数应与渲染出的行数一致").toBe(rendered);
+    expect(calls[0].length, "不该把整表一次拉回来").toBeLessThan(many.length);
+    expect(calls[0]).not.toContain("minecraft:b110");
     w.unmount();
   });
 
@@ -1609,6 +1615,111 @@ describe("方块栏渲染图", () => {
       .map((c) => (c[1] as { states: string[] }).states);
     expect(states.length, "应发生第二批请求").toBe(2);
     expect(states[1][0], "第二批应是第 51 行起的方块").toBe("minecraft:b50");
+    w.unmount();
+  });
+
+  it("翻回已看过的页不再重复请求（缓存命中）", async () => {
+    const many: BlockCount[] = Array.from({ length: 120 }, (_, i) => ({
+      name: `minecraft:b${i}`,
+      state: `minecraft:b${i}`,
+      count: i + 1,
+      zhName: `方块${i}`,
+      enName: `B${i}`,
+    }));
+    const w = await selectWithBlocks(many, {
+      render_block_icons: many
+        .slice(0, 50)
+        .map((r) => ({ state: r.state, dataUrl: "data:image/png;base64,AA==", error: "" })),
+    });
+    const page = (n: string) =>
+      [...document.querySelectorAll(".arco-pagination-item")].find(
+        (el) => (el.textContent ?? "").trim() === n,
+      ) as HTMLElement | undefined;
+
+    const count = () => mockInvoke.mock.calls.filter((c) => c[0] === "render_block_icons").length;
+    expect(count(), "第一页应有一次请求").toBe(1);
+
+    page("2")!.click();
+    await flushPromises();
+    expect(count(), "第二页还没取过，应再请求一次").toBe(2);
+
+    page("1")!.click();
+    await flushPromises();
+    expect(count(), "翻回第一页应命中缓存，不再请求").toBe(2);
+    w.unmount();
+  });
+
+  it("换投影时正在飞的渲染图请求不会写进新表", async () => {
+    // 两个投影里有**同一个状态键**的方块：这正是缓存被串的关键条件——
+    // 状态键不同的话，旧响应根本填不到新表的行上，守卫有没有都一样。
+    const sameKey = "minecraft:stone";
+    const make = (zh: string): BlockCount[] => [
+      { name: sameKey, state: sameKey, count: 5, zhName: zh, enName: "Stone" },
+    ];
+
+    let selected = make("石头甲");
+    /** 第一次请求的 resolver：故意不返回，模拟「请求还在飞」 */
+    let staleResolve: ((v: unknown) => void) | null = null;
+    let iconCall = 0;
+
+    stubInvoke();
+    const base = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((async (cmd: string, args: never) => {
+      if (cmd === "analyze_schematic") {
+        return {
+          blocks: selected,
+          entities: [],
+          tileEntities: [],
+          nonAirTotal: 0,
+          airTotal: 0,
+          distinctBlockTypes: selected.length,
+          distinctStates: selected.length,
+        };
+      }
+      if (cmd === "render_block_icons") {
+        iconCall += 1;
+        if (iconCall === 1) {
+          return new Promise((res) => {
+            staleResolve = res as (v: unknown) => void;
+          });
+        }
+        // 新投影的请求立刻返回
+        return (args as { states: string[] }).states.map((s) => ({
+          state: s,
+          dataUrl: "data:image/png;base64,NEW",
+          error: "",
+        }));
+      }
+      return base(cmd, args);
+    }) as never);
+
+    mockOpen.mockResolvedValue("/p");
+    const w = mountApp();
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    const fileRow = w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!;
+    await fileRow.trigger("click");
+    await flushPromises();
+    expect(staleResolve, "第一个请求应已发出并停在飞行中").toBeTruthy();
+
+    // 用户换到另一个投影（同一个状态键）
+    selected = make("石头乙");
+    await fileRow.trigger("click");
+    await flushPromises();
+    expect(w.find("img.block-icon").attributes("src"), "新投影应显示新图").toContain("NEW");
+
+    // 旧请求这时才回来——它属于上一个投影，必须被丢弃
+    iconCall = 0;
+    const srcsAfter: string[] = [];
+    staleResolve!([
+      { state: sameKey, dataUrl: "data:image/png;base64,STALE", error: "" },
+    ]);
+    await flushPromises();
+    srcsAfter.push(...w.findAll("img.block-icon").map((i) => i.attributes("src") ?? ""));
+    expect(
+      srcsAfter.some((s) => s.includes("STALE")),
+      "旧投影的响应不该覆盖新投影已显示的图",
+    ).toBe(false);
     w.unmount();
   });
 });

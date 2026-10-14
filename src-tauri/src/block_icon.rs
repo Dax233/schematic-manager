@@ -19,6 +19,27 @@ use crate::visibility::Quad;
 
 /// 默认输出边长（像素）
 pub const ICON_SIZE: u32 = 64;
+/// 允许的输出边长区间。
+///
+/// 光栅化缓冲是 `(size*SUPERSAMPLE)² * 4` 字节，且每次请求可带最多 256 个方块，
+/// 因此 size 必须有上界：size=4096 单张就要 1 GiB，而 Rust 分配失败是 abort
+/// 进程、不是可捕获错误。下界保证图形还有可辨认的尺寸。
+pub const MIN_ICON_SIZE: u32 = 16;
+pub const MAX_ICON_SIZE: u32 = 256;
+
+/// 校验请求的输出边长。
+///
+/// 单独成函数是为了能脱离 AppHandle 直接测（`render_block_icons` 本身
+/// 需要 Tauri 运行时，单测拿不到）。
+pub fn check_icon_size(size: u32) -> AppResult<u32> {
+    if !(MIN_ICON_SIZE..=MAX_ICON_SIZE).contains(&size) {
+        return Err(AppError::Parse(format!(
+            "渲染图边长 {size} 超出允许范围 {MIN_ICON_SIZE}..={MAX_ICON_SIZE}"
+        )));
+    }
+    Ok(size)
+}
+
 /// 超采样倍数。
 ///
 /// 不做超采样时，一张 16×16 的贴图按最近邻投到 64 像素上，斜边会明显锯齿；
@@ -163,9 +184,7 @@ pub fn render_rgba(
     state_key: &str,
     size: u32,
 ) -> AppResult<png::Image> {
-    if size == 0 {
-        return Err(AppError::Parse("渲染图尺寸不能为 0".into()));
-    }
+    check_icon_size(size)?;
     if version_idx >= db.versions.len() {
         return Err(AppError::Parse(format!("方块库中没有下标为 {version_idx} 的版本")));
     }
@@ -253,17 +272,11 @@ pub fn render_rgba(
 
     for q in &quads {
         let p: [[f32; 3]; 4] = std::array::from_fn(|k| to_px(q.pts[k]));
-        let Some(rgba) = scene::texture_rgba(db, q.texture) else {
+        let Some(tex) = Texture::load(db, q.texture) else {
             // 贴图像素缺失时跳过这个面，而不是画成纯色占位：
             // 占位色会让用户以为该方块就长这样
             continue;
         };
-        let Some(tex) = db.textures.get(q.texture as usize) else { continue };
-        let tw = tex.w as f32;
-        let th = tex.h as f32;
-        if tw <= 0.0 || th <= 0.0 {
-            continue;
-        }
         // 四边形拆成两个三角形，绕序与面法线一致（0-2-1 与 0-3-2）
         for tri in [[0usize, 2, 1], [0, 3, 2]] {
             raster_triangle(
@@ -272,32 +285,82 @@ pub fn render_rgba(
                 [p[tri[0]], p[tri[1]], p[tri[2]]],
                 [q.uv[tri[0]], q.uv[tri[1]], q.uv[tri[2]]],
                 q.color,
-                &rgba,
-                tex.w as usize,
-                tex.h as usize,
-                tw,
-                th,
+                &tex,
             );
         }
     }
 
-    let out = downsample(&buf, canvas as usize, size as usize, ss as usize);
+    // 一个不透明像素都没有时说明贴图全丢了，返回一张看不见的图会让界面
+    // 显示一个空白 <img>——既不出「无图」也没有原因，比直接报错更难排查。
+    if !buf.chunks_exact(4).any(|px| px[3] > 0) {
+        return Err(AppError::Parse(format!(
+            "方块 {state_key} 的贴图没有任何可见像素"
+        )));
+    }
+
+    let mut out = downsample(&buf, canvas as usize, size as usize, ss as usize);
+    unpremultiply(&mut out);
     Ok(png::Image { width: size, height: size, rgba: out })
 }
 
+/// 一张贴图的像素与尺寸。
+///
+/// 打包成一个类型而不是把像素、宽、高分开传：三者必须一起对应同一张贴图，
+/// 分开传时形参列表里同时出现 usize 与 f32 两份尺寸，很容易传错位，
+/// 而传错位的后果是取到别的像素而不是报错。
+struct Texture {
+    rgba: Vec<u8>,
+    w: usize,
+    h: usize,
+}
+
+impl Texture {
+    /// 取某个贴图池下标对应的像素；缺数据或尺寸为 0 时返回 None。
+    fn load(db: &BlockDb, index: u32) -> Option<Texture> {
+        let tex = db.textures.get(index as usize)?;
+        if tex.w == 0 || tex.h == 0 {
+            return None;
+        }
+        Some(Texture {
+            rgba: scene::texture_rgba(db, index)?,
+            w: tex.w as usize,
+            h: tex.h as usize,
+        })
+    }
+}
+
+/// 把预乘 alpha 的缓冲还原成 PNG 要求的直通 alpha。
+///
+/// 光栅化阶段按预乘累加（`src*alpha + dst*(1-alpha)`），这对超采样取平均是
+/// 必须的：预乘值可以线性平均，直通值不行。但 PNG（以及浏览器合成）用的都是
+/// 直通 alpha，即 RGB 是**未乘**alpha 的颜色。直接把预乘值当直通值写出去，
+/// 等于让浏览器再乘一次 alpha：50% 的纯红会被画成 (191,127,127) 而不是
+/// (255,127,127)，染色玻璃整片发暗，抗锯齿边缘也会被背景吃掉。
+fn unpremultiply(rgba: &mut [u8]) {
+    for px in rgba.chunks_exact_mut(4) {
+        let a = px[3];
+        if a == 0 {
+            // 全透明像素的颜色无意义，归零以免解码方看到脏数据
+            px[0] = 0;
+            px[1] = 0;
+            px[2] = 0;
+        } else if a < 255 {
+            let inv = 255.0 / a as f32;
+            for c in &mut px[..3] {
+                *c = ((*c as f32 * inv).round()).clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+}
+
 /// 光栅化一个三角形：三角形内的像素按重心坐标插值贴图坐标，做最近邻采样。
-#[allow(clippy::too_many_arguments)]
 fn raster_triangle(
     buf: &mut [u8],
     size: usize,
     p: [[f32; 3]; 3],
     uv: [[f32; 2]; 3],
     color: [f32; 3],
-    tex: &[u8],
-    tex_w: usize,
-    tex_h: usize,
-    tw: f32,
-    th: f32,
+    tex: &Texture,
 ) {
     let area = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1])
         - (p[2][0] - p[0][0]) * (p[1][1] - p[0][1]);
@@ -334,10 +397,10 @@ fn raster_triangle(
             // 与三维预览保持一致：Three.js 侧同样用 uv/16 采样。
             let u = (w0 * uv[0][0] + w1 * uv[1][0] + w2 * uv[2][0]) / 16.0;
             let v = (w0 * uv[0][1] + w1 * uv[1][1] + w2 * uv[2][1]) / 16.0;
-            let tx = ((u * tw) as isize).clamp(0, tex_w as isize - 1) as usize;
-            let ty = ((v * th) as isize).clamp(0, tex_h as isize - 1) as usize;
-            let ti = (ty * tex_w + tx) * 4;
-            let src = match tex.get(ti..ti + 4) {
+            let tx = ((u * tex.w as f32) as isize).clamp(0, tex.w as isize - 1) as usize;
+            let ty = ((v * tex.h as f32) as isize).clamp(0, tex.h as isize - 1) as usize;
+            let ti = (ty * tex.w + tx) * 4;
+            let src = match tex.rgba.get(ti..ti + 4) {
                 Some(s) => s,
                 None => continue,
             };
@@ -351,7 +414,9 @@ fn raster_triangle(
             for c in 0..3 {
                 let v = (src[c] as f32 / 255.0) * color[c];
                 let s = (v * 255.0).clamp(0.0, 255.0);
-                // 源在目标之上做普通（非预乘）alpha 混合
+                // 按**预乘** alpha 累加：RGB 侧乘上自己的 alpha，alpha 侧正常合成。
+                // 预乘是超采样取平均的前提（只有预乘值能线性平均），
+                // 写 PNG 之前再由 unpremultiply 还原成直通 alpha。
                 let d = dst[c] as f32 / 255.0;
                 dst[c] = ((s / 255.0 * sa + d * (1.0 - sa)) * 255.0).round() as u8;
             }
@@ -628,9 +693,86 @@ mod tests {
         );
     }
 
+    /// 半透明贴图渲染出的像素必须是**直通** alpha，不能是预乘。
+    ///
+    /// 这条守的是 PNG 与浏览器合成语义：PNG 存的是未乘 alpha 的颜色，
+    /// 浏览器的 `<img>` 会把 RGB 再按 alpha 合成一次。光栅化阶段为了能对
+    /// 超采样取平均，必须按预乘累加，因此写出去之前必须还原——
+    /// 漏掉还原时，50% 的纯红在透明底上会存成 (128,0,0,128) 而不是
+    /// (255,0,0,128)，界面里染色玻璃整片发暗、抗锯齿边缘被背景吃掉。
+    ///
+    /// 断言的判据是「存下来的 RGB 等于贴图原色」：这个关系与预乘与否直接冲突，
+    /// 写死某个灰度值做不到这一点。
+    #[test]
+    fn translucent_icon_stores_straight_alpha() {
+        let mut db = test_db();
+        // 2×2 的纯红半透明像素
+        db.pixels = vec![255, 0, 0, 128].repeat(4);
+        // 六个面全部保留，保证画面里有半透明像素
+        for f in db.models[0].elements[0].faces.iter_mut() {
+            f.cullface = 0xFF;
+        }
+
+        let img = render_rgba(&db, 0, "minecraft:stone", 64).unwrap();
+        let mut partial = 0usize;
+        let mut max_red = 0u8;
+        for px in img.rgba.chunks_exact(4) {
+            if px[3] == 0 || px[3] == 255 {
+                continue;
+            }
+            partial += 1;
+            max_red = max_red.max(px[0]);
+        }
+        assert!(partial > 0, "应画出半透明像素，实际一个都没有");
+        // 顶面的明暗系数是 1.0，因此那里的半透明像素红通道应回到满值。
+        // 存成预乘值时，红通道等于 255×alpha/255×明暗 ≈ 128，一眼可辨。
+        assert!(
+            max_red >= 250,
+            "半透明像素存的是预乘值：最亮的红通道只有 {max_red}，\
+             直通 alpha 下顶面（明暗 1.0）应接近 255"
+        );
+    }
+
+    /// 输出边长超限必须报错，而不是申请一块巨型缓冲。
+    ///
+    /// 缓冲是 `(size*4)² * 4` 字节：size=4096 就要 1 GiB，而 Rust 分配失败是
+    /// abort 进程、不是可捕获错误，界面会直接消失。
+    #[test]
+    fn icon_size_must_stay_within_bounds() {
+        assert_eq!(check_icon_size(MIN_ICON_SIZE).unwrap(), MIN_ICON_SIZE);
+        assert_eq!(check_icon_size(MAX_ICON_SIZE).unwrap(), MAX_ICON_SIZE);
+        assert_eq!(check_icon_size(ICON_SIZE).unwrap(), ICON_SIZE);
+
+        for bad in [0u32, 1, MIN_ICON_SIZE - 1, MAX_ICON_SIZE + 1, 4096, 65536] {
+            let e = check_icon_size(bad).unwrap_err().to_string();
+            assert!(
+                e.contains(&bad.to_string()),
+                "错误信息应指明收到的边长 {bad}：{e}"
+            );
+        }
+        // 渲染入口也必须拦住，而不是只在命令层拦
+        let db = test_db();
+        assert!(render_rgba(&db, 0, "minecraft:stone", 4096).is_err());
+    }
+
+    /// 贴图全透明时应当报错，而不是给出一张看不见的图。
+    ///
+    /// 返回全透明 PNG 时前端会渲染一个空白 `<img>`：既不出「无图」占位，
+    /// 也没有任何原因，比直接报错更难排查。
+    #[test]
+    fn fully_transparent_texture_is_an_error() {
+        let mut db = test_db();
+        db.pixels = vec![0u8; 16];
+        let e = render_rgba(&db, 0, "minecraft:stone", 64)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("可见像素"), "错误信息应说明没有可见像素：{e}");
+    }
+
     /// 没有该方块的模型时必须报错，而不是给出一张空图。
     #[test]
-    fn unknown_block_is_an_error() {        let db = test_db();
+    fn unknown_block_is_an_error() {
+        let db = test_db();
         let e = render_rgba(&db, 0, "minecraft:not_a_block", 64)
             .unwrap_err()
             .to_string();

@@ -342,7 +342,8 @@ pub fn render_block_icons(
     let vi = db
         .pick_version(data_version)
         .ok_or_else(|| format!("方块库中没有数据版本 {data_version} 对应的版本"))?;
-    let size = size.unwrap_or(crate::block_icon::ICON_SIZE);
+    let size = crate::block_icon::check_icon_size(size.unwrap_or(crate::block_icon::ICON_SIZE))
+        .map_err(|e| e.to_string())?;
 
     Ok(states
         .into_iter()
@@ -1056,6 +1057,80 @@ mod tests {
         assert!(r.skipped_dirs > 0, "不存在的目录应计入跳过数");
     }
 
+    /// mods 目录的过滤规则：非 jar 与客户端包都不该进待导入列表。
+    ///
+    /// 这些规则错了不会报错，只会静默少导入几个模组，因此必须直接测。
+    #[test]
+    fn collect_mod_jars_filters_out_non_mods() {
+        let dir = std::env::temp_dir().join("sm_mods_scan");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("子目录")).unwrap();
+        std::fs::write(dir.join("readme.txt"), b"x").unwrap();
+        std::fs::write(dir.join("1.20.1.jar"), b"x").unwrap();
+        std::fs::write(dir.join("foo-client.jar"), b"x").unwrap();
+        // 大小写不同也必须按客户端包跳过：Windows 上两者是同一个东西
+        std::fs::write(dir.join("Bar-Client-1.0.jar"), b"x").unwrap();
+        std::fs::write(dir.join("真模组.jar"), b"x").unwrap();
+        std::fs::write(dir.join("another_mod.JAR"), b"x").unwrap();
+        std::fs::create_dir_all(dir.join("子目录")).unwrap();
+
+        let scan = collect_mod_jars(&dir).expect("扫描失败");
+        let kept: Vec<String> = scan
+            .jars
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            kept,
+            vec!["another_mod.JAR", "真模组.jar"],
+            "只应留下真正的模组 jar（扩展名大小写不敏感）"
+        );
+
+        // 跳过的必须逐条回报，否则用户只能靠「数目对不上」发现
+        let skipped: Vec<String> = scan
+            .skipped
+            .iter()
+            .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        for name in ["readme.txt", "1.20.1.jar", "foo-client.jar", "Bar-Client-1.0.jar"] {
+            assert!(skipped.contains(&name.to_string()), "{name} 应被记为跳过");
+        }
+        assert!(
+            !skipped.contains(&"子目录".to_string()),
+            "目录不应计入跳过项（它不是文件）"
+        );
+        assert!(scan.unreadable.is_empty(), "正常目录不应有读不出的项");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 扫描结果必须稳定排序，否则同一次导入每次的原子上传顺序都不同。
+    #[test]
+    fn collect_mod_jars_is_sorted() {
+        let dir = std::env::temp_dir().join("sm_mods_sort");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in ["z.jar", "a.jar", "m.jar"] {
+            std::fs::write(dir.join(n), b"x").unwrap();
+        }
+        let scan = collect_mod_jars(&dir).unwrap();
+        let names: Vec<String> = scan
+            .jars
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["a.jar", "m.jar", "z.jar"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 不存在的目录必须报错，而不是当成「没有模组」。
+    #[test]
+    fn collect_mod_jars_rejects_missing_dir() {
+        let e = collect_mod_jars(Path::new("__sm_not_exist_mods__"))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("无法读取目录"), "应说明目录读不了：{e}");
+    }
+
     #[test]
     fn peek_missing_file_reports_error() {
         let s = peek_schematic("__sm_not_exist__.litematic".into());
@@ -1736,39 +1811,18 @@ pub fn import_mods_folder(
     if !root.is_dir() {
         return Err(format!("{dir} 不是目录"));
     }
-    let mut jars: Vec<PathBuf> = Vec::new();
-    let entries = std::fs::read_dir(root).map_err(|e| format!("无法读取目录 {dir}：{e}"))?;
-    for e in entries.flatten() {
-        let p = e.path();
-        if !p.is_file() {
-            continue;
-        }
-        if !p
-            .extension()
-            .map(|x| x.eq_ignore_ascii_case("jar"))
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        let stem = p
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        // 客户端 jar 属于版本包，不是模组
-        if stem.contains("client") || is_mc_version_name(&stem) {
-            continue;
-        }
-        jars.push(p);
-    }
-    jars.sort();
-
-    if jars.is_empty() {
+    let scan = collect_mod_jars(root).map_err(|e| e.to_string())?;
+    if scan.jars.is_empty() {
         return Err(format!("{dir} 里没有可导入的模组 jar"));
     }
 
     let mut imported: Vec<String> = Vec::new();
-    let mut failed: Vec<(String, String)> = Vec::new();
-    for jar in &jars {
+    let mut failed: Vec<(String, String)> = scan
+        .unreadable
+        .iter()
+        .map(|(p, why)| (p.display().to_string(), why.clone()))
+        .collect();
+    for jar in &scan.jars {
         let label = jar
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
@@ -1791,7 +1845,81 @@ pub fn import_mods_folder(
             .into_iter()
             .map(|(file, reason)| UnreadableFileDto { path: file, reason })
             .collect(),
+        // 有意跳过的条目也要回报：名字里恰好含 client 的模组会被判成客户端包，
+        // 静默丢掉的话用户只能靠「数目对不上」才发现。
+        skipped: scan
+            .skipped
+            .into_iter()
+            .map(|(path, reason)| UnreadableFileDto {
+                path: path.to_string_lossy().into_owned(),
+                reason,
+            })
+            .collect(),
     })
+}
+
+/// 一次 mods 目录扫描的结果
+#[derive(Debug, Default)]
+struct ModScan {
+    /// 待导入的模组 jar，按路径排序，结果稳定
+    jars: Vec<PathBuf>,
+    /// 有意跳过的条目及原因
+    skipped: Vec<(PathBuf, String)>,
+    /// 目录项读不出名字等失败，必须上报而不是 `.flatten()` 掉
+    unreadable: Vec<(PathBuf, String)>,
+}
+
+/// 扫描 mods 目录，挑出待导入的模组 jar。
+///
+/// 单独成函数是为了能脱离 AppHandle 直接测：过滤规则（非 jar、客户端 jar、
+/// 版本号命名的客户端 jar）都在这里，它们错了不会报错、只会静默少导入。
+fn collect_mod_jars(dir: &Path) -> AppResult<ModScan> {
+    let mut out = ModScan::default();
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| AppError::Parse(format!("无法读取目录 {}：{e}", dir.display())))?;
+    for e in entries {
+        // 目录项自身读失败时不能丢掉：那意味着有一个文件我们不知道是什么，
+        // 与「它不重复」是两回事，因此记进 unreadable 上报。
+        let e = match e {
+            Ok(e) => e,
+            Err(err) => {
+                out.unreadable
+                    .push((dir.to_path_buf(), format!("读取目录项失败：{err}")));
+                continue;
+            }
+        };
+        let p = e.path();
+        if !p.is_file() {
+            continue;
+        }
+        if !p
+            .extension()
+            .map(|x| x.eq_ignore_ascii_case("jar"))
+            .unwrap_or(false)
+        {
+            out.skipped.push((p, "不是 .jar 文件".into()));
+            continue;
+        }
+        let stem = p
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // 客户端 jar 属于版本包而不是模组。大小写不敏感：Windows 上
+        // `Foo-Client.jar` 与 `foo-client.jar` 是同一个东西。
+        if stem.to_ascii_lowercase().contains("client") {
+            out.skipped.push((p, "名字含 client，按客户端包跳过".into()));
+            continue;
+        }
+        if is_mc_version_name(&stem) {
+            out.skipped.push((p, "名字是游戏版本号，按客户端包跳过".into()));
+            continue;
+        }
+        out.jars.push(p);
+    }
+    out.jars.sort();
+    out.skipped.sort();
+    out.unreadable.sort();
+    Ok(out)
 }
 
 /// 判断一个文件名主干是否形如 Minecraft 版本号（`1.20.1`、`26.2`）。

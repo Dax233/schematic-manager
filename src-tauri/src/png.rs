@@ -791,6 +791,18 @@ mod tests {
     #[test]
     fn encode_rejects_short_pixel_buffer() {
         let e = encode(4, 4, &[0u8; 32]).unwrap_err().to_string();
-        assert!(e.contains("4"), "错误信息应说明需要多少字节：{e}");
+        // 断言里必须带上准确的数目：只断言「含 4」时，随便一条含 4 的信息
+        // （比如尺寸 64）都会通过，等于没断言。
+        assert!(e.contains("64"), "错误信息应说明需要 64 字节：{e}");
+        assert!(e.contains("32"), "错误信息应说明实际只有 32 字节：{e}");
+    }
+
+    /// 尺寸为 0 时必须报错：0 会让后续所有按宽高算出的下标失去意义。
+    #[test]
+    fn encode_rejects_zero_size() {
+        for (w, h) in [(0u32, 4u32), (4, 0), (0, 0)] {
+            let e = encode(w, h, &[]).unwrap_err().to_string();
+            assert!(e.contains("尺寸"), "{w}×{h} 应被拒绝：{e}");
+        }
     }
 }

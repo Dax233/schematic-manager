@@ -1608,15 +1608,17 @@ async function runImportModsFolder() {
     Message.warning("请先选择模组包要叠加到的游戏版本");
     return;
   }
-  const picked = await open({
-    directory: true,
-    multiple: false,
-    title: "选择 mods 文件夹",
-  });
-  if (typeof picked !== "string") return;
-
+  // 置位必须在打开对话框**之前**：否则连点两次会开两个对话框并触发两次导入，
+  // 两次批量导入交错读写清单，后写者会把先写者的记录覆盖掉（见 runImportJar）。
   modsBusy.value = true;
   try {
+    const picked = await open({
+      directory: true,
+      multiple: false,
+      title: "选择 mods 文件夹",
+    });
+    if (typeof picked !== "string") return;
+
     const out: ModsImport = await importModsFolder(picked, dv);
     if (out.imported.length > 0) {
       Message.success({
@@ -1634,6 +1636,19 @@ async function runImportModsFolder() {
             .map((f) => `${f.path}（${f.reason}）`)
             .join("；") +
           (out.failed.length > 3 ? ` …等 ${out.failed.length} 个` : ""),
+        duration: 12000,
+      });
+    }
+    // 有意跳过的条目也要说：名字里含 client 的模组会被判成客户端包
+    if (out.skipped.length > 0) {
+      Message.info({
+        content:
+          `另有 ${out.skipped.length} 个文件未导入：` +
+          out.skipped
+            .slice(0, 3)
+            .map((f) => `${f.path}（${f.reason}）`)
+            .join("；") +
+          (out.skipped.length > 3 ? ` …等 ${out.skipped.length} 个` : ""),
         duration: 12000,
       });
     }

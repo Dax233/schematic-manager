@@ -283,4 +283,11 @@ export interface ModsImport {
    * 但用户也需要知道少了哪些、为什么。
    */
   failed: { path: string; reason: string }[];
+  /**
+   * 有意跳过的条目及原因（非 jar、按客户端包跳过）。
+   *
+   * 与 failed 分开：它们不是错误，但也不能无声无息地少导入——
+   * 名字里恰好含 client 的模组会被判成客户端包。
+   */
+  skipped: { path: string; reason: string }[];
 }

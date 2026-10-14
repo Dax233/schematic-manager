@@ -377,6 +377,12 @@ pub struct ModsImportDto {
     /// 失败项及原因。**必须回报**：某一个模组坏掉不该让其余都导不进来，
     /// 但用户也需要知道少了哪些、为什么。
     pub failed: Vec<UnreadableFileDto>,
+    /// 有意跳过的条目及原因（非 jar、按客户端包跳过）。
+    ///
+    /// 与 `failed` 分开：这些不是错误，但也不能无声无息地少导入——
+    /// 名字里恰好含 client 的模组会被判成客户端包，不说明的话用户
+    /// 只能靠「数目对不上」才发现。
+    pub skipped: Vec<UnreadableFileDto>,
 }
 
 /// 导入 jar 的结果
@@ -546,8 +552,27 @@ mod tests {
 
     /// 纳秒时间戳必须以字符串传递：数值会超出 JavaScript 的安全整数范围
     #[test]
-    fn backup_entry_created_ns_is_a_string() {
-        let dto = BackupEntryDto {
+    fn mods_import_keys_match_frontend() {
+        let dto = ModsImportDto {
+            dir: "C:/mods".into(),
+            imported: vec!["a.jar".into()],
+            failed: vec![UnreadableFileDto {
+                path: "b.jar".into(),
+                reason: "损坏".into(),
+            }],
+            skipped: vec![UnreadableFileDto {
+                path: "1.20.1.jar".into(),
+                reason: "名字是游戏版本号".into(),
+            }],
+        };
+        let v = serde_json::to_value(&dto).expect("序列化失败");
+        // skipped 漏掉的话前端不会报错，只是「跳过的文件」永远不显示
+        assert_keys(&v, &["dir", "failed", "imported", "skipped"]);
+    }
+
+    /// 纳秒时间戳必须以字符串传递：数值会超出 JavaScript 的安全整数范围
+    #[test]
+    fn backup_entry_created_ns_is_a_string() {        let dto = BackupEntryDto {
             path: "/b/x".into(),
             stem: "x".into(),
             op: "编辑".into(),
