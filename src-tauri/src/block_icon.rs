@@ -701,11 +701,17 @@ mod tests {
         states.sort();
         let mut ok = 0usize;
         let mut failed: Vec<String> = Vec::new();
+        // 同时写一份索引：光看文件名看不出原始状态键（文件名里的分隔符是替换过的），
+        // 拿它去对照界面或做别的人工核对时都需要原始键与中英文名。
+        let mut index = String::from("file\tstate\tzh\ten\n");
         for (i, state) in states.iter().enumerate() {
+            let name = state.split('[').next().unwrap_or(state);
+            let (zh, en) = crate::commands::block_display_names(&db, Some(vi), name);
+            let safe = state.replace([':', '[', ']', '=', ','], "_");
+            index.push_str(&format!("{i:03}_{safe}.png\t{state}\t{zh}\t{en}\n"));
             match render_rgba(&db, vi, state, 64) {
                 Ok(img) => {
                     let png = png::encode(img.width, img.height, &img.rgba).expect("编码失败");
-                    let safe = state.replace([':', '[', ']', '=', ','], "_");
                     let path = std::path::Path::new(&out).join(format!("{i:03}_{safe}.png"));
                     std::fs::write(&path, &png).expect("写 PNG 失败");
                     ok += 1;
@@ -713,6 +719,8 @@ mod tests {
                 Err(e) => failed.push(format!("{state}: {e}")),
             }
         }
+        std::fs::write(std::path::Path::new(&out).join("index.tsv"), index)
+            .expect("写索引失败");
         println!("渲染成功 {ok} / {} 个状态", states.len());
         for f in &failed {
             println!("失败：{f}");
