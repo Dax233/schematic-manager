@@ -141,11 +141,13 @@ SHIM = r"""
   // 要逐个打开的对话框，以及各自打开后应出现的标题。
   // 打开对话框会触发各自的加载逻辑（读取可转换版本、资源包清单、备份列表），
   // 这些一旦抛错，界面表现就是「点了没反应」。
-  var DIALOG_BUTTONS = ["方块替换", "版本转换", "重复文件筛查", "备份管理", "资源包管理"];
+  // 注意：「重复文件筛查」**不在**此列——按用户要求它已改为内联扫描
+  // 地址栏里已勾选的目录，不再弹窗。留在列表里会让脚本一直等一个
+  // 永远不出现的对话框。
+  var DIALOG_BUTTONS = ["方块替换", "版本转换", "备份管理", "资源包管理"];
   var DIALOG_TITLES = {
     "方块替换": "方块替换",
     "版本转换": "转换游戏版本",
-    "重复文件筛查": "重复文件筛查",
     "备份管理": "备份管理",
     "资源包管理": "资源包管理",
   };
@@ -839,10 +841,19 @@ def main():
             ok_d = verdict == "开"
             dlg_extra.append(ok_d)
             print(f"  {name:<14} {verdict if verdict else '(未记录)'}")
-        # 五个对话框都应有记录，且都必须真的渲染出标题
-        if len(dlg_results) != 5:
+        # 四个对话框都应有记录，且都必须真的渲染出标题。
+        # 数量必须与 DIALOG_BUTTONS 一致：写死数字时改了列表会漏改这里，
+        # 表现是「明明都开了却报数量不符」。
+        # DIALOG_BUTTONS 定义在注入页面的 JS 里，Python 侧取不到，
+        # 因此这里重复一份数量。两处必须同步：改了一处没改另一处，
+        # 表现就是「明明都开了却报数量不符」。
+        EXPECTED_DIALOGS = 4
+        if len(dlg_results) != EXPECTED_DIALOGS:
             dlg_extra.append(False)
-            print(f"  只有 {len(dlg_results)} 个对话框被检查，应为 5 个")
+            print(
+                f"  只有 {len(dlg_results)} 个对话框被检查，"
+                f"应为 {EXPECTED_DIALOGS} 个"
+            )
 
         print("\n=== 界面文案是否真的渲染出来（已剔除脚本）===")
         results = []

@@ -231,6 +231,38 @@ body,
     }
   }
 
+  // 重复筛查汇总条：就地显示在列表上方，不占滚动区
+  &__dups {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 6px;
+    font-size: 12px;
+    background: var(--color-fill-2);
+    border-bottom: 1px solid var(--color-border-2);
+
+    &-text {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      color: var(--color-text-2);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  // 重复文件按组上色：同组同色，一眼看出「这几个是一份内容」。
+  //
+  // 颜色用 Arco 的语义色变量而不是写死色值，深色主题下自动适配。
+  // 只染背景与左侧色条，不动文字颜色——文字变色会与「选中行」混淆。
+  @each $name, $var in (1: "danger", 2: "warning", 3: "success", 4: "link", 5: "arcoblue", 6: "purple") {
+    .row-dup-#{$name} > .arco-table-td {
+      background-color: rgba(var(--#{$var}-1), 0.35);
+      box-shadow: inset 2px 0 0 0 rgb(var(--#{$var}-6));
+    }
+  }
+
   // 目录栏字号收紧，同宽下能多显示内容。
   // 只改目录栏，右侧详情与对话框保持原字号：那里的文字是逐字阅读的，
   // 缩到 12px 会明显费力。

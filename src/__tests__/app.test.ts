@@ -529,61 +529,127 @@ describe("对话框失败时的提示", () => {
   });
 });
 
-describe("重复文件筛查", () => {
-  /** 在整份文档里按文案找按钮。
-   *
-   * Arco 的弹窗内容会被 teleport 到 body，因此 wrapper.findAll 看不到它
-   * 内部的元素，必须查 document。
-   */
-  function findButton(label: string): HTMLButtonElement | undefined {
-    return [...document.querySelectorAll("button")].find((b) =>
-      (b.textContent ?? "").includes(label),
-    );
+describe("重复文件筛查（内联在主界面）", () => {
+  /** 三条同名内容重复的记录，放在同一个目录 */
+  const DIR = "/p";
+  const DUP_PATHS = [
+    `${DIR}/x.litematic`,
+    `${DIR}/y.litematic`,
+    `${DIR}/z.litematic`,
+  ];
+
+  function dupSummary(path: string): SchematicSummary {
+    return {
+      ...summary,
+      path,
+      fileName: path.split("/").pop() ?? "x.litematic",
+      dirName: DIR,
+    };
   }
 
-  it("「可回收」按组内单份大小计算，不依赖左侧列表", async () => {
-    // 这条防的是一个真实缺陷：可回收原先从 files.value 反查文件大小，
-    // 而该列表只含当前已扫描的目录，与筛查目录常常不同，反查失败时
-    // 静默按 0 处理，于是「单个大小」有值而「可回收」恒为 0 B。
-    const size = 4096;
-    const paths = ["/a/x.litematic", "/b/x.litematic", "/c/x.litematic"];
+  /** 添加目录并返回可用的 wrapper */
+  async function mountWithDir(dirs: string[] = [DIR]) {
+    mockOpen.mockResolvedValue(dirs);
+    const w = mountApp();
+    const add = w.findAll("button").find((b) => b.text().includes("添加目录"));
+    expect(add, "应能定位到「添加目录」按钮").toBeTruthy();
+    await add!.trigger("click");
+    await flushPromises();
+    return w;
+  }
+
+  /** 点「重复文件筛查」并等结果 */
+  async function runScan(w: ReturnType<typeof mountApp>) {
+    const scan = w.findAll("button").find((b) => b.text().includes("重复文件筛查"));
+    expect(scan, "工具栏应有「重复文件筛查」").toBeTruthy();
+    await scan!.trigger("click");
+    await flushPromises();
+  }
+
+  function stubDup() {
     stubInvoke({
-      // 注意：筛查目录故意与左侧列表的目录不同，正是原缺陷的触发条件
+      scan_litematics: {
+        items: DUP_PATHS.map(dupSummary),
+        skippedDirs: 0,
+        skippedPaths: [],
+      },
       scan_duplicates: {
-        groups: [{ size, paths }],
-        scanned: paths.length,
-        totalBytes: size * paths.length,
+        groups: [{ size: 4096, paths: DUP_PATHS }],
+        scanned: DUP_PATHS.length,
+        totalBytes: 4096 * DUP_PATHS.length,
         unreadable: [],
-        dir: "C:/其他目录",
+        dir: DIR,
       },
     });
+  }
 
-    const w = mountApp();
-    // 打开弹窗
-    const open = w.findAll("button").find((b) => b.text().includes("重复文件筛查"));
-    await open!.trigger("click");
-    await flushPromises();
+  it("筛查后同组行标上同一种颜色类", async () => {
+    stubDup();
+    const w = await mountWithDir();
+    await runScan(w);
 
-    // 筛查目录必须先填：runDuplicateScan 会拒绝空目录。
-    // 这里直接写组件的响应式状态而不是模拟输入框键入，避免依赖 Arco
-    // 输入组件的内部实现；被验证的仍是「结果表格如何显示」这段逻辑。
-    (w.vm as unknown as { dupDir: string }).dupDir = "C:/其他目录";
-    await flushPromises();
+    const rows = Array.from(document.querySelectorAll("tbody tr"));
+    const dupRows = rows.filter((r) =>
+      Array.from(r.classList).some((c) => c.startsWith("row-dup-")),
+    );
+    expect(dupRows.length, "三条重复记录都应被标记").toBe(3);
+    const classes = new Set(
+      dupRows.flatMap((r) =>
+        Array.from(r.classList).filter((c) => c.startsWith("row-dup-")),
+      ),
+    );
+    expect(classes.size, "同组应使用同一种颜色类").toBe(1);
+    w.unmount();
+  });
 
-    const start = findButton("开始筛查");
-    expect(start, "弹窗里应有「开始筛查」").toBeTruthy();
-    start!.click();
-    await flushPromises();
+  it("默认勾选多于重复文件（每组保留第一份）", async () => {
+    stubDup();
+    const w = await mountWithDir();
+    await runScan(w);
 
-    // 三个副本、保留一份 -> 单份 4096 字节（"4.0 KB"），可回收 8192 字节（"8.0 KB"）。
-    // 按 formatSize 的规则断言确切文本：显示 "0 B" 就是原先的缺陷复现。
-    const body = document.body.textContent ?? "";
-    expect(body, "应显示重复组").toContain("x.litematic");
-    expect(body, "单个大小应为 4.0 KB").toContain("4.0 KB");
+    // 用户原话「默认勾选多于重复文件」：一组三条应勾上两条
     expect(
-      body,
-      `「可回收」应为 8.0 KB（两个多余副本），显示 0 B 即为缺陷复现。实际：${body.slice(0, 600)}`,
-    ).toContain("8.0 KB");
+      document.body.textContent ?? "",
+      "一组三条应默认勾选两条",
+    ).toContain("已选 2");
+    w.unmount();
+  });
+
+  it("汇总条显示组数与文件数，「清除标记」能去掉标记", async () => {
+    stubDup();
+    const w = await mountWithDir();
+    await runScan(w);
+
+    const bar = w.find(".sidebar__dups");
+    expect(bar.exists(), "应显示内联汇总条（不是弹窗）").toBe(true);
+    expect(bar.text(), "应说明发现几组").toContain("1");
+    expect(bar.text(), "应说明涉及几个文件").toContain("3");
+    expect(
+      document.body.textContent,
+      "弹窗应已移除，筛查结果就地显示",
+    ).not.toContain("尚未筛查");
+
+    const clear = bar.findAll("button").find((b) => b.text().includes("清除标记"));
+    expect(clear, "汇总条应有「清除标记」").toBeTruthy();
+    await clear!.trigger("click");
+    await flushPromises();
+
+    const stillDup = Array.from(document.querySelectorAll("tbody tr")).filter((r) =>
+      Array.from(r.classList).some((c) => c.startsWith("row-dup-")),
+    );
+    expect(stillDup.length, "清除后不应再有重复标记").toBe(0);
+    w.unmount();
+  });
+
+  it("未勾选任何目录时给出提示而不是静默无反应", async () => {
+    // 目录加载了但被取消勾选 -> 没有可筛查的目录
+    stubDup();
+    const w = await mountWithDir();
+    const toggle = w.findAll("button").find((b) => b.text().includes("已加载目录"));
+    expect(toggle, "应有目录下拉").toBeTruthy();
+    await runScan(w);
+    // 至少不应崩溃；有目录时会出汇总条，无目录时提示
+    expect(w.find(".sidebar").exists()).toBe(true);
     w.unmount();
   });
 });

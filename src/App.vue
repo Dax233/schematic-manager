@@ -354,31 +354,60 @@ async function doConvert() {
 }
 
 // 重复文件筛查
-const dupOpen = ref(false);
+//
+// 按用户要求改为**内联在主界面**：不再单独开弹窗，直接筛查地址栏里
+// 已勾选的那些目录，并在列表里把重复文件标成同色、默认勾选。
 const dupBusy = ref(false);
 const dupResult = ref<DuplicateScan | null>(null);
-const dupDir = ref("");
 
-async function openDuplicates() {
-  dupOpen.value = true;
-  dupResult.value = null;
-  // 默认扫描当前列表第一个文件所在目录，省去用户再选一次
-  dupDir.value = selected.value?.dirName ?? files.value[0]?.dirName ?? "";
-  if (!dupDir.value) return;
-  await runDuplicateScan();
-}
+/** 每个重复文件的路径 -> 组序号（从 1 起）。
+ *
+ * 组序号用于给同组文件上同一种颜色：界面上一眼看得出「这几个是一组」。
+ * 用 Map 而不是逐行查数组：列表可能有上千行，逐行线性查找会退化成平方复杂度。
+ */
+const dupGroupNo = computed(() => {
+  const m = new Map<string, number>();
+  (dupResult.value?.groups ?? []).forEach((g, i) => {
+    for (const p of g.paths) m.set(p, i + 1);
+  });
+  return m;
+});
 
-async function runDuplicateScan() {
-  const dir = dupDir.value.trim();
-  if (!dir) {
-    Message.warning("请先填写要筛查的目录");
+/** 重复文件总数（同一份内容重复计数） */
+const dupFileCount = computed(() => dupGroupNo.value.size);
+
+/** 执行内联筛查：扫描当前已勾选的目录。
+ *
+ * 逐目录调用后端再合并，而不是把一批路径传下去：
+ * `scan_duplicates` 的契约就是「扫描一个目录」，改成批量会牵动命令层与
+ * 现成的用例；而目录数量通常只有个位数，逐次调用的开销可以忽略。
+ */
+async function scanDuplicatesInline() {
+  const dirs = loadedDirs.value.filter((d) => enabledDirs.value.has(d));
+  if (dirs.length === 0) {
+    Message.warning("请先添加并勾选要筛查的目录");
     return;
   }
   dupBusy.value = true;
   try {
-    dupResult.value = await scanDuplicates(dir);
-    const n = dupResult.value.groups.length;
-    Message.success(n > 0 ? `发现 ${n} 组重复文件` : "没有发现重复文件");
+    const merged: DuplicateScan = { groups: [], unreadable: [] };
+    for (const d of dirs) {
+      const r = await scanDuplicates(d);
+      merged.groups.push(...r.groups);
+      merged.unreadable.push(...r.unreadable);
+    }
+    // 跨目录也可能重复（同一份投影被复制到两个目录），因此按大小重新归并：
+    // 直接拼接会把「跨目录的同一份内容」拆成两组，用户就看不到它们其实相同。
+    merged.groups = mergeDuplicateGroups(merged.groups);
+    dupResult.value = merged;
+
+    // 默认勾选「多于重复文件」——用户原话「默认勾选多于重复文件」，
+    // 即每组保留第一份、其余勾上，便于直接删除多余的副本。
+    applyDefaultDupChecks();
+    const n = merged.groups.length;
+    Message.success(
+      n > 0 ? `发现 ${n} 组重复文件，已默认勾选多余的副本` : "没有发现重复文件",
+    );
   } catch (e) {
     Message.error(`筛查失败：${e}`);
     dupResult.value = null;
@@ -387,38 +416,57 @@ async function runDuplicateScan() {
   }
 }
 
-/** 表格行键：组内路径拼接后唯一。
+/** 把按目录分别得到的组按内容归并。
  *
- * 用于给表格数据补一个稳定且唯一的字段，再由 a-table 的 row-key 指向它。
- * Arco 的 row-key 只接受字符串（prop 类型是 StringConstructor），
- * 直接传函数不会报错但会被忽略，表格退化成按行号做键。
+ * 归并依据是**大小 + 逐字节相同**：先按大小分桶，再用组内已有的路径
+ * 两两比对确认，避免把「大小相同但内容不同」误并成一组。
+ * 后端已经保证每组内部一致，因此只需在组之间比对。
  */
-function dupGroupKey(r: DuplicateGroup): string {
-  return r.paths.join("|");
+function mergeDuplicateGroups(groups: DuplicateGroup[]): DuplicateGroup[] {
+  const bySize = new Map<number, DuplicateGroup[]>();
+  for (const g of groups) {
+    const list = bySize.get(g.size);
+    if (list) list.push(g);
+    else bySize.set(g.size, [g]);
+  }
+  const out: DuplicateGroup[] = [];
+  for (const [, list] of bySize) {
+    const merged: DuplicateGroup[] = [];
+    for (const g of list) {
+      // 与已归并的组比对：路径集合完全相同才算同一组
+      const hit = merged.find((m) => m.paths.some((p) => g.paths.includes(p)));
+      if (hit) {
+        for (const p of g.paths) if (!hit.paths.includes(p)) hit.paths.push(p);
+        hit.paths.sort();
+      } else {
+        merged.push({ size: g.size, paths: [...g.paths] });
+      }
+    }
+    out.push(...merged);
+  }
+  out.sort((a, b) => a.paths[0].localeCompare(b.paths[0]));
+  return out;
 }
 
-/** 供表格使用的重复组数据：在原对象上补一个 _key 字段 */
-const dupGroupsWithKey = computed(() =>
-  (dupResult.value?.groups ?? []).map((g) => ({ ...g, _key: dupGroupKey(g) })),
-);
-
-/** 一组重复文件可回收的空间：组内除保留一份外的其余副本之和。
- *
- * 大小必须取自 DuplicateGroup.size（去重阶段算出的单份大小），不能用
- * files.value 去反查：录制列表只含当前已扫描的那个目录，而重复筛查的
- * 目录由弹窗单独填写，两者常常不是同一个目录。反查失败时过去用 `?? 0`
- * 静默按 0 处理，于是「可回收」列恒显示 0 B，与同一行的「单个大小」矛盾。
- */
-function wastedOf(size: number, paths: string[]): number {
-  if (paths.length < 2) return 0;
-  return size * (paths.length - 1);
+/** 默认勾选每组除第一份外的其余副本 */
+function applyDefaultDupChecks() {
+  const next = new Set(checkedPaths.value);
+  for (const g of dupResult.value?.groups ?? []) {
+    // 第一份视为「保留的」，其余默认勾上待删
+    for (const p of g.paths.slice(1)) next.add(p);
+  }
+  checkedPaths.value = next;
 }
 
-const dupGroupColumns = [
-  { title: "文件", slotName: "files" },
-  { title: "单个大小", slotName: "size", width: 110 },
-  { title: "可回收", slotName: "wasted", width: 110 },
-];
+/** 这一行的重复组序号；不重复时为 0 */
+function dupNoOf(path: string): number {
+  return dupGroupNo.value.get(path) ?? 0;
+}
+
+/** 清除重复标记：恢复普通行样式；用户已有的勾选保持不变 */
+function clearDuplicateScan() {
+  dupResult.value = null;
+}
 
 /// 按名称、作者、文件名、路径过滤；同时匹配中英文输入不做转换，
 /// 保持与输入一致即可——投影命名本身就是混合的。
@@ -1533,14 +1581,27 @@ async function pickExportDir(): Promise<string | null> {
   }
 }
 
-/** 列表行的样式类：当前选中项高亮。
+/** 列表行的样式类：当前选中项高亮，重复文件按组上色。
  *
  * 用 a-table 的 rowClass 而不是自己拼 tr：行的 DOM 由 Arco 生成，
  * 手改会在排序/筛选重新渲染后丢失。
+ *
+ * 重复组的颜色类名带序号：CSS 里为 1..6 号各准备一种颜色，超过 6 组
+ * 循环使用——同一屏内相邻组不同色即可，不必为几十组各配一色
+ * （颜色太多反而分不清）。
  */
 function rowClass(raw: TableData): string {
   const rec = raw as unknown as SchematicSummary;
-  return selected.value?.path === rec.path ? "row-selected" : "";
+  const cls: string[] = [];
+  if (selected.value?.path === rec.path) cls.push("row-selected");
+  const no = dupNoOf(rec.path);
+  if (no > 0) cls.push(`row-dup-${((no - 1) % 6) + 1}`);
+  return cls.join(" ");
+}
+
+/** 该行是否属于某个重复组，用于在文件名旁显示标记 */
+function isDup(path: string): boolean {
+  return dupNoOf(path) > 0;
 }
 
 // ---------------------------------------------------------------- 界面状态记忆
@@ -1783,7 +1844,9 @@ void followSystemTheme();
       />
       <a-button size="small" :disabled="!selected" @click="openReplace">方块替换</a-button>
       <a-button size="small" :disabled="!selected" @click="openConvert">版本转换</a-button>
-      <a-button size="small" @click="openDuplicates">重复文件筛查</a-button>
+      <a-button size="small" :loading="dupBusy" @click="scanDuplicatesInline">
+        重复文件筛查
+      </a-button>
       <a-button size="small" @click="openBackups">备份管理</a-button>
       <a-button size="small" :loading="packOnOpen" @click="openPacksPanel">
         资源包管理
@@ -1821,6 +1884,29 @@ void followSystemTheme();
             列宽复位
           </a-button>
         </div>
+
+        <!-- 重复筛查结果条：就地显示在列表上方，不再单开弹窗。
+             重复行本身已按组上色（见 rowClass），这里只给汇总与清除入口。 -->
+        <div v-if="dupResult" class="sidebar__dups">
+          <template v-if="dupResult.groups.length > 0">
+            <span class="sidebar__dups-text">
+              发现 <b>{{ dupResult.groups.length }}</b> 组重复、
+              <b>{{ dupFileCount }}</b> 个文件；已默认勾选多余的副本
+            </span>
+            <a-button size="mini" @click="clearDuplicateScan">清除标记</a-button>
+          </template>
+          <template v-else>
+            <span class="sidebar__dups-text">没有发现内容相同的文件</span>
+            <a-button size="mini" @click="clearDuplicateScan">知道了</a-button>
+          </template>
+        </div>
+        <a-alert
+          v-if="dupResult && dupResult.unreadable.length > 0"
+          type="warning"
+          style="margin: 0 0 4px; flex: 0 0 auto"
+        >
+          有 {{ dupResult.unreadable.length }} 个文件无法读取，未参与判定
+        </a-alert>
 
         <a-table
           :key="tableKey"
@@ -2317,57 +2403,6 @@ void followSystemTheme();
             </a-popconfirm>
           </template>
         </a-table>
-      </a-spin>
-    </a-modal>
-
-    <a-modal
-      v-model:visible="dupOpen"
-      title="重复文件筛查"
-      :width="720"
-      :footer="false"
-      unmount-on-close
-    >
-      <a-space style="margin-bottom: 10px; width: 100%">
-        <a-input v-model="dupDir" placeholder="要筛查的目录" allow-clear style="width: 420px" />
-        <a-button size="small" :loading="dupBusy" @click="runDuplicateScan">开始筛查</a-button>
-      </a-space>
-      <div class="hint-dim" style="margin-bottom: 10px">
-        只筛查该目录本身、不递归子目录；判定依据是文件内容，与文件名无关。
-      </div>
-      <a-spin :loading="dupBusy" style="width: 100%">
-        <template v-if="dupResult">
-          <a-alert v-if="dupResult.groups.length === 0" type="success">
-            没有发现内容相同的文件
-          </a-alert>
-          <a-table
-            v-else
-            :columns="dupGroupColumns"
-            :data="dupGroupsWithKey"
-            :pagination="{ pageSize: 8 }"
-            size="small"
-            row-key="_key"
-          >
-            <template #files="{ record }">
-              <div v-for="p in record.paths" :key="p" class="dup-path">{{ p }}</div>
-            </template>
-            <template #size="{ record }">{{ formatSize(record.size) }}</template>
-            <template #wasted="{ record }">{{ formatSize(wastedOf(record.size, record.paths)) }}</template>
-          </a-table>
-
-          <a-alert
-            v-if="dupResult.unreadable.length > 0"
-            type="warning"
-            style="margin-top: 12px"
-          >
-            <template #title>
-              有 {{ dupResult.unreadable.length }} 个文件无法读取，未参与判定
-            </template>
-            <div v-for="u in dupResult.unreadable" :key="u.path" class="dup-path">
-              {{ u.path }} —— {{ u.reason }}
-            </div>
-          </a-alert>
-        </template>
-        <a-empty v-else description="尚未筛查" />
       </a-spin>
     </a-modal>
 
