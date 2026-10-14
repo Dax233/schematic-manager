@@ -1578,7 +1578,7 @@ describe("方块栏渲染图", () => {
       },
     });
     const base = mockInvoke.getMockImplementation()!;
-    mockInvoke.mockImplementation((async (cmd: string, args: unknown) => {
+    mockInvoke.mockImplementation((async (cmd: string, args: never) => {
       if (cmd === "render_block_icons") {
         const asked = (args as { states: string[] }).states;
         return asked.map((s) => ({
