@@ -871,7 +871,8 @@ mod tests {
     }
 
     /// 测试用 base64 解码：只求正确，不求快。
-    fn decode_base64(s: &str) -> Vec<u8> {        const ALPHABET: &[u8; 64] =
+    fn decode_base64(s: &str) -> Vec<u8> {
+        const ALPHABET: &[u8; 64] =
             b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut out = Vec::new();
         let mut acc = 0u32;

@@ -1057,13 +1057,32 @@ mod tests {
         assert!(r.skipped_dirs > 0, "不存在的目录应计入跳过数");
     }
 
+    /// 造一个本次测试专用的可写目录。
+    ///
+    /// 不用 `std::env::temp_dir()`：本仓库的 Windows 开发环境下系统临时目录
+    /// 不可写（见 real_project.rs 与 backup.rs 的说明），那样这些用例在默认
+    /// 环境下会直接 PermissionDenied 失败。目录名带进程号与纳秒，避免并发
+    /// 跑测试时互相踩。
+    fn mods_test_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let d = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("testtmp")
+            .join(format!("sm_mods_{tag}_{}_{nanos}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).expect("创建测试目录失败");
+        d
+    }
+
     /// mods 目录的过滤规则：非 jar 与客户端包都不该进待导入列表。
     ///
     /// 这些规则错了不会报错，只会静默少导入几个模组，因此必须直接测。
     #[test]
     fn collect_mod_jars_filters_out_non_mods() {
-        let dir = std::env::temp_dir().join("sm_mods_scan");
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = mods_test_dir("scan");
         std::fs::create_dir_all(dir.join("子目录")).unwrap();
         std::fs::write(dir.join("readme.txt"), b"x").unwrap();
         std::fs::write(dir.join("1.20.1.jar"), b"x").unwrap();
@@ -1072,7 +1091,6 @@ mod tests {
         std::fs::write(dir.join("Bar-Client-1.0.jar"), b"x").unwrap();
         std::fs::write(dir.join("真模组.jar"), b"x").unwrap();
         std::fs::write(dir.join("another_mod.JAR"), b"x").unwrap();
-        std::fs::create_dir_all(dir.join("子目录")).unwrap();
 
         let scan = collect_mod_jars(&dir).expect("扫描失败");
         let kept: Vec<String> = scan
@@ -1106,9 +1124,7 @@ mod tests {
     /// 扫描结果必须稳定排序，否则同一次导入每次的原子上传顺序都不同。
     #[test]
     fn collect_mod_jars_is_sorted() {
-        let dir = std::env::temp_dir().join("sm_mods_sort");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = mods_test_dir("sort");
         for n in ["z.jar", "a.jar", "m.jar"] {
             std::fs::write(dir.join(n), b"x").unwrap();
         }

@@ -550,7 +550,10 @@ mod tests {
         assert_keys(&v, &["file", "reason"]);
     }
 
-    /// 纳秒时间戳必须以字符串传递：数值会超出 JavaScript 的安全整数范围
+    /// mods 批量导入结果的键名必须与前端 `ModsImport` 一致。
+    ///
+    /// `skipped` 漏掉或改名时前端不会报错，只是「跳过的文件」永远不显示，
+    /// 而静态检查脚本只管命令名与参数名，不看返回值字段。
     #[test]
     fn mods_import_keys_match_frontend() {
         let dto = ModsImportDto {
@@ -566,13 +569,13 @@ mod tests {
             }],
         };
         let v = serde_json::to_value(&dto).expect("序列化失败");
-        // skipped 漏掉的话前端不会报错，只是「跳过的文件」永远不显示
         assert_keys(&v, &["dir", "failed", "imported", "skipped"]);
     }
 
     /// 纳秒时间戳必须以字符串传递：数值会超出 JavaScript 的安全整数范围
     #[test]
-    fn backup_entry_created_ns_is_a_string() {        let dto = BackupEntryDto {
+    fn backup_entry_created_ns_is_a_string() {
+        let dto = BackupEntryDto {
             path: "/b/x".into(),
             stem: "x".into(),
             op: "编辑".into(),
