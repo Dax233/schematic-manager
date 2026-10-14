@@ -44,6 +44,10 @@ pub struct BlockCount {
     pub state: String,
     /// 堆叠数（按 64 一组换算后的可读形式另由前端处理）
     pub count: u64,
+    /// 中文名，取自方块库语言表；查不到时为空串
+    pub zh_name: String,
+    /// 英文名，取自方块库语言表；查不到时为空串
+    pub en_name: String,
 }
 
 /// 实体统计条目
@@ -52,6 +56,10 @@ pub struct BlockCount {
 pub struct EntityCount {
     pub id: String,
     pub count: u64,
+    /// 中文名，取自方块库语言表；查不到时为空串
+    pub zh_name: String,
+    /// 英文名，取自方块库语言表；查不到时为空串
+    pub en_name: String,
 }
 
 /// 目录扫描结果

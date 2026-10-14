@@ -2,17 +2,17 @@
  "formatVersion": 3,
  "sections": {
   "stringsOff": 28,
-  "langsOff": 145225,
-  "texturesOff": 427841,
-  "modelsOff": 736700,
-  "versionsOff": 1777581
+  "langsOff": 155186,
+  "texturesOff": 427594,
+  "modelsOff": 736453,
+  "versionsOff": 1777334
  },
  "strings": {
-  "count": 6263,
-  "bytes": 145193
+  "count": 6754,
+  "bytes": 155154
  },
  "langs": {
-  "count": 24
+  "count": 19
  },
  "textures": {
   "unique": 1685,
@@ -202,7 +202,7 @@
   {
    "id": "1.16.5",
    "dataVersion": 2586,
-   "langTableIdx": 4,
+   "langTableIdx": 3,
    "textures": 657,
    "distinctTextures": 652,
    "newTextures": 0,
@@ -214,7 +214,7 @@
   {
    "id": "1.17",
    "dataVersion": 2724,
-   "langTableIdx": 5,
+   "langTableIdx": 4,
    "textures": 781,
    "distinctTextures": 776,
    "newTextures": 138,
@@ -226,7 +226,7 @@
   {
    "id": "1.17.1",
    "dataVersion": 2730,
-   "langTableIdx": 5,
+   "langTableIdx": 4,
    "textures": 781,
    "distinctTextures": 776,
    "newTextures": 0,
@@ -238,7 +238,7 @@
   {
    "id": "1.18",
    "dataVersion": 2860,
-   "langTableIdx": 5,
+   "langTableIdx": 4,
    "textures": 781,
    "distinctTextures": 776,
    "newTextures": 23,
@@ -250,7 +250,7 @@
   {
    "id": "1.18.1",
    "dataVersion": 2865,
-   "langTableIdx": 5,
+   "langTableIdx": 4,
    "textures": 781,
    "distinctTextures": 776,
    "newTextures": 0,
@@ -262,7 +262,7 @@
   {
    "id": "1.18.2",
    "dataVersion": 2975,
-   "langTableIdx": 6,
+   "langTableIdx": 4,
    "textures": 781,
    "distinctTextures": 776,
    "newTextures": 0,
@@ -274,7 +274,7 @@
   {
    "id": "1.19",
    "dataVersion": 3105,
-   "langTableIdx": 7,
+   "langTableIdx": 5,
    "textures": 821,
    "distinctTextures": 814,
    "newTextures": 48,
@@ -286,7 +286,7 @@
   {
    "id": "1.19.1",
    "dataVersion": 3117,
-   "langTableIdx": 7,
+   "langTableIdx": 5,
    "textures": 821,
    "distinctTextures": 814,
    "newTextures": 0,
@@ -298,7 +298,7 @@
   {
    "id": "1.19.2",
    "dataVersion": 3120,
-   "langTableIdx": 8,
+   "langTableIdx": 5,
    "textures": 821,
    "distinctTextures": 814,
    "newTextures": 0,
@@ -310,7 +310,7 @@
   {
    "id": "1.19.3",
    "dataVersion": 3218,
-   "langTableIdx": 9,
+   "langTableIdx": 6,
    "textures": 836,
    "distinctTextures": 829,
    "newTextures": 18,
@@ -322,7 +322,7 @@
   {
    "id": "1.19.4",
    "dataVersion": 3337,
-   "langTableIdx": 10,
+   "langTableIdx": 7,
    "textures": 856,
    "distinctTextures": 848,
    "newTextures": 19,
@@ -334,7 +334,7 @@
   {
    "id": "1.20",
    "dataVersion": 3463,
-   "langTableIdx": 11,
+   "langTableIdx": 8,
    "textures": 890,
    "distinctTextures": 883,
    "newTextures": 36,
@@ -346,7 +346,7 @@
   {
    "id": "1.20.1",
    "dataVersion": 3465,
-   "langTableIdx": 12,
+   "langTableIdx": 8,
    "textures": 890,
    "distinctTextures": 883,
    "newTextures": 0,
@@ -358,7 +358,7 @@
   {
    "id": "1.20.2",
    "dataVersion": 3578,
-   "langTableIdx": 12,
+   "langTableIdx": 8,
    "textures": 890,
    "distinctTextures": 883,
    "newTextures": 1,
@@ -370,7 +370,7 @@
   {
    "id": "1.20.3",
    "dataVersion": 3698,
-   "langTableIdx": 13,
+   "langTableIdx": 9,
    "textures": 952,
    "distinctTextures": 945,
    "newTextures": 62,
@@ -382,7 +382,7 @@
   {
    "id": "1.20.4",
    "dataVersion": 3700,
-   "langTableIdx": 13,
+   "langTableIdx": 9,
    "textures": 952,
    "distinctTextures": 945,
    "newTextures": 0,
@@ -394,7 +394,7 @@
   {
    "id": "1.20.5",
    "dataVersion": 3837,
-   "langTableIdx": 14,
+   "langTableIdx": 10,
    "textures": 974,
    "distinctTextures": 965,
    "newTextures": 25,
@@ -406,7 +406,7 @@
   {
    "id": "1.20.6",
    "dataVersion": 3839,
-   "langTableIdx": 14,
+   "langTableIdx": 10,
    "textures": 974,
    "distinctTextures": 965,
    "newTextures": 0,
@@ -418,7 +418,7 @@
   {
    "id": "1.21",
    "dataVersion": 3953,
-   "langTableIdx": 15,
+   "langTableIdx": 10,
    "textures": 974,
    "distinctTextures": 965,
    "newTextures": 8,
@@ -430,7 +430,7 @@
   {
    "id": "1.21.1",
    "dataVersion": 3955,
-   "langTableIdx": 15,
+   "langTableIdx": 10,
    "textures": 974,
    "distinctTextures": 965,
    "newTextures": 0,
@@ -442,7 +442,7 @@
   {
    "id": "1.21.2",
    "dataVersion": 4080,
-   "langTableIdx": 16,
+   "langTableIdx": 11,
    "textures": 994,
    "distinctTextures": 984,
    "newTextures": 20,
@@ -454,7 +454,7 @@
   {
    "id": "1.21.3",
    "dataVersion": 4082,
-   "langTableIdx": 16,
+   "langTableIdx": 11,
    "textures": 994,
    "distinctTextures": 984,
    "newTextures": 0,
@@ -466,7 +466,7 @@
   {
    "id": "1.21.4",
    "dataVersion": 4189,
-   "langTableIdx": 17,
+   "langTableIdx": 12,
    "textures": 1001,
    "distinctTextures": 991,
    "newTextures": 13,
@@ -478,7 +478,7 @@
   {
    "id": "1.21.5",
    "dataVersion": 4325,
-   "langTableIdx": 18,
+   "langTableIdx": 13,
    "textures": 1017,
    "distinctTextures": 1006,
    "newTextures": 15,
@@ -490,7 +490,7 @@
   {
    "id": "1.21.6",
    "dataVersion": 4435,
-   "langTableIdx": 19,
+   "langTableIdx": 14,
    "textures": 1045,
    "distinctTextures": 1034,
    "newTextures": 80,
@@ -502,7 +502,7 @@
   {
    "id": "1.21.7",
    "dataVersion": 4438,
-   "langTableIdx": 19,
+   "langTableIdx": 14,
    "textures": 1045,
    "distinctTextures": 1034,
    "newTextures": 0,
@@ -514,7 +514,7 @@
   {
    "id": "1.21.8",
    "dataVersion": 4440,
-   "langTableIdx": 19,
+   "langTableIdx": 14,
    "textures": 1045,
    "distinctTextures": 1034,
    "newTextures": 0,
@@ -526,7 +526,7 @@
   {
    "id": "1.21.9",
    "dataVersion": 4554,
-   "langTableIdx": 20,
+   "langTableIdx": 15,
    "textures": 1073,
    "distinctTextures": 1062,
    "newTextures": 28,
@@ -538,7 +538,7 @@
   {
    "id": "1.21.10",
    "dataVersion": 4556,
-   "langTableIdx": 20,
+   "langTableIdx": 15,
    "textures": 1073,
    "distinctTextures": 1062,
    "newTextures": 0,
@@ -550,7 +550,7 @@
   {
    "id": "1.21.11",
    "dataVersion": 4671,
-   "langTableIdx": 20,
+   "langTableIdx": 15,
    "textures": 1073,
    "distinctTextures": 1062,
    "newTextures": 0,
@@ -562,7 +562,7 @@
   {
    "id": "26.1",
    "dataVersion": 4786,
-   "langTableIdx": 21,
+   "langTableIdx": 16,
    "textures": 1074,
    "distinctTextures": 1063,
    "newTextures": 5,
@@ -574,7 +574,7 @@
   {
    "id": "26.1.1",
    "dataVersion": 4788,
-   "langTableIdx": 21,
+   "langTableIdx": 16,
    "textures": 1074,
    "distinctTextures": 1063,
    "newTextures": 0,
@@ -586,7 +586,7 @@
   {
    "id": "26.1.2",
    "dataVersion": 4790,
-   "langTableIdx": 21,
+   "langTableIdx": 16,
    "textures": 1074,
    "distinctTextures": 1063,
    "newTextures": 0,
@@ -598,7 +598,7 @@
   {
    "id": "26.2",
    "dataVersion": 4903,
-   "langTableIdx": 22,
+   "langTableIdx": 17,
    "textures": 1231,
    "distinctTextures": 1220,
    "newTextures": 157,
@@ -610,7 +610,7 @@
   {
    "id": "26.3",
    "dataVersion": 5023,
-   "langTableIdx": 23,
+   "langTableIdx": 18,
    "textures": 1250,
    "distinctTextures": 1239,
    "newTextures": 21,
@@ -628,16 +628,16 @@
   "modelPoolUnique": 2927,
   "modelRefs": 287907,
   "modelDedupPct": 1.02,
-  "langUnique": 24,
+  "langUnique": 19,
   "versionCount": 49,
-  "stringUnique": 6263
+  "stringUnique": 6754
  },
  "files": {
-  "blocks.dat": 5650470,
-  "blocks.dat.z": 1715175,
-  "blocks.dat.MB": 5.389,
-  "blocks.dat.z.MB": 1.636,
-  "ratio": 0.3035
+  "blocks.dat": 5650223,
+  "blocks.dat.z": 1709031,
+  "blocks.dat.MB": 5.388,
+  "blocks.dat.z.MB": 1.63,
+  "ratio": 0.3025
  },
  "inputs": [
   {

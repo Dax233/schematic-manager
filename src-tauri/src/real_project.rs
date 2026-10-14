@@ -1023,6 +1023,71 @@ fn redstone_wire_brightness_follows_power() {
     println!("  亮度随充能单调变化：{lo:.3} -> {hi:.3}");
 }
 
+/// 方块与实体的中文名必须能查到，且不能因为「本版本的语言表没中文」而整列空着。
+///
+/// 打包时只抓到了部分版本的官方中文（`zh=none` 的 39 个，有中文的仅 10 个），
+/// 而语言表里原本**没有任何 entity 条目**。因此这条同时守住两件事：
+/// 1. 本版本条目只有英文时，中文要能从其它版本补齐；
+/// 2. 实体名要能查到。
+#[test]
+#[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
+fn display_names_resolve_chinese_for_blocks_and_entities() {
+    let db = bundled_db();
+
+    // 覆盖三个典型版本：有中文的、原本没中文的、最新的
+    for dv in [3465, 4325, 5023] {
+        let vi = db.pick_version(dv);
+        let vi = vi.expect("选版本失败");
+        println!("  --- {} (dv={dv}) ---", db.versions[vi].name);
+
+        // 方块：挑几个一定存在的
+        let mut got = 0usize;
+        for name in [
+            "minecraft:stone",
+            "minecraft:redstone_wire",
+            "minecraft:oak_leaves",
+            "minecraft:piston",
+            "minecraft:chest",
+            "minecraft:white_stained_glass",
+        ] {
+            let (zh, en) = crate::commands::block_display_names(&db, Some(vi), name);
+            if name == "minecraft:stone" {
+                assert_eq!(zh, "石头", "石头的中文名应能查到（en={en:?}）");
+            }
+            if !zh.is_empty() {
+                got += 1;
+            }
+            println!("    {name:<34} {en:<22} {zh}");
+        }
+        assert!(
+            got >= 4,
+            "{} 只查到 {got} 个方块的中文名，中文支持不完整",
+            db.versions[vi].name
+        );
+
+        // 实体：中文名是本轮新补的数据
+        let mut ent_got = 0usize;
+        for id in [
+            "minecraft:zombie",
+            "minecraft:creeper",
+            "minecraft:villager",
+            "minecraft:item",
+            "minecraft:armor_stand",
+        ] {
+            let (zh, en) = crate::commands::entity_display_names(&db, Some(vi), id);
+            if !zh.is_empty() {
+                ent_got += 1;
+            }
+            println!("    实体 {id:<32} {en:<20} {zh}");
+        }
+        assert!(
+            ent_got >= 3,
+            "{} 只查到 {ent_got} 个实体的中文名；语言表里 entity.* 条目可能缺失",
+            db.versions[vi].name
+        );
+    }
+}
+
 #[test]
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn real_project_piston_states_all_resolve() {
