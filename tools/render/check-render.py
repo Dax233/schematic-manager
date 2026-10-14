@@ -1361,10 +1361,11 @@ def main():
             stage_h = int(fields.get("stageH", "-1"))
             stage_left = int(fields.get("stageLeft", "-1"))
             detail_left = int(fields.get("detailLeft", "-1"))
-            # 预览区为固定 200×200（用户明确要求），且整块面板在切换页签前后
-            # 高度完全一致——「分割线来回变化」指的就是这里不一致。
-            claim("预览区为固定 200×200",
-                  stage_w == 200 and stage_h == 200,
+            # 预览区为固定 398×344（用户按截图红框指定的尺寸），
+            # 且整块面板在切换页签前后高度完全一致——「分割线来回变化」
+            # 指的就是这里不一致。
+            claim("预览区为固定 398×344",
+                  stage_w == 398 and stage_h == 344,
                   f"  实际 {stage_w}×{stage_h}")
             claim("切换页签不改变预览面板高度",
                   int(fields.get("panelHBeforeSwitch", "-1")) == preview_panel_h
