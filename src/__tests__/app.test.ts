@@ -48,6 +48,31 @@ import type { SchematicSummary, SceneData, DuplicateGroup, ConvertItem, BlockCou
 const mockInvoke = vi.mocked(invoke);
 const mockOpen = vi.mocked(open);
 
+/**
+ * 捕获用户可见的提示。
+ *
+ * 断言「界面上出现了某句提示」时不要读 document.body.textContent：Arco 的
+ * Message 在模块级缓存了浮层容器元素，而每个用例开始时都会把 body 清空，
+ * 那个容器于是变成**游离节点**——引用还在、元素已不在文档里，之后所有提示
+ * 都渲染进这个看不见的节点。表现是「同一个断言单跑能过、整包跑就失败」，
+ * 而且会让「应提示 X」这类断言退化成看运气（甚至被工具栏里的同名字符串
+ * 蒙混过去）。这里改为断言确实调用了提示接口、且文案正确。
+ *
+ * vi.spyOn 默认保留原实现，因此提示照常渲染，不影响其它用例。
+ */
+const messageSuccess = vi.spyOn(Message, "success");
+const messageWarning = vi.spyOn(Message, "warning");
+const messageError = vi.spyOn(Message, "error");
+
+/** 本用例内出现过的全部提示文案 */
+function shownMessages(): string[] {
+  return [
+    ...messageSuccess.mock.calls,
+    ...messageWarning.mock.calls,
+    ...messageError.mock.calls,
+  ].map((c) => String(c[0]));
+}
+
 /** 一个可用的投影摘要，字段与后端 SchematicSummary 对齐
  *
  * 必须标注类型：不加标注时它不是「赋给有类型变量的对象字面量」，
@@ -135,6 +160,10 @@ function stubInvoke(overrides: Record<string, unknown> = {}) {
       case "list_backups":
       case "read_operation_log":
         return [];
+      case "rename_schematic":
+        // 契约是 RenameOutcome。默认「名字没变」，因此路径与文件名都取空，
+        // 需要断言改名的用例自己给出具体返回值。
+        return { path: "", fileName: "", relinked: 0 };
       case "mc_version_name":
         return "1.20.1";
       case "peek_schematic":
@@ -155,6 +184,10 @@ beforeEach(() => {
   // 那个「读不到主题」的替身会泄漏到后面的用例里（实测泄漏了 5 条告警）
   mockGetCurrentWindow.mockReset();
   mockGetCurrentWindow.mockImplementation(() => fakeWindow());
+  // 提示的调用记录逐个用例清空，避免上一条用例的提示被本条读到
+  messageSuccess.mockClear();
+  messageWarning.mockClear();
+  messageError.mockClear();
   document.body.innerHTML = "";
   document.body.removeAttribute("arco-theme");
 });
@@ -283,8 +316,223 @@ describe("主要操作流程", () => {
     expect(args.name, "编辑框里的名字应原样提交").toBe("改过的名字");
     expect(args.author, "未改动的字段应保持原值").toBe("作者");
 
-    // 保存结果必须告知用户备份位置，否则改动看起来像是没发生
-    expect(document.body.textContent, "应提示备份路径").toContain("备份");
+    // 保存结果必须告知用户备份位置，否则改动看起来像是没发生。
+    // 这里断言提示文案本身：改用 document.body.textContent 找「备份」是靠不住的
+    // ——工具栏里的「备份管理」按钮就含这两个字，无论有没有提示都会通过。
+    expect(shownMessages().join("\n"), "应提示备份路径").toContain("备份在：");
+    w.unmount();
+  });
+
+  it("改文件名后保存：先改名，再把元数据写到新路径，并说明备份已跟随", async () => {
+    stubInvoke();
+    mockOpen.mockResolvedValue("/p");
+    const w = mountApp();
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+
+    const order: string[] = [];
+    let renamedArgs: Record<string, unknown> | null = null;
+    let savedArgs: Record<string, unknown> | null = null;
+    mockInvoke.mockImplementation((async (cmd: string, args: Record<string, unknown>) => {
+      if (cmd === "rename_schematic") {
+        order.push("rename");
+        renamedArgs = args;
+        return { path: "/p/新名字.litematic", fileName: "新名字.litematic", relinked: 2 };
+      }
+      if (cmd === "save_metadata") {
+        order.push("save");
+        savedArgs = args;
+        return { backupPath: "/p/备份/新名字.litematic.bak" };
+      }
+      switch (cmd) {
+        case "scan_litematics":
+          return { items: [summary], skippedDirs: 0, skippedPaths: [] };
+        case "build_scene":
+          return scene;
+        case "analyze_schematic":
+          return {
+            blocks: [], entities: [], tileEntities: [],
+            nonAirTotal: 0, airTotal: 0, distinctBlockTypes: 0, distinctStates: 0,
+          };
+        default:
+          return [];
+      }
+    }) as never);
+
+    // 文件名输入框应带出当前文件名，并且可以改
+    const fileInput = w.findAll("input").find(
+      (i) => (i.element as HTMLInputElement).value === "测试.litematic",
+    );
+    expect(fileInput, "文件名输入框应带出当前文件名").toBeTruthy();
+    await fileInput!.setValue("新名字.litematic");
+    await flushPromises();
+
+    await w.findAll("button").find((b) => b.text().includes("保存"))!.trigger("click");
+    await flushPromises();
+
+    expect(renamedArgs, "应调用 rename_schematic").toBeTruthy();
+    expect((renamedArgs! as { path: string }).path, "改名应作用于被选中的文件").toBe(summary.path);
+    expect((renamedArgs! as { newName: string }).newName, "应传新文件名").toBe("新名字.litematic");
+    // 顺序不能反：先改名再写元数据。反过来会先给旧名字留一份备份，
+    // 而改名又要重新链接备份，同一件事被做两遍且中间态对不上
+    expect(order, "必须先改名再写元数据").toEqual(["rename", "save"]);
+    expect(
+      (savedArgs! as { path: string }).path,
+      "元数据必须写到改名后的新路径上",
+    ).toBe("/p/新名字.litematic");
+    // 备份已跟随这件事要告诉用户，否则他会以为备份丢了
+    expect(shownMessages().join("\n"), "应说明备份已跟随改名").toContain("2 组备份已跟随");
+    w.unmount();
+  });
+
+  it("改名成功但元数据写入失败时，界面收敛到新路径，再保存不再改名", async () => {
+    // 这条防的是「改名成功、写元数据失败」后的卡死：若 selected 仍指向旧路径，
+    // 用户再点保存会拿一个已不存在的路径去重命名，从此永远存不下去，
+    // 而磁盘上文件名其实早就改了。
+    stubInvoke();
+    mockOpen.mockResolvedValue("/p");
+    const w = mountApp();
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+
+    // 第一次写元数据失败；改名成功
+    let saveCalls = 0;
+    const renameCalls: Record<string, unknown>[] = [];
+    const renamedSummary = {
+      ...summary,
+      path: "/p/新名字.litematic",
+      fileName: "新名字.litematic",
+    };
+    mockInvoke.mockImplementation((async (cmd: string, args: Record<string, unknown>) => {
+      if (cmd === "rename_schematic") {
+        renameCalls.push(args);
+        return { path: "/p/新名字.litematic", fileName: "新名字.litematic", relinked: 0 };
+      }
+      if (cmd === "save_metadata") {
+        saveCalls += 1;
+        if (saveCalls === 1) throw new Error("磁盘只读");
+        return { backupPath: "/p/备份/x.bak" };
+      }
+      switch (cmd) {
+        case "scan_litematics":
+          // 第一次扫描返回旧记录，失败后的重扫返回新记录
+          return {
+            items: [saveCalls >= 1 ? renamedSummary : summary],
+            skippedDirs: 0,
+            skippedPaths: [],
+          };
+        case "build_scene":
+          return scene;
+        case "analyze_schematic":
+          return {
+            blocks: [], entities: [], tileEntities: [],
+            nonAirTotal: 0, airTotal: 0, distinctBlockTypes: 0, distinctStates: 0,
+          };
+        default:
+          return [];
+      }
+    }) as never);
+
+    const fileInput = () =>
+      w.findAll("input").find(
+        (i) => ["测试.litematic", "新名字.litematic"].includes(
+          (i.element as HTMLInputElement).value,
+        ),
+      );
+    await fileInput()!.setValue("新名字.litematic");
+    await flushPromises();
+    await w.findAll("button").find((b) => b.text().includes("保存"))!.trigger("click");
+    await flushPromises();
+
+    // 失败提示要说清「文件名已改」，否则用户以为文件没动
+    expect(shownMessages().join("\n"), "应说明文件名已改").toContain("文件名已改");
+    expect(renameCalls.length, "第一次应改名").toBe(1);
+
+    // 再点一次保存：不应再改名（路径已收敛到新名字）
+    const saveBtn = w.findAll("button").find((b) => b.text().includes("保存"));
+    if (saveBtn && saveBtn.attributes("disabled") === undefined) {
+      await saveBtn.trigger("click");
+      await flushPromises();
+      expect(renameCalls.length, "第二次保存不应再改名").toBe(1);
+    }
+    w.unmount();
+  });
+
+  it("改名成功但备份未链接上时，如实告知而不是假装成功", async () => {
+    stubInvoke();
+    mockOpen.mockResolvedValue("/p");
+    const w = mountApp();
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+
+    mockInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === "rename_schematic") {
+        // 文件已改名，只是备份没接上——这不是整体失败
+        return {
+          path: "/p/新名字.litematic",
+          fileName: "新名字.litematic",
+          relinked: 0,
+          relinkError: "备份目录不可写",
+        };
+      }
+      if (cmd === "save_metadata") return { backupPath: "/p/备份/x.bak" };
+      switch (cmd) {
+        case "scan_litematics":
+          return { items: [summary], skippedDirs: 0, skippedPaths: [] };
+        case "build_scene":
+          return scene;
+        case "analyze_schematic":
+          return {
+            blocks: [], entities: [], tileEntities: [],
+            nonAirTotal: 0, airTotal: 0, distinctBlockTypes: 0, distinctStates: 0,
+          };
+        default:
+          return [];
+      }
+    }) as never);
+
+    const fileInput = w.findAll("input").find(
+      (i) => (i.element as HTMLInputElement).value === "测试.litematic",
+    );
+    await fileInput!.setValue("新名字.litematic");
+    await flushPromises();
+    await w.findAll("button").find((b) => b.text().includes("保存"))!.trigger("click");
+    await flushPromises();
+
+    expect(
+      shownMessages().join("\n"),
+      "应告知备份未链接上，不能静默",
+    ).toContain("备份目录不可写");
+    w.unmount();
+  });
+
+  it("文件名未改动时不应触发改名", async () => {
+    // 否则每次保存都会先做一次无谓的重命名（并重新链接一遍备份）
+    stubInvoke();
+    mockOpen.mockResolvedValue("/p");
+    const w = mountApp();
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+
+    const nameInput = w.findAll("input").find(
+      (i) => (i.element as HTMLInputElement).value === "测试投影",
+    );
+    await nameInput!.setValue("只改投影名");
+    await flushPromises();
+    await w.findAll("button").find((b) => b.text().includes("保存"))!.trigger("click");
+    await flushPromises();
+
+    const names = mockInvoke.mock.calls.map((c) => c[0]);
+    expect(names, "没改文件名就不该调用 rename_schematic").not.toContain("rename_schematic");
+    expect(names, "元数据仍应保存").toContain("save_metadata");
     w.unmount();
   });
 
@@ -322,6 +570,79 @@ describe("主要操作流程", () => {
     const btn = (label: string) => w.findAll("button").find((b) => b.text().includes(label));
     expect(btn("方块替换")?.attributes("disabled"), "选中后应可用").toBeUndefined();
     expect(btn("版本转换")?.attributes("disabled"), "选中后应可用").toBeUndefined();
+    w.unmount();
+  });
+
+  it("方块替换里源方块也显示中文名", async () => {
+    // 从「方块」页签点行填入的是方块 ID，只有 ID 时用户无法确认自己点中的
+    // 到底是哪一个方块，因此源方块要与目标方块一样显示中文名。
+    stubInvoke();
+    mockOpen.mockResolvedValue("/p");
+    const w = mountApp();
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+
+    mockInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === "search_blocks") {
+        // 近邻放在**第一个**：这样「取第一条命中」的错误实现会显示错的中文名，
+        // 断言才真的在检验「按名字精确匹配」而不是碰巧对上
+        return [
+          { name: "minecraft:oak_planks", zh: "橡木木板", en: "Oak Planks", versions: [] },
+          { name: "minecraft:oak_stairs", zh: "橡木楼梯", en: "Oak Stairs", versions: [] },
+        ];
+      }
+      return [];
+    }) as never);
+
+    await w.findAll("button").find((b) => b.text().includes("方块替换"))!.trigger("click");
+    await flushPromises();
+
+    // 弹窗内容被 Teleport 到 body，不在组件的渲染树里，因此直接查 document
+    const fromInput = document.querySelector<HTMLInputElement>(
+      'input[placeholder="例如 minecraft:oak_stairs"]',
+    );
+    expect(fromInput, "应能定位到源方块输入框").toBeTruthy();
+    fromInput!.value = "minecraft:oak_stairs";
+    fromInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await flushPromises();
+
+    // 中文名是防抖查出来的，等一个真实的时间片让它落地
+    await new Promise((r) => setTimeout(r, 300));
+    await flushPromises();
+
+    const text = document.body.textContent ?? "";
+    expect(text, "应显示源方块的中文名").toContain("橡木楼梯");
+    expect(text, "不能把模糊匹配到的近邻当成源方块").not.toContain("橡木木板");
+    w.unmount();
+  });
+
+  it("源方块 ID 在方块库里查不到时明确说明，而不是显示空白", async () => {
+    stubInvoke();
+    mockOpen.mockResolvedValue("/p");
+    const w = mountApp();
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+
+    mockInvoke.mockImplementation((async () => []) as never);
+    await w.findAll("button").find((b) => b.text().includes("方块替换"))!.trigger("click");
+    await flushPromises();
+
+    const fromInput = document.querySelector<HTMLInputElement>(
+      'input[placeholder="例如 minecraft:oak_stairs"]',
+    );
+    fromInput!.value = "minecraft:not_a_real_block";
+    fromInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await flushPromises();
+    await new Promise((r) => setTimeout(r, 300));
+    await flushPromises();
+
+    expect(document.body.textContent, "查不到时应说明，而不是留一片空白").toContain(
+      "未找到该 ID",
+    );
     w.unmount();
   });
 });
@@ -976,6 +1297,57 @@ describe("目录栏多选与文件操作", () => {
     const call = mockInvoke.mock.calls.find((c) => c[0] === "copy_files_to_clipboard");
     expect(call, "应调用 copy_files_to_clipboard").toBeTruthy();
     expect((call![1] as { paths: string[] }).paths).toEqual(["/p/f0.litematic"]);
+    w.unmount();
+  });
+
+  it("右键菜单点「打开文件夹」要真的执行（pointerdown 不能先关掉菜单）", async () => {
+    // 这条防的是「右键菜单点不动」：菜单由 v-if 控制，而全局监听在 window 的
+    // pointerdown 上关闭它。真实点击的顺序是 pointerdown → click，
+    // 若 pointerdown 就把菜单摘掉，click 永远落不到菜单项上。
+    // 只 trigger("click") 的写法测不出这个缺陷——那正是它一直漏掉的原因。
+    const w = await mountWithRows(2);
+    const row = w.findAll(".arco-table-body tbody tr")[0];
+    await row.trigger("contextmenu", { clientX: 120, clientY: 200 });
+    await flushPromises();
+
+    const item = w.find(".ctx-menu__item");
+    expect(item.exists(), "右键后应出现菜单").toBe(true);
+
+    // 按真实顺序来：先在菜单项上派发 pointerdown（冒泡到 window），再 click。
+    // 必须重新查一次 DOM 判断菜单是否还在——vue-test-utils 的 trigger("click")
+    // 对着已从文档移除的元素也能派发事件，所以「直接 trigger click 并断言命令
+    // 被调用」测不出这个缺陷；真正决定成败的是 pointerdown 之后菜单还在不在。
+    item.element.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, button: 0 }),
+    );
+    await flushPromises();
+    expect(
+      w.find(".ctx-menu__item").exists(),
+      "pointerdown 不应关掉菜单：菜单一旦被移除，浏览器就不会再把 click 送到它上面",
+    ).toBe(true);
+
+    await w.find(".ctx-menu__item").trigger("click");
+    await flushPromises();
+
+    const call = mockInvoke.mock.calls.find((c) => c[0] === "reveal_in_file_manager");
+    expect(call, "点菜单项应调用 reveal_in_file_manager").toBeTruthy();
+    expect((call![1] as { path: string }).path, "应作用于右键点中的那一行").toBe(
+      "/p/f0.litematic",
+    );
+    w.unmount();
+  });
+
+  it("点右键菜单以外的地方仍会关闭菜单", async () => {
+    // 上一条要求菜单内点击不关闭；这条保证「点别处关闭」没有被一起改坏
+    const w = await mountWithRows(2);
+    const row = w.findAll(".arco-table-body tbody tr")[0];
+    await row.trigger("contextmenu", { clientX: 120, clientY: 200 });
+    await flushPromises();
+    expect(w.find(".ctx-menu__item").exists()).toBe(true);
+
+    await w.find(".titlebar").trigger("pointerdown");
+    await flushPromises();
+    expect(w.find(".ctx-menu__item").exists(), "点别处应关闭菜单").toBe(false);
     w.unmount();
   });
 

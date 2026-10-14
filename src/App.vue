@@ -20,6 +20,7 @@ import {
   listBlockVersions,
   listPacks,
   openDirectory,
+  renameSchematic,
   revealInFileManager,
   setPackEnabled,
   previewReplace,
@@ -138,7 +139,7 @@ const analysis = ref<AnalysisResult | null>(null);
 const analyzing = ref(false);
 const saving = ref(false);
 // 元数据编辑草稿。选中文件时用文件中的值填充
-const draft = ref({ name: "", author: "", description: "" });
+const draft = ref({ fileName: "", name: "", author: "", description: "" });
 const dirty = ref(false);
 const searchText = ref("");
 
@@ -520,6 +521,88 @@ const replaceForm = ref({
 });
 const replacePreview = ref<number | null>(null);
 
+/** 源方块的中文名。
+ *
+ * 从方块库按 ID 反查。与目标方块的搜索共用同一个接口：源方块只差在
+ * 用户是从「方块」页签点行填入而不是自己搜，但显示的仍是同一个方块库的
+ * 中文名，两处的结果因此不会互相矛盾。
+ */
+const fromZh = ref("");
+
+/** 源方块中文名的查询状态："idle" / "loading" / "done"。
+ *
+ * 没有这个状态时，输入的第一个字符到查询落地之间 fromZh 都是空的，
+ * 界面会先显示「未找到该 ID」再改成正确的中文名——每敲一个字都先看到一句
+ * 否定结论。只有确认查完了（done）才允许下结论。
+ */
+const fromZhState = ref<"idle" | "loading" | "done">("idle");
+
+/** 请求序号：只接受最后一次查询的结果。
+ *
+ * 慢响应可能后到——打开弹窗时的即时查询与随后的防抖查询会并发，
+ * 后到的旧结果会把新结果覆盖掉。
+ */
+let fromZhSeq = 0;
+
+/** 从「方块 ID 或 带属性的状态串」里取出纯 ID。
+ *
+ * 用户从「方块」页签点行填入的是 `minecraft:chest[facing=east,type=...]`
+ * 这种状态串，严格按整串去方块库比对必然匹配不上，于是明明能找到的方块
+ * 也会被报成「未找到」。方块库里的名字不含属性，因此先剥掉方括号部分。
+ */
+function bareBlockId(raw: string): string {
+  const i = raw.indexOf("[");
+  return (i >= 0 ? raw.slice(0, i) : raw).trim();
+}
+
+async function resolveFromZh() {
+  const id = bareBlockId(replaceForm.value.fromName);
+  const seq = ++fromZhSeq;
+  if (!id) {
+    fromZh.value = "";
+    fromZhState.value = "idle";
+    return;
+  }
+  fromZhState.value = "loading";
+  try {
+    const hits = await searchBlocks(id, 50);
+    // 只认名字完全一致的命中：搜索是模糊匹配，取自第一项会把
+    // minecraft:oak_stairs 显示成 minecraft:oak_planks 这类近邻的中文名
+    const exact = hits.find((h) => h.name === id);
+    if (seq !== fromZhSeq) return; // 已有更新的查询，丢弃这份过期结果
+    fromZh.value = exact ? exact.zh || exact.en || "" : "";
+    fromZhState.value = "done";
+  } catch (e) {
+    if (seq !== fromZhSeq) return;
+    // 查不到中文名不该打断替换流程，但也不能假装查过了
+    fromZh.value = "";
+    fromZhState.value = "done";
+    console.warn("查询源方块中文名失败：", e);
+  }
+}
+
+// 用防抖：输入框每敲一个字符都会触发，逐字符查库既无必要也拖慢输入
+let fromZhTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleFromZh() {
+  if (fromZhTimer !== null) clearTimeout(fromZhTimer);
+  // 立刻切到「查询中」，避免防抖等待期间就显示「未找到」
+  if (replaceForm.value.fromName.trim()) fromZhState.value = "loading";
+  fromZhTimer = setTimeout(() => {
+    fromZhTimer = null;
+    void resolveFromZh();
+  }, 200);
+}
+
+watch(() => replaceForm.value.fromName, scheduleFromZh);
+
+// 卸载时清掉待触发的查询：否则组件已销毁仍会发一次无意义的请求
+onBeforeUnmount(() => {
+  if (fromZhTimer !== null) {
+    clearTimeout(fromZhTimer);
+    fromZhTimer = null;
+  }
+});
+
 /** 解析 "key=value,key2=value2" 形式的属性限定；空串表示不限定 */
 function parseProps(text: string): [string, string][] {
   const out: [string, string][] = [];
@@ -579,6 +662,11 @@ async function openReplace() {
   if (!replaceForm.value.fromName && activeBlock.value) {
     replaceForm.value.fromName = activeBlock.value.name;
   }
+  // 本次打开时就查一次中文名：值可能来自上次的填写而没有发生变化，
+  // 只靠 watch 不会触发，那一栏就会空着
+  fromZh.value = "";
+  fromZhState.value = "idle";
+  void resolveFromZh();
   if (blockVersions.value.length === 0) {
     try {
       blockVersions.value = await listBlockVersions();
@@ -1150,8 +1238,18 @@ async function revealRow(row: { path: string; name: string }) {
   }
 }
 
-/** 全局：点击别处或按 Esc 关闭右键菜单 */
-function onGlobalPointerDown() {
+/** 全局：点击别处或按 Esc 关闭右键菜单。
+ *
+ * 点在我们自己的菜单上时**不能**关：pointerdown 先于 click 触发，
+ * 若在这里把菜单从 DOM 摘掉（v-if），随后的 click 永远落不到菜单项上，
+ * 表现就是「右键菜单点不动、点了没反应」。这是菜单项唯一失效的原因，
+ * 工具栏那个同名按钮走的是另一条路径，所以它一直是好的。
+ */
+function onGlobalPointerDown(e: Event) {
+  const t = e.target as Node | null;
+  // blur 事件的 target 是 window，没有 closest，因此先确认是元素节点
+  const el = t && t.nodeType === 1 ? (t as HTMLElement) : null;
+  if (el?.closest?.(".ctx-menu")) return;
   closeRowMenu();
 }
 function onGlobalKey(e: KeyboardEvent) {
@@ -1287,6 +1385,50 @@ function removeDir(dir: string) {
  * 逐个目录独立处理：某一个目录临时读不到（被删除、权限变化）时，
  * 保留它原有结果并提示，而不是让整次刷新失败、把其它目录也清空。
  */
+/** 改名成功后把界面里所有按路径记录的状态迁到新路径。
+ *
+ * 改名是磁盘操作，界面若不跟着迁，就会出现「记录指向一个已不存在的路径」：
+ *   - selected 与 dirItems 里的记录：再点保存会拿旧路径去重命名，必然失败；
+ *   - checkedPaths：按路径勾选，不迁则该文件变成「未勾选」，批量操作漏掉它；
+ *   - dupGroupNo：重复文件分组按路径标记，不迁则行的高亮/分组号凭空消失。
+ *
+ * 这里只做本地收敛，不重新扫描：调用方随后会 rescanAll 或在失败分支里补扫。
+ */
+function syncRenamedPath(cur: SchematicSummary, newPath: string, newName: string) {
+  const patch = <T extends SchematicSummary>(f: T): T =>
+    f.path === cur.path ? { ...f, path: newPath, fileName: newName } : f;
+
+  if (selected.value?.path === cur.path) {
+    selected.value = { ...selected.value, path: newPath, fileName: newName };
+  }
+
+  const moved: Record<string, SchematicSummary[]> = {};
+  for (const [dir, items] of Object.entries(dirItems.value)) {
+    moved[dir] = items.map(patch);
+  }
+  dirItems.value = moved;
+
+  if (checkedPaths.value.has(cur.path)) {
+    const next = new Set(checkedPaths.value);
+    next.delete(cur.path);
+    next.add(newPath);
+    checkedPaths.value = next;
+  }
+  // 重复筛查结果按路径记组：不迁则这个文件的行高亮与分组号凭空消失。
+  // 改名不改内容，分组本身仍然成立，因此只换路径、不重扫。
+  if (dupResult.value) {
+    const rename = (p: string) => (p === cur.path ? newPath : p);
+    dupResult.value = {
+      ...dupResult.value,
+      groups: dupResult.value.groups.map((g) => ({ ...g, paths: g.paths.map(rename) })),
+      unreadable: dupResult.value.unreadable.map((u) => ({
+        ...u,
+        path: rename(u.path),
+      })),
+    };
+  }
+}
+
 async function rescanAll(): Promise<void> {
   const dirs = loadedDirs.value;
   if (dirs.length === 0) return;
@@ -1305,6 +1447,7 @@ async function rescanAll(): Promise<void> {
 
 function resetDraft(record: SchematicSummary | null) {
   draft.value = {
+    fileName: record?.fileName ?? "",
     name: record?.name ?? "",
     author: record?.author ?? "",
     description: record?.description ?? "",
@@ -1312,12 +1455,46 @@ function resetDraft(record: SchematicSummary | null) {
   dirty.value = false;
 }
 
+/** 文件名是否被改过（忽略首尾空白，但**区分大小写**）。
+ *
+ * 不能忽略大小写：把 demo.litematic 改成 DEMO.litematic 是用户明确的意图，
+ * 忽略它会让保存看起来成功、名字却没变（清空草稿后输入框又变回旧名），
+ * 而且全程没有任何提示。后端能正确处理仅大小写的改名。
+ */
+function fileNameChanged(cur: SchematicSummary): boolean {
+  return draft.value.fileName.trim() !== cur.fileName;
+}
+
 async function saveDraft() {
   const cur = selected.value;
   if (!cur) return;
   saving.value = true;
+  let renameNote = "";
+  let renamedOk = false;
   try {
-    const out = await saveMetadata(cur.path, {
+    // 改了文件名就先改名，再把元数据写到**新路径**上。
+    // 顺序不能反：先写元数据再改名，会先给旧名字留一份备份，
+    // 而改名又要重新链接备份，同一件事被做两遍且中间态对不上。
+    let targetPath = cur.path;
+    if (fileNameChanged(cur)) {
+      const renamed = await renameSchematic(cur.path, draft.value.fileName.trim());
+      targetPath = renamed.path;
+      renameNote = `，已重命名为 ${renamed.fileName}`;
+      renamedOk = true;
+      if (renamed.relinkError) {
+        // 文件已改名成功，只是备份没接上：如实告知，不能静默
+        Message.warning(`备份未能链接到新文件名：${renamed.relinkError}`);
+      } else if (renamed.relinked > 0) {
+        renameNote += `（${renamed.relinked} 组备份已跟随）`;
+      }
+      // 改名成功后必须立刻把界面里的路径收敛到新路径。
+      //
+      // 若只等下面的 saveMetadata 成功才更新，一旦写元数据失败，selected 还指向
+      // 旧路径、dirty 仍为 true；用户再点一次「保存」就会拿一个已不存在的路径去
+      // 重命名，必然失败——从此再也存不下去，而磁盘上文件名其实早就改了。
+      syncRenamedPath(cur, renamed.path, renamed.fileName);
+    }
+    const out = await saveMetadata(targetPath, {
       name: draft.value.name,
       author: draft.value.author,
       description: draft.value.description,
@@ -1325,21 +1502,27 @@ async function saveDraft() {
     dirty.value = false;
     // 重新读取，确保界面显示的是文件中的真实内容而不是内存里的草稿
     await rescanAll();
-    const hit = files.value.find((f) => f.path === cur.path);
+    const hit = files.value.find((f) => f.path === targetPath);
     if (hit) {
       selected.value = hit;
       resetDraft(hit);
-      const idx = files.value.findIndex((f) => f.path === hit.path);
-      if (idx >= 0) files.value[idx] = hit;
-      Message.success(`已保存，备份在：${out.backupPath}`);
+      Message.success(`已保存${renameNote}，备份在：${out.backupPath}`);
     } else {
       // 文件被移动或重命名时，界面若继续显示旧记录会误导用户
       Message.warning(
-        `已保存，但重新读取时未在该目录找到该文件（可能已被移动或重命名）。备份在：${out.backupPath}`,
+        `已保存${renameNote}，但重新读取时未在该目录找到该文件（可能已被移动或重命名）。备份在：${out.backupPath}`,
       );
     }
   } catch (e) {
-    Message.error(`保存失败：${e}`);
+    // 改名与写元数据是两步，失败原因必须分清：只报「保存失败」会让用户
+    // 以为文件名也没变，而磁盘上它其实已经改了
+    if (renamedOk) {
+      Message.error(`文件名已改${renameNote}，但元数据未能写入：${e}`);
+    } else {
+      Message.error(`保存失败：${e}`);
+    }
+    // 重新扫描，让界面回到与磁盘一致的状态（改名已生效的那部分也要体现出来）
+    await rescanAll().catch(() => {});
   } finally {
     saving.value = false;
   }
@@ -2296,16 +2479,25 @@ void followSystemTheme();
               <!-- 可编辑区：文件名、投影名称、作者、描述。操作行在它外面，
                    因此内容再长也不会把保存按钮挤出可视范围。 -->
               <div class="preview__info-body">
-              <!-- 这一栏只放四件事：文件名（只读）、投影名称、作者、描述。
+              <!-- 这一栏只放四件事：文件名、投影名称、作者、描述。四者都可编辑。
                    前三项按用户要求「名称在左、控件在右」横排；描述是长文本，
                    标签留在上方、输入框占满整行。
                    制作版本/数据版本/投影格式/尺寸/区域数量/方块总数/实体数量
                    都已移到底部的「信息」页签，这里不再重复显示。 -->
+              <!-- 文件名可改：改的是磁盘上的文件名，保存时会连同备份一起
+                   重新链接到新名字（见后端 rename_schematic）。
+                   输入框只放文件名本身，不含所在目录。 -->
               <div class="preview__row">
                 <span class="preview__row-label">文件名</span>
-                <span class="preview__row-value" :title="selected.fileName">
-                  {{ selected.fileName }}
-                </span>
+                <a-input
+                  class="preview__row-control"
+                  v-model="draft.fileName"
+                  :disabled="!!selected.error"
+                  @input="dirty = true"
+                />
+              </div>
+              <div class="hint-dim" style="margin: -6px 0 10px 66px">
+                改名后保存即生效，所属目录不变
               </div>
 
               <a-form :model="draft" layout="vertical" size="small" class="preview__form">
@@ -2787,6 +2979,13 @@ void followSystemTheme();
       <a-form :model="replaceForm" layout="vertical" size="small">
         <a-form-item label="源方块（要替换掉的）">
           <a-input v-model="replaceForm.fromName" placeholder="例如 minecraft:oak_stairs" allow-clear />
+          <!-- 源方块的中文名与目标方块一样要显示：用户从「方块」页签点行填入的
+               是方块 ID，只有 ID 时无法确认自己点中的到底是哪一个 -->
+          <div v-if="fromZh" class="hint-dim">中文名：{{ fromZh }}</div>
+          <div v-else-if="fromZhState === 'loading'" class="hint-dim">正在查询中文名…</div>
+          <div v-else-if="fromZhState === 'done' && replaceForm.fromName.trim()" class="hint-dim">
+            方块库中未找到该 ID，请检查拼写
+          </div>
           <div class="hint-dim">
             在「方块」页签点击任意行可直接填入，属性限定也会一并带入
           </div>

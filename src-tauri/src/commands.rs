@@ -10,6 +10,7 @@ use crate::dto::{
     AnalysisResult, BackupEntryDto, BlockCount, BlockHitDto, BlockIconDto, BlockVersionDto,
     ConvertItemDto, ConvertOutcomeDto, ConvertTargetDto, DuplicateGroupDto, DuplicateScanDto,
     EntityCount, FileOpOutcome, ImportOutcomeDto, ModsImportDto, PackEntryDto, PackListDto, PackLoadFailureDto,
+    RenameOutcomeDto,
     ReplaceOutcomeDto, ReplaceRuleDto, SceneDto, SaveOutcome, ScanResult, SchematicSummary,
     UnreadableFileDto, VersionOptionDto,
 };
@@ -2075,6 +2076,45 @@ pub fn copy_files_to_dir(paths: Vec<String>, dest_dir: String) -> Result<FileOpO
 pub fn reveal_in_file_manager(path: String) -> Result<(), String> {
     let p = Path::new(&path);
     crate::file_ops::reveal_in_file_manager(p).map_err(|e| e.to_string())
+}
+
+/// 重命名投影文件，并把它的备份一并重新链接到新名字。
+///
+/// 只接受文件名本身（不含目录），校验见 `file_ops::normalize_file_name`。
+/// 改名本身不改动内容，因此不需要为此新建备份；但要动的是备份的**关联**，
+/// 否则改完名字后这个文件的备份会在「备份管理」里消失、也无法还原。
+#[tauri::command]
+pub fn rename_schematic(path: String, new_name: String) -> Result<RenameOutcomeDto, String> {
+    let old = Path::new(&path);
+    let name = crate::file_ops::normalize_file_name(&new_name).map_err(|e| e.to_string())?;
+    let dest = crate::file_ops::rename_file(old, &name).map_err(|e| e.to_string())?;
+
+    let root = crate::backup::backup_root(&exe_dir());
+    // 重新链接失败时如实记录原因：只回一个失败提示而不落日志，
+    // 事后完全无法判断备份到底动没动、动到哪一步
+    let (relinked, relink_error) = match crate::backup::relink(&root, old, &dest) {
+        Ok(n) => (n, None),
+        Err(e) => (0, Some(e.to_string())),
+    };
+    let old_name = old
+        .file_name()
+        .map(|v| v.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let file_name = dest
+        .file_name()
+        .map(|v| v.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.clone());
+    let summary = match &relink_error {
+        Some(e) => format!("重命名 {old_name} -> {file_name}（备份重新链接失败：{e}）"),
+        None => format!("重命名 {old_name} -> {file_name}（重新链接备份 {relinked} 组）"),
+    };
+    let _ = crate::backup::append_log(&root, &summary);
+    Ok(RenameOutcomeDto {
+        path: dest.to_string_lossy().into_owned(),
+        file_name,
+        relinked,
+        relink_error,
+    })
 }
 
 /// 在文件管理器里打开一个目录。

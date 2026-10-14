@@ -61,6 +61,19 @@ pub fn create(exe_dir: &Path, src: &Path, op: &str) -> AppResult<BackupOutcome> 
     Ok(BackupOutcome { backup_path: dst })
 }
 
+/// 两个路径是否指向同一个实际位置。
+///
+/// 用规范化结果比较，而不是自己比小写字符串：在大小写敏感的系统上
+/// `A/b` 与 `A/B` 是两个不同的位置，按字符串小写比较会误判成同一个。
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        // 规范化不了（路径不存在）时退回原样比较：此时「相等」最多意味着
+        // 写法一致，不会把两个不同目录误判成一个
+        _ => a == b,
+    }
+}
+
 /// 记录原始路径的旁文件名
 const ORIG_PATH_FILE: &str = ".orig_path";
 
@@ -82,10 +95,16 @@ fn hash_path(s: &str) -> u64 {
 /// `C:\A` 与 `c:\a` 必须视为同一处。
 fn orig_path_of(src: &Path) -> String {
     let abs = std::fs::canonicalize(src).unwrap_or_else(|_| {
-        src.parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_default()
-            .join(src.file_name().unwrap_or_default())
+        // 文件本身已不存在时（重命名之后要读旧路径的记录）无法规范化它，
+        // 退而规范化它的父目录再拼上文件名。
+        //
+        // 父目录也必须规范化：canonicalize 在 Windows 上返回的是带
+        // `\\?\` 前缀的最终路径，而这里若直接拼原样的父目录字符串，
+        // 得到的形式与 create() 当时写下的记录不同，比对必然不相等——
+        // 表现就是重命名后怎么都找不到旧备份的分组。
+        let dir = src.parent().unwrap_or_else(|| Path::new(""));
+        let canon_dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        canon_dir.join(src.file_name().unwrap_or_default())
     });
     let mut t = abs.to_string_lossy().replace('/', "\\").to_lowercase();
     while t.len() > 3 && t.ends_with('\\') {
@@ -95,6 +114,13 @@ fn orig_path_of(src: &Path) -> String {
 }
 
 fn group_dir(exe_dir: &Path, src: &Path) -> AppResult<PathBuf> {
+    group_dir_under(&backup_root(exe_dir), src)
+}
+
+/// 与 `group_dir` 相同，但直接给出备份根目录。
+///
+/// 拆分出来是因为重新链接（见 `relink`）拿到的是备份根，不是 exe 所在目录。
+fn group_dir_under(root: &Path, src: &Path) -> AppResult<PathBuf> {
     let stem = src
         .file_stem()
         .map(|v| v.to_string_lossy().into_owned())
@@ -104,7 +130,142 @@ fn group_dir(exe_dir: &Path, src: &Path) -> AppResult<PathBuf> {
         .map(|p| p.to_string_lossy().to_lowercase())
         .unwrap_or_default();
     let key = hash_path(&parent);
-    Ok(backup_root(exe_dir).join(format!("{stem}_{key:016x}")))
+    Ok(root.join(format!("{stem}_{key:016x}")))
+}
+
+/// 文件重命名后，把它的备份重新链接到新名字上。
+///
+/// 备份与文件的关联有三处依赖旧名字，缺一处都会让备份「消失」：
+///   1. 分组目录名 `<主干>_<父目录哈希>`——列表按主干筛选，
+///      不改名则「备份管理」里看不到这个文件的任何备份；
+///   2. 分组内的 `.orig_path`——还原前用它校验同源，
+///      不改则还原会被拒绝（提示「不同源」）；
+///   3. 备份文件名 `<主干>__<时间戳>__<操作>.litematic`——
+///      列表从文件名解析主干，不改则筛选同样匹配不上。
+///
+/// 返回重新链接的分组数。目标分组已存在时（例如同名文件曾存在、
+/// 其备份仍在）把备份并入该分组：它们现在指向同一个路径，
+/// 合成一组才能让「按路径找备份」保持一一对应。
+pub fn relink(root: &Path, old: &Path, new: &Path) -> AppResult<usize> {
+    let old_stem = old
+        .file_stem()
+        .map(|v| v.to_string_lossy().into_owned())
+        .ok_or_else(|| AppError::Parse("源文件没有文件名主干".into()))?;
+    let new_stem = new
+        .file_stem()
+        .map(|v| v.to_string_lossy().into_owned())
+        .ok_or_else(|| AppError::Parse("目标文件没有文件名主干".into()))?;
+    let old_key = orig_path_of(old);
+    let new_key = orig_path_of(new);
+    let dest_dir = group_dir_under(root, new)?;
+
+    // 备份根不存在是正常的（还没备份过任何文件），但「存在却读不到」
+    // （权限、被占用）不能当成「没有备份」：那会让重命名悄悄跳过重新链接，
+    // 用户直到发现还原失败才知道备份没跟上
+    let groups = match std::fs::read_dir(root) {
+        Ok(g) => g,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => {
+            return Err(AppError::Parse(format!(
+                "无法读取备份目录 {}：{e}",
+                root.display()
+            )))
+        }
+    };
+    let mut relinked = 0;
+    for g in groups.flatten() {
+        if !g.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let src_dir = g.path();
+        // 只处理确实属于旧文件的分组：同名不同目录的文件各有一组，
+        // 按路径比对才不会把别人的备份改到新名字上
+        let recorded = std::fs::read_to_string(src_dir.join(ORIG_PATH_FILE))
+            .map(|v| v.trim().to_string())
+            .unwrap_or_default();
+        if recorded != old_key {
+            continue;
+        }
+        // 主干没变（例如只调整了大小写）时改名毫无必要，
+        // 强行把目录搬来搬去反而会与自身冲突
+        if old_stem == new_stem {
+            continue;
+        }
+        // 只差大小写时两个分组目录**可能**是同一个目录。此时不能建目录、
+        // 更不能删旧目录：那会把刚写好的 .orig_path 一并删掉，备份就此无法还原。
+        //
+        // 判断交给文件系统，而不是自己比小写字符串：小写相等只说明「可能是同一
+        // 个」，在大小写敏感的系统上 `demo_h` 与 `DEMO_h` 确实各是一个目录，
+        // 按字符串判成同一个就会跳过建目录，随后的 rename 必然失败。
+        let same_dir = dest_dir.exists() && same_path(&src_dir, &dest_dir);
+
+        // 先把要搬的文件全部列出来（含撞名检查），再动任何东西。
+        // 一边枚举一边搬会在中途失败时留下「已搬走、但新分组还没有
+        // .orig_path」的备份——那种备份既列得出、又还原不了。
+        let Ok(files) = std::fs::read_dir(&src_dir) else {
+            // 读不到这一组就整组不动：它仍带着旧的 .orig_path，
+            // 至少还能还原回旧路径，比搬一半强
+            continue;
+        };
+        let mut moves: Vec<(PathBuf, PathBuf)> = Vec::new();
+        for f in files.flatten() {
+            let p = f.path();
+            let Some(name) = p.file_name().map(|v| v.to_string_lossy().into_owned()) else {
+                continue;
+            };
+            let Some((stem, created_ns, op)) = parse_backup_name(&name) else {
+                continue; // .orig_path 之类的旁文件由下面统一处理
+            };
+            if stem != old_stem {
+                continue;
+            }
+            let target = dest_dir.join(format!("{new_stem}__{created_ns}__{op}.litematic"));
+            // 纳秒级时间戳本不会撞名；真撞上说明这个备份已经在目标分组里
+            // （例如重命名做了两次）。此时**不猜**：既不能覆盖目标那份，
+            // 也不能自作主张删掉源这份。中止这次重新链接并说明原因。
+            //
+            // 中止发生在「只枚举、未改动」的阶段，因此这一组原封不动、
+            // 之前已完成的组也都各自完整，不会留下半搬状态。
+            let only_case = p.to_string_lossy().to_lowercase()
+                == target.to_string_lossy().to_lowercase();
+            if target.exists() && !only_case {
+                return Err(AppError::Parse(format!(
+                    "备份 {} 在目标分组中已存在同名文件，已中止重新链接以免覆盖",
+                    name
+                )));
+            }
+            moves.push((p, target));
+        }
+        // 这一组里没有属于旧名字的备份：不动它，也不留下空目录
+        if moves.is_empty() {
+            continue;
+        }
+
+        if !same_dir {
+            std::fs::create_dir_all(&dest_dir)?;
+        }
+        // 先建立新分组的关联，再搬文件：这样即便后面某一步失败，
+        // 已经搬过去的备份也仍然能还原（它们的 .orig_path 已指向新路径），
+        // 留在原地的备份则继续指向旧路径。两边都不会变成无法还原的孤儿。
+        std::fs::write(dest_dir.join(ORIG_PATH_FILE), &new_key)?;
+        for (from, to) in moves {
+            std::fs::rename(&from, &to)?;
+        }
+        if !same_dir {
+            std::fs::remove_file(src_dir.join(ORIG_PATH_FILE))?;
+            // 旧分组里若还有没搬走的文件，目录删不掉。这不该被忽略：
+            // 那些文件既不在新分组、又带着旧的 .orig_path，用户会看到
+            // 一个永远还原不了的备份条目，却完全不知道原因。
+            if let Err(e) = std::fs::remove_dir(&src_dir) {
+                return Err(AppError::Parse(format!(
+                    "备份分组未能清理干净 {}：{e}",
+                    src_dir.display()
+                )));
+            }
+        }
+        relinked += 1;
+    }
+    Ok(relinked)
 }
 
 
@@ -533,6 +694,228 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&base);
     }
+
+    /// 重命名后备份必须仍然「跟着」这个文件。
+    ///
+    /// 这条覆盖三处依赖旧名字的关联：分组目录名、分组内的 .orig_path、
+    /// 备份文件名里的主干。任何一处没跟上，用户都会看到备份凭空消失，
+    /// 或者还原时被拒绝为「不同源」。
+    #[test]
+    fn relink_follows_rename_so_backups_stay_usable() {
+        let base = temp_dir("relink");
+        let root = backup_root(&base);
+        let old = base.join("old.litematic");
+        std::fs::write(&old, b"v1").unwrap();
+        let b = create(&base, &old, "metadata").unwrap();
+
+        // 改名之前：备份认这个文件
+        assert!(matches_target(&b.backup_path, &old));
+
+        let new = base.join("新名字.litematic");
+        std::fs::rename(&old, &new).unwrap();
+        let n = relink(&root, &old, &new).unwrap();
+        assert_eq!(n, 1, "应重新链接 1 个分组");
+
+        // 备份文件本身也被改名了，因此后面的比对要用 list() 给出的**当前**路径
+        // （b.backup_path 指向的旧路径已经不存在了）
+        let items = list(&root);
+        assert_eq!(items.len(), 1, "备份文件本身不能丢");
+        assert_eq!(items[0].stem, "新名字", "备份文件名里的主干未跟随");
+        assert!(matches_target(&items[0].path, &new), ".orig_path 未跟随改名");
+        assert!(!matches_target(&items[0].path, &old), "不该还认旧路径");
+
+        // 内容与还原能力都要保住
+        assert_eq!(std::fs::read(&items[0].path).unwrap(), b"v1");
+        assert!(!b.backup_path.exists(), "旧路径的备份应已随分组一起移走");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 只改大小写时，两个分组目录在 Windows 上其实是同一个目录。
+    ///
+    /// 这条防的是把刚写好的 .orig_path 连同目录一起删掉——
+    /// 那样备份文件还在、却再也无法还原。
+    #[test]
+    fn relink_handles_case_only_rename_in_place() {
+        let base = temp_dir("relink_case");
+        let root = backup_root(&base);
+        let old = base.join("demo.litematic");
+        std::fs::write(&old, b"v1").unwrap();
+        let b = create(&base, &old, "metadata").unwrap();
+
+        let new = base.join("DEMO.litematic");
+        std::fs::rename(&old, &new).unwrap();
+        let n = relink(&root, &old, &new).unwrap();
+        assert_eq!(n, 1);
+
+        // 分组目录必须仍然存在，且 .orig_path 指向新路径
+        let dir = b.backup_path.parent().unwrap();
+        assert!(dir.exists(), "分组目录不能被自己删掉");
+        assert!(
+            dir.join(".orig_path").exists(),
+            ".orig_path 不能被自己删掉，否则备份永远无法还原"
+        );
+        let items = list(&root);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].stem, "DEMO");
+        assert!(matches_target(&items[0].path, &new));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 同一个文件多次改名的备份要能累积在一起。
+    #[test]
+    fn relink_keeps_every_backup_across_repeated_renames() {
+        let base = temp_dir("relink_twice");
+        let root = backup_root(&base);
+        let a = base.join("a.litematic");
+        std::fs::write(&a, b"v1").unwrap();
+        let b1 = create(&base, &a, "metadata").unwrap();
+
+        let b_path = base.join("b.litematic");
+        std::fs::rename(&a, &b_path).unwrap();
+        relink(&root, &a, &b_path).unwrap();
+        // 改内容再备份：两份内容若相同，就测不出「备份对象被弄混」
+        std::fs::write(&b_path, b"v2").unwrap();
+        let b2 = create(&base, &b_path, "replace").unwrap();
+
+        let c = base.join("c.litematic");
+        std::fs::rename(&b_path, &c).unwrap();
+        relink(&root, &b_path, &c).unwrap();
+
+        let items = list(&root);
+        assert_eq!(items.len(), 2, "两次改名前后的备份都应保留");
+        assert!(items.iter().all(|e| e.stem == "c"), "两份都应跟着新主干");
+        assert!(items.iter().all(|e| matches_target(&e.path, &c)));
+        // 两份内容必须与各自的来源对应：v1 是改名前的，v2 是改名后的
+        let by_op = |op: &str| -> Vec<u8> {
+            let e = items.iter().find(|e| e.op == op).expect("应存在该操作的备份");
+            std::fs::read(&e.path).unwrap()
+        };
+        assert_eq!(by_op("metadata"), b"v1", "第一次备份应是改名前的旧内容");
+        assert_eq!(by_op("replace"), b"v2", "第二次备份应是改名后的新内容");
+        // 旧路径下的备份文件都应已移走
+        assert!(!b1.backup_path.exists(), "旧路径的备份应已随分组移走");
+        assert!(!b2.backup_path.exists(), "旧路径的备份应已随分组移走");
+
+        // 只有一个分组目录，没有留下空壳
+        let dirs: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .collect();
+        assert_eq!(dirs.len(), 1, "不应留下空分组目录：{dirs:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 无法搬动的备份（目标处已被占用）必须让整次 relink 失败，
+    /// 并且**不能**留下「已搬走却没有 .orig_path」的孤儿备份。
+    ///
+    /// 这条钉的是失败顺序：先建立新分组的关联再搬文件，
+    /// 中途失败时已搬过去的备份仍然可还原。
+    #[test]
+    fn relink_refuses_to_clobber_and_leaves_every_backup_restorable() {
+        let base = temp_dir("relink_clobber");
+        let root = backup_root(&base);
+        let a = base.join("a.litematic");
+        std::fs::write(&a, b"v1").unwrap();
+        let ba = create(&base, &a, "metadata").unwrap();
+
+        // 手工在目标分组里放一个同名文件，制造撞名
+        let dest_dir = group_dir(&base, &base.join("b.litematic")).unwrap();
+        std::fs::create_dir_all(&dest_dir).unwrap();
+        let (stem, ns, op) = parse_backup_name(
+            &ba.backup_path.file_name().unwrap().to_string_lossy(),
+        )
+        .unwrap();
+        assert_eq!(stem, "a");
+        std::fs::write(dest_dir.join(format!("b__{ns}__{op}.litematic")), b"other").unwrap();
+        std::fs::write(dest_dir.join(ORIG_PATH_FILE), orig_path_of(&base.join("b.litematic")))
+            .unwrap();
+
+        let b = base.join("b.litematic");
+        std::fs::write(&b, b"v2").unwrap();
+        let e = relink(&root, &a, &b).unwrap_err().to_string();
+        assert!(e.contains("已存在"), "{e}");
+
+        // 撞名被拒绝，两侧的内容都不能被动过
+        assert_eq!(
+            std::fs::read(dest_dir.join(format!("b__{ns}__{op}.litematic"))).unwrap(),
+            b"other",
+            "目标处已有的备份不能被覆盖"
+        );
+        assert!(ba.backup_path.exists(), "撞名时不应把源备份搬走");
+        // 源备份仍带着旧的 .orig_path，因此仍可还原回旧路径
+        assert!(matches_target(&ba.backup_path, &a));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 与旧文件无关的分组（同目录下的另一个文件）不能被改到新名字上。
+    #[test]
+    fn relink_leaves_other_files_backups_untouched() {        let base = temp_dir("relink_other");
+        let root = backup_root(&base);
+        let a = base.join("a.litematic");
+        let other = base.join("other.litematic");
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&other, b"o").unwrap();
+        let ba = create(&base, &a, "metadata").unwrap();
+        let bo = create(&base, &other, "metadata").unwrap();
+
+        let a2 = base.join("a2.litematic");
+        std::fs::rename(&a, &a2).unwrap();
+        relink(&root, &a, &a2).unwrap();
+
+        let items = list(&root);
+        assert_eq!(items.len(), 2, "两个文件的备份都应还在");
+        let moved = items.iter().find(|e| e.stem == "a2").expect("a 的备份应已跟随改名为 a2");
+        assert!(matches_target(&moved.path, &a2), "a 的备份应能还原到 a2");
+        let kept = items.iter().find(|e| e.stem == "other").expect("other 的备份主干不应被改动");
+        assert!(kept.path.exists(), "别的文件的备份不能被搬走");
+        assert!(matches_target(&kept.path, &other), "别的文件仍应能还原");
+        assert!(!ba.backup_path.exists(), "a 的旧路径备份应已移走");
+        assert_eq!(bo.backup_path, kept.path, "other 的备份路径不应变化");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 目标分组已存在时（同名文件曾存在、备份还在）应并入同一组，
+    /// 而不是报错或覆盖。
+    #[test]
+    fn relink_merges_into_existing_group_for_same_path() {
+        let base = temp_dir("relink_merge");
+        let root = backup_root(&base);
+        let a = base.join("a.litematic");
+        let b_path = base.join("b.litematic");
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b_path, b"b").unwrap();
+        let ba = create(&base, &a, "metadata").unwrap();
+        let bb = create(&base, &b_path, "metadata").unwrap();
+
+        // b 被删掉，但它的备份分组还在（备份不随源文件删除而删除）
+        std::fs::remove_file(&b_path).unwrap();
+        std::fs::rename(&a, &b_path).unwrap();
+
+        let n = relink(&root, &a, &b_path).unwrap();
+        assert_eq!(n, 1);
+
+        let items = list(&root);
+        assert_eq!(items.len(), 2, "两组备份应合并保留，一份都不能丢");
+        assert!(items.iter().all(|e| matches_target(&e.path, &b_path)));
+
+        let dirs: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .collect();
+        assert_eq!(dirs.len(), 1, "合并后只应剩一个分组：{dirs:?}");
+        // a 的备份搬了过来，旧分组被清理；b 的备份本来就在目标分组里，原地不动
+        assert!(!ba.backup_path.exists(), "a 的旧分组应已清理");
+        assert!(bb.backup_path.exists(), "b 的备份本就在目标分组，不应被搬动");
+        assert_eq!(items.len(), 2, "两份备份都要在");
+        for e in &items {
+            assert!(e.path.starts_with(&dirs[0].path()), "两份都应在同一个分组内");
+            assert!(e.path.exists(), "列出来的备份必须真实存在");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn log_appends_and_reads_newest_first() {
         let base = temp_dir("log");

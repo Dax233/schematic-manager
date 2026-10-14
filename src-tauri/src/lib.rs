@@ -80,6 +80,7 @@ pub fn run() {
             commands::copy_files_to_clipboard,
             commands::copy_files_to_dir,
             commands::reveal_in_file_manager,
+            commands::rename_schematic,
             commands::open_directory,
             commands::load_ui_state,
             commands::save_ui_state,

@@ -219,6 +219,24 @@ pub struct BackupEntryDto {
     pub size: u64,
 }
 
+/// 重命名投影文件的结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameOutcomeDto {
+    /// 重命名后的完整路径
+    pub path: String,
+    /// 重命名后的文件名
+    pub file_name: String,
+    /// 被重新链接到新名字的备份分组数
+    pub relinked: usize,
+    /// 备份重新链接失败的原因。
+    ///
+    /// 与 relinked 分开而不是让整个命令失败：文件本身已经改名成功，
+    /// 若这时返回错误，界面会以为改名没发生，显示的状态与磁盘不符。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relink_error: Option<String>,
+}
+
 /// 场景批次：供前端一个材质使用
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

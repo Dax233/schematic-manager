@@ -95,6 +95,23 @@ export interface BlockHit {
   versions: BlockVersion[];
 }
 
+/** 重命名投影文件的结果 */
+export interface RenameOutcome {
+  /** 重命名后的完整路径 */
+  path: string;
+  /** 重命名后的文件名 */
+  fileName: string;
+  /** 被重新链接到新名字的备份分组数 */
+  relinked: number;
+  /**
+   * 备份重新链接失败的原因。
+   *
+   * 与 relinked 分开而不是让整个命令失败：文件本身已经改名成功，
+   * 若这时当成整体失败，界面显示的状态会与磁盘不符。
+   */
+  relinkError?: string;
+}
+
 /** 一个方块的渲染图 */
 export interface BlockIcon {
   /** 方块状态键，与请求里的一致 */

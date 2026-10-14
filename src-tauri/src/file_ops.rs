@@ -185,6 +185,99 @@ pub fn reveal_in_file_manager(path: &Path) -> AppResult<()> {
     }
 }
 
+/// 投影文件的扩展名。
+pub const SCHEMATIC_EXT: &str = ".litematic";
+
+/// Windows 保留设备名。这些名字即使带扩展名也不能作为文件名：
+/// `CON.litematic` 在 Windows 上仍是设备，创建会失败或指向设备。
+const RESERVED_NAMES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// 校验并规范化用户输入的文件名，返回可用的文件名。
+///
+/// 只接受文件名本身（不含目录）：用户输入 `..\a.litematic` 之类的内容时
+/// 若不加检查，重命名就成了把文件搬到任意位置的手段。
+pub fn normalize_file_name(input: &str) -> AppResult<String> {
+    let name = input.trim();
+    if name.is_empty() {
+        return Err(AppError::Parse("文件名不能为空".into()));
+    }
+    // 目录分隔符与 Windows 文件名非法字符一律拒绝，并给出具体是哪个字符，
+    // 否则用户只看到「无效」而不知道该改哪里
+    for bad in ['/', '\\', '<', '>', ':', '"', '|', '?', '*'] {
+        if name.contains(bad) {
+            return Err(AppError::Parse(format!("文件名不能包含字符 {bad}")));
+        }
+    }
+    if name.chars().any(|c| (c as u32) < 0x20) {
+        return Err(AppError::Parse("文件名不能包含控制字符".into()));
+    }
+    // `.` 与 `..` 必须**先**判：它们都以句点结尾，放在下面那条句点规则之后
+    // 就永远执行不到（而且「不能以句点结尾」对这两个名字来说并不是问题所在）
+    if name == "." || name == ".." {
+        return Err(AppError::Parse("文件名不能是 . 或 ..".into()));
+    }
+    // Windows 会静默去掉结尾的句点，导致实际文件名与用户输入不一致。
+    // 首尾空白在上面已经 trim 掉了，因此只需判句点。
+    if name.ends_with('.') {
+        return Err(AppError::Parse("文件名不能以句点结尾".into()));
+    }
+
+    let lower = name.to_lowercase();
+    // 缺扩展名时补上，且**不检查用户输入里是否已有别的扩展名**：
+    // 投影文件名里本来就常带句点（例如「低Y艾莱姆农场-2.73万」），
+    // 按 Path::extension 判断会把这类名字误判成「扩展名错误」而拒绝。
+    // 补一个 .litematic 既不会拒绝合法名字，产物也仍然可被扫描到。
+    let final_name = if lower.ends_with(SCHEMATIC_EXT) {
+        name.to_string()
+    } else {
+        format!("{name}{SCHEMATIC_EXT}")
+    };
+
+    let stem = &final_name[..final_name.len() - SCHEMATIC_EXT.len()];
+    if RESERVED_NAMES.iter().any(|r| stem.eq_ignore_ascii_case(r)) {
+        return Err(AppError::Parse(format!("{stem} 是系统保留名，不能用作文件名")));
+    }
+    Ok(final_name)
+}
+
+/// 重命名一个文件，返回新路径。
+///
+/// 目标已存在时拒绝而不是覆盖：投影文件常是长期积累的成果，
+/// 覆盖掉同名文件不可逆。大小写只有差异的名称视为同一个文件，
+/// 因此单独放行（Windows 上这是常见的「改正大小写」操作）。
+pub fn rename_file(old: &Path, new_name: &str) -> AppResult<PathBuf> {
+    let meta = std::fs::metadata(old)
+        .map_err(|e| AppError::Parse(format!("无法访问 {}：{e}", old.display())))?;
+    if !meta.is_file() {
+        return Err(AppError::Parse(format!("不是文件：{}", old.display())));
+    }
+    let parent = old
+        .parent()
+        .ok_or_else(|| AppError::Parse(format!("路径没有上级目录：{}", old.display())))?;
+    let dest = parent.join(new_name);
+
+    // 目标已存在时先判断它是不是**就是这个文件本身**（仅大小写不同）。
+    //
+    // 用规范化后的真实路径比较，而不是自己比字符串大小写：
+    //   - Windows 上两个写法会规范化成同一个真实路径（真实大小写），
+    //     因此「只改正文件名大小写」被正确识别为同一个文件；
+    //   - 大小写敏感的系统上，若真有一个仅大小写不同的另一个文件，
+    //     两者规范化结果不同，于是按「已存在」拒绝，不会静默覆盖。
+    let same_file = match (std::fs::canonicalize(old), std::fs::canonicalize(&dest)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    };
+    if dest.exists() && !same_file {
+        return Err(AppError::Parse(format!("目标文件已存在：{new_name}")));
+    }
+    std::fs::rename(old, &dest)
+        .map_err(|e| AppError::Parse(format!("重命名失败：{e}")))?;
+    Ok(dest)
+}
+
 /// 在文件管理器里打开一个目录本身（不是定位到它）。
 ///
 /// 与 `reveal_in_file_manager` 的区别：那个的语义是「选中这个文件」，
@@ -686,5 +779,128 @@ mod tests {
         assert_eq!(Path::new(&cmd[1]), file);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn normalize_file_name_accepts_and_fixes_common_input() {
+        assert_eq!(normalize_file_name("a.litematic").unwrap(), "a.litematic");
+        // 大小写不同的扩展名视为已带扩展名，不重复追加
+        assert_eq!(normalize_file_name("A.LITEMATIC").unwrap(), "A.LITEMATIC");
+        // 首尾空白去掉
+        assert_eq!(normalize_file_name("  a.litematic  ").unwrap(), "a.litematic");
+        // 缺扩展名时补上
+        assert_eq!(normalize_file_name("机械动力女巫塔").unwrap(), "机械动力女巫塔.litematic");
+        // 名字里带句点不能被当成「扩展名错误」而拒绝：
+        // 真实存在的投影名就有这种（低Y艾莱姆农场-2.73万.litematic）
+        assert_eq!(
+            normalize_file_name("低Y艾莱姆农场-2.73万").unwrap(),
+            "低Y艾莱姆农场-2.73万.litematic"
+        );
+    }
+
+    #[test]
+    fn normalize_file_name_rejects_escaping_and_illegal_names() {
+        // 只接受文件名本身：允许分隔符就等于允许把文件搬到任意位置
+        for bad in ["..\\a.litematic", "sub/a.litematic", "C:a.litematic"] {
+            assert!(normalize_file_name(bad).is_err(), "应拒绝 {bad}");
+        }
+        for bad in ["a<b.litematic", "a>b.litematic", "a|b.litematic", "a?b.litematic", "a*b.litematic", "a\"b.litematic"] {
+            assert!(normalize_file_name(bad).is_err(), "应拒绝 {bad}");
+        }
+        assert!(normalize_file_name("").is_err());
+        assert!(normalize_file_name("   ").is_err());
+        // `.` 与 `..` 被专门拦下（它们也以句点结尾，因此这条同时钉住了
+        // 「先判 ./..、再判句点」的顺序；顺序反了这两条会改走句点规则）
+        let e = normalize_file_name(".").unwrap_err().to_string();
+        assert!(e.contains("不能是"), "应命中 ./.. 规则而不是句点规则：{e}");
+        let e = normalize_file_name("..").unwrap_err().to_string();
+        assert!(e.contains("不能是"), "应命中 ./.. 规则而不是句点规则：{e}");
+        // 首尾空白会被 trim 掉，这是有意的：用户多半是粘贴时带上的。
+        // （因此这里不能断言「以空格结尾应被拒绝」——那种输入到不了这一步）
+        assert_eq!(normalize_file_name("a ").unwrap(), "a.litematic");
+        // 结尾的句点会被 Windows 静默去掉，实际名字与输入不一致，因此拒绝
+        assert!(normalize_file_name("a.").is_err());
+        // 保留设备名即使带扩展名也不能用
+        assert!(normalize_file_name("CON.litematic").is_err());
+        assert!(normalize_file_name("nul").is_err());
+    }
+
+    #[test]
+    fn rename_file_moves_and_refuses_to_clobber() {
+        let base = tmp("rename");
+        let old = PathBuf::from(mk(&base, "old.litematic", b"DATA"));
+
+        let dest = rename_file(&old, "new.litematic").unwrap();
+        assert_eq!(dest.file_name().unwrap().to_string_lossy(), "new.litematic");
+        assert!(!old.exists(), "旧名字应已不存在");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"DATA", "内容必须原样保留");
+
+        // 目标已存在时拒绝：覆盖同名投影不可逆
+        let other = PathBuf::from(mk(&base, "other.litematic", b"OTHER"));
+        let e = rename_file(&other, "new.litematic").unwrap_err().to_string();
+        assert!(e.contains("已存在"), "{e}");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"DATA", "既有文件不能被静默覆盖");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 仅大小写不同的目标：在大小写不敏感的文件系统上它就是文件本身，不能误报冲突。
+    ///
+    /// 「目标已存在」这条判断的分支走向取决于文件系统是否区分大小写，
+    /// 因此先探测本机行为再断言对应的一侧。不这样做的话，在 Linux 上
+    /// `dest.exists()` 为 false，根本不会走到那条分支，用例虽然通过却什么也没验证。
+    #[test]
+    fn rename_file_case_only_target_does_not_false_conflict() {
+        let base = tmp("rename_case");
+        let old = PathBuf::from(mk(&base, "demo.litematic", b"DATA"));
+        let variant = base.join("DEMO.litematic");
+        let case_insensitive = std::fs::canonicalize(&variant).is_ok()
+            && std::fs::canonicalize(&variant).unwrap() == std::fs::canonicalize(&old).unwrap();
+
+        let dest = rename_file(&old, "DEMO.litematic").unwrap();
+        assert_eq!(dest.file_name().unwrap().to_string_lossy(), "DEMO.litematic");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"DATA", "内容必须原样保留");
+        assert!(variant.exists(), "新名字下应能读到文件");
+        // 大小写敏感的系统上旧名字确实消失了；不敏感的系统上
+        // `demo.litematic` 仍会解析到同一个文件，所以这里不断言它不存在
+        if !case_insensitive {
+            assert!(!old.exists(), "大小写敏感时旧名字应已不存在");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 大小写敏感的文件系统上，仅大小写不同的**另一个**文件不能被覆盖。
+    #[test]
+    #[cfg(not(windows))]
+    fn rename_file_refuses_to_clobber_case_variant_on_sensitive_fs() {
+        let base = tmp("rename_case_sensitive");
+        let old = PathBuf::from(mk(&base, "demo.litematic", b"LOWER"));
+        std::fs::write(base.join("DEMO.litematic"), b"UPPER").unwrap();
+
+        // 先确认本机确实区分大小写，否则这条用例不成立（macOS 默认不区分）
+        if std::fs::canonicalize(base.join("DEMO.litematic")).unwrap()
+            == std::fs::canonicalize(&old).unwrap()
+        {
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+
+        let e = rename_file(&old, "DEMO.litematic").unwrap_err().to_string();
+        assert!(e.contains("已存在"), "{e}");
+        assert_eq!(
+            std::fs::read(base.join("DEMO.litematic")).unwrap(),
+            b"UPPER",
+            "既有文件绝不能被静默覆盖"
+        );
+        assert_eq!(std::fs::read(&old).unwrap(), b"LOWER");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn rename_file_rejects_missing_and_directory() {
+        let base = tmp("rename_bad");
+        assert!(rename_file(&base.join("nope.litematic"), "x.litematic").is_err());
+        let e = rename_file(&base, "x.litematic").unwrap_err().to_string();
+        assert!(e.contains("不是文件"), "{e}");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

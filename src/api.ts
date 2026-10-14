@@ -17,6 +17,7 @@ import type {
   ImportOutcome,
   ModsImport,
   PackList,
+  RenameOutcome,
   SceneData,
   SchematicSummary,
   VersionOption,
@@ -222,6 +223,11 @@ export function copyFilesToDir(paths: string[], destDir: string): Promise<FileOp
 /** 在文件管理器中定位到一个文件 */
 export function revealInFileManager(path: string): Promise<void> {
   return invoke<void>("reveal_in_file_manager", { path });
+}
+
+/** 重命名投影文件（只传文件名，不含目录），备份会一并重新链接 */
+export function renameSchematic(path: string, newName: string): Promise<RenameOutcome> {
+  return invoke<RenameOutcome>("rename_schematic", { path, newName });
 }
 
 // ---------------------------------------------------------------- 界面状态记忆
