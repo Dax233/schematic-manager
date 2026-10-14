@@ -275,6 +275,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("blur", onGlobalPointerDown);
   document.removeEventListener("contextmenu", onDocumentContextMenu, true);
   stopResize();
+  flushUiState();
 });
 
 // 版本转换
@@ -1921,6 +1922,19 @@ function collectUiState(): UiState {
 
 let saveStateTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** 立即写出当前界面状态。
+ *
+ * 失败不是致命问题，但要留下线索：静默失败会让用户以为「记住了」，
+ * 下次启动发现设置全丢却无从判断。
+ */
+async function writeUiState() {
+  try {
+    await saveUiState(JSON.stringify(collectUiState()));
+  } catch (e) {
+    console.warn("保存界面状态失败：", e);
+  }
+}
+
 /** 保存界面状态（合并短时间内的多次改动）。
  *
  * 用防抖：拖动分隔条会连续改动侧栏宽度，逐次写盘既无必要也拖慢拖动。
@@ -1929,16 +1943,22 @@ function persistUiState() {
   if (saveStateTimer !== null) clearTimeout(saveStateTimer);
   saveStateTimer = setTimeout(() => {
     saveStateTimer = null;
-    void (async () => {
-      try {
-        await saveUiState(JSON.stringify(collectUiState()));
-      } catch (e) {
-        // 记不住界面不是致命问题，但要留下线索：静默失败会让用户以为
-        // 「记住了」，下次启动发现设置全丢却无从判断
-        console.warn("保存界面状态失败：", e);
-      }
-    })();
+    void writeUiState();
   }, 400);
+}
+
+/** 卸载时把防抖中的改动立刻写出。
+ *
+ * 只清定时器不写，用户在关窗前 <400ms 的调整会白做；
+ * 只留定时器不清，这个已销毁实例的写盘会发生在之后任意时刻——
+ * 读到的是它自己那份早已过期的状态（实测会污染后续的界面状态记录）。
+ * 两者都不可接受，因此在这里收口成「马上写一次」。
+ */
+function flushUiState() {
+  if (saveStateTimer === null) return;
+  clearTimeout(saveStateTimer);
+  saveStateTimer = null;
+  void writeUiState();
 }
 
 /** 恢复界面状态并重新扫描上次的目录 */
@@ -2273,30 +2293,40 @@ void followSystemTheme();
               </a-spin>
             </div>
             <div class="preview__info" v-if="selected">
-              <!-- 可滚动区：三个输入框 + 基本信息。操作行在它外面，
+              <!-- 可编辑区：文件名、投影名称、作者、描述。操作行在它外面，
                    因此内容再长也不会把保存按钮挤出可视范围。 -->
               <div class="preview__info-body">
-              <!-- 可编辑元数据放在**最前面**。
-                   预览区右侧这一栏的高度是固定的（见 global.scss 的
-                   $preview-row-h），而「三个输入框 + 七行只读信息」比它高，
-                   必然有一部分要滚动。可编辑的三项是这一栏存在的理由，
-                   放前面才能保证一直看得见；只读信息在下方滚动即可——
-                   其中大部分字段在「信息」页签里也能看到。 -->
+              <!-- 这一栏只放四件事：文件名（只读）、投影名称、作者、描述。
+                   前三项按用户要求「名称在左、控件在右」横排；描述是长文本，
+                   标签留在上方、输入框占满整行。
+                   制作版本/数据版本/投影格式/尺寸/区域数量/方块总数/实体数量
+                   都已移到底部的「信息」页签，这里不再重复显示。 -->
+              <div class="preview__row">
+                <span class="preview__row-label">文件名</span>
+                <span class="preview__row-value" :title="selected.fileName">
+                  {{ selected.fileName }}
+                </span>
+              </div>
+
               <a-form :model="draft" layout="vertical" size="small" class="preview__form">
-                <a-form-item label="投影名称">
+                <div class="preview__row">
+                  <span class="preview__row-label">投影名称</span>
                   <a-input
+                    class="preview__row-control"
                     v-model="draft.name"
                     :disabled="!!selected.error"
                     @input="dirty = true"
                   />
-                </a-form-item>
-                <a-form-item label="作者">
+                </div>
+                <div class="preview__row">
+                  <span class="preview__row-label">作者</span>
                   <a-input
+                    class="preview__row-control"
                     v-model="draft.author"
                     :disabled="!!selected.error"
                     @input="dirty = true"
                   />
-                </a-form-item>
+                </div>
                 <a-form-item label="描述（备注）">
                   <a-textarea
                     v-model="draft.description"
@@ -2307,36 +2337,10 @@ void followSystemTheme();
                   />
                 </a-form-item>
                 </a-form>
-
-              <!-- 只读基本信息放在可编辑项**之后**。
-                   预览区右侧这一栏高度是固定的（见 global.scss 的
-                   $preview-row-h），而「三个输入框 + 七行只读信息」比它高，
-                   必然有一部分要滚动。可编辑的三项是这一栏存在的理由，
-                   放前面才能保证一直看得见；只读信息在下方滚动即可——
-                   其中大部分字段在「信息」页签里也能看到。 -->
-              <dl class="preview__facts">
-                <dt>文件名</dt>
-                <dd :title="selected.fileName">{{ selected.fileName }}</dd>
-                <dt>制作版本</dt>
-                <dd :title="`数据版本 ${selected.dataVersion}`">
-                  {{ selected.mcVersionName || "未知" }}（数据版本 {{ selected.dataVersion }}）
-                </dd>
-                <dt>投影格式</dt>
-                <dd>v{{ selected.formatVersion }}</dd>
-                <dt>尺寸</dt>
-                <dd>{{ formatDims(selected.enclosing) }}</dd>
-                <dt>区域数量</dt>
-                <dd>{{ selected.regionCount }}</dd>
-                <dt>方块总数</dt>
-                <dd>{{ selected.totalBlocks }}</dd>
-                <dt>实体数量</dt>
-                <dd>{{ selected.entityCount }}</dd>
-              </dl>
               </div>
               <!-- 操作行钉在面板底部，不随内容一起滚。
-                   面板高度是固定的（$preview-row-h），而「三个输入框 + 多行描述
-                   + 只读信息」比它高：不钉住的话保存按钮会落到折叠线以下，
-                   用户得先滚动才能保存，等于按钮藏起来了。 -->
+                   面板高度是固定的（$preview-row-h），不钉住的话保存按钮会
+                   落到折叠线以下，用户得先滚动才能保存，等于按钮藏起来了。 -->
               <div class="preview__actions">
                 <a-button
                   type="primary"
@@ -2425,8 +2429,10 @@ void followSystemTheme();
           style="padding: 0 8px"
         >
           <a-tab-pane key="info" title="信息">
-            <!-- 只读明细。可编辑的元数据与最常用的几项已移到预览区右侧，
-                 这里保留其余的详细信息，避免两处重复显示同一字段。 -->
+            <!-- 只读明细。可编辑的元数据（文件名/投影名称/作者/描述）在预览区
+                 右侧，这里集中放**其余**的详细信息，避免两处重复同一字段。
+                 制作版本与数据版本分成两项：用户明确列了这两项，
+                 合并成「1.20.1（数据版本 3465）」会少一个可扫的标签。 -->
             <a-descriptions
               v-if="selected"
               :column="1"
@@ -2434,6 +2440,17 @@ void followSystemTheme();
               :label-style="{ width: '110px' }"
               bordered
             >
+              <a-descriptions-item label="制作版本">
+                {{ selected.mcVersionName || "未知" }}
+              </a-descriptions-item>
+              <a-descriptions-item label="数据版本">
+                {{ selected.dataVersion }}
+              </a-descriptions-item>
+              <a-descriptions-item label="投影格式">v{{ selected.formatVersion }}</a-descriptions-item>
+              <a-descriptions-item label="尺寸">{{ formatDims(selected.enclosing) }}</a-descriptions-item>
+              <a-descriptions-item label="区域数量">{{ selected.regionCount }}</a-descriptions-item>
+              <a-descriptions-item label="方块总数">{{ selected.totalBlocks }}</a-descriptions-item>
+              <a-descriptions-item label="实体数量">{{ selected.entityCount }}</a-descriptions-item>
               <a-descriptions-item label="方块实体">{{ selected.tileEntityCount }}</a-descriptions-item>
               <a-descriptions-item label="待处理刻">{{ selected.pendingTicks }}</a-descriptions-item>
               <a-descriptions-item label="内含预览图">

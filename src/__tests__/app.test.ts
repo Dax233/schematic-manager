@@ -1223,6 +1223,11 @@ describe("多目录与列宽复位", () => {
  *  这里的重点是：记住的确实被写出去、能读回来、脏数据不炸。
  */
 describe("界面状态记忆", () => {
+  /** save_ui_state 已被调用的次数 */
+  function saveCount(): number {
+    return mockInvoke.mock.calls.filter((c) => c[0] === "save_ui_state").length;
+  }
+
   /** 取最后一次 save_ui_state 的 JSON */
   function lastSaved(): Record<string, unknown> | null {
     const calls = mockInvoke.mock.calls.filter((c) => c[0] === "save_ui_state");
@@ -1236,7 +1241,7 @@ describe("界面状态记忆", () => {
     try {
       const w = mountApp();
       await flushPromises();
-      const before = mockInvoke.mock.calls.filter((c) => c[0] === "save_ui_state").length;
+      const before = saveCount();
 
       // 拖动分隔条改宽度
       const splitter = w.find(".splitter").element as HTMLElement;
@@ -1250,14 +1255,49 @@ describe("界面状态记忆", () => {
       vi.advanceTimersByTime(500);
       await flushPromises();
 
-      const after = mockInvoke.mock.calls.filter((c) => c[0] === "save_ui_state").length;
-      expect(after, "改宽度后应触发保存").toBeGreaterThan(before);
+      expect(saveCount(), "改宽度后应触发保存").toBeGreaterThan(before);
       const saved = lastSaved();
       expect(saved, "应能解析出保存内容").toBeTruthy();
       expect(saved!.version, "应带版本号").toBe(1);
       expect(typeof saved!.sidebarWidth, "应记住侧栏宽度").toBe("number");
       expect(saved!.sidebarWidth, "记住的应是拖动后的宽度").toBeGreaterThan(666);
       w.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("卸载时把防抖中的改动立刻写出，之后不再有遗留写盘", async () => {
+    // 界面状态的写盘是防抖的（400ms）。若定时器活过组件卸载，它会在此后
+    // 任意时刻触发，写入这个已销毁实例那份过期状态——实测在整包并行跑
+    // （进程更慢、定时器更容易跨越用例边界）时约有 1/10 的概率污染
+    // 「最后一次保存」，表现为用户设置偶尔记成默认值。
+    vi.useFakeTimers();
+    try {
+      const w = mountApp();
+      await flushPromises();
+      const before = saveCount();
+
+      const splitter = w.find(".splitter").element as HTMLElement;
+      splitter.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 0 }),
+      );
+      window.dispatchEvent(new PointerEvent("pointermove", { clientX: 800 }));
+      window.dispatchEvent(new PointerEvent("pointerup", { clientX: 800 }));
+      await flushPromises();
+      expect(saveCount(), "防抖期间不应立刻写盘").toBe(before);
+
+      w.unmount();
+      await flushPromises();
+      expect(saveCount(), "卸载时应写出待保存的改动").toBeGreaterThan(before);
+      const saved = lastSaved();
+      expect(saved!.sidebarWidth, "写出的应是改动后的宽度").toBeGreaterThan(666);
+
+      // 定时器必须已被清掉：卸载后再推进时间不应产生第二次写盘
+      const afterUnmount = saveCount();
+      vi.advanceTimersByTime(5000);
+      await flushPromises();
+      expect(saveCount(), "卸载后不应再有遗留的写盘").toBe(afterUnmount);
     } finally {
       vi.useRealTimers();
     }

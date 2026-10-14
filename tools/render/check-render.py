@@ -646,6 +646,55 @@ SHIM = r"""
       ? Math.round(barEl2.getBoundingClientRect().top - mainEl2.getBoundingClientRect().bottom)
       : 9999;
 
+    // ---- 字段归属：哪些在预览区右侧、哪些在「信息」页签 ----
+    //
+    // 用户明确划分了两处的内容：预览区右侧只放「文件名/投影名称/作者/描述」，
+    // 其余（制作版本、数据版本、投影格式、尺寸、区域数量、方块总数、实体数量）
+    // 一起放进「信息」页签。两处都不重复显示同一字段。
+    // 这类要求只靠看截图容易漏（字段被删掉也会「看着正常」），因此逐项核对。
+    var infoPaneText = "";
+    var allPanes2 = document.querySelectorAll(".detail__tabs .arco-tabs-pane");
+    for (var ip = 0; ip < allPanes2.length; ip++) {
+      if ((allPanes2[ip].textContent || "").indexOf("投影格式") >= 0) {
+        // 把空白全部去掉再嵌入：LAYOUT 是**空格分隔**的，正文里带空格会把
+        // 后面的字段整段截断（实测：含一个空格的正文让 detailH 之后的字段
+        // 全部读不到，界面本身没问题，是测量管道自己坏了）。
+        // 要核对的是中文标签，去掉空白不影响断言。
+        infoPaneText = (allPanes2[ip].textContent || "").replace(/\s+/g, "");
+        break;
+      }
+    }
+    var sideEl = document.querySelector(".preview__info");
+    var sideText = sideEl ? (sideEl.textContent || "").replace(/\s+/g, "") : "";
+    // 预览区右侧的三行必须是「标签在左、控件在右」：标签与控件的 top 接近，
+    // 且标签在控件左边。描述那一行是标签在上，单独判。
+    var rowChecks = [];
+    var rowLabels = document.querySelectorAll(".preview__row-label");
+    for (var rl = 0; rl < rowLabels.length; rl++) {
+      var lab = rowLabels[rl];
+      var ctrl = lab.nextElementSibling;
+      if (!ctrl) { rowChecks.push("no-control"); continue; }
+      var lb = lab.getBoundingClientRect();
+      var cb = ctrl.getBoundingClientRect();
+      // 同一行：竖直中心相差不超过 6px；标签在左：标签右缘 <= 控件左缘
+      var sameRow = Math.abs((lb.top + lb.bottom) / 2 - (cb.top + cb.bottom) / 2) <= 6;
+      var leftOf = lb.right <= cb.left + 2;
+      rowChecks.push((sameRow && leftOf) ? "ok" : "bad");
+    }
+    var rowsOk = rowChecks.length > 0 && rowChecks.indexOf("bad") < 0
+      && rowChecks.indexOf("no-control") < 0;
+    // 描述那行必须仍是「标签在上、输入框在下」（它是长文本，横排会挤成一条）
+    var descLabel = null;
+    var formLabels = document.querySelectorAll(".preview__form .arco-form-item-label");
+    for (var fl = 0; fl < formLabels.length; fl++) {
+      if ((formLabels[fl].textContent || "").indexOf("描述") >= 0) { descLabel = formLabels[fl]; break; }
+    }
+    var descArea = document.querySelector(".preview__form textarea");
+    var descStacked = false;
+    if (descLabel && descArea) {
+      descStacked = descLabel.getBoundingClientRect().bottom <= descArea.getBoundingClientRect().top + 2;
+    }
+
     return "LAYOUT:"
       + "gapWb=" + gapWb
       + ",gapDt=" + gapDt
@@ -699,7 +748,12 @@ SHIM = r"""
       + ",panelHBeforeSwitch=" + panelHBeforeSwitch
       + ",tabsHBeforeSwitch=" + tabsHBeforeSwitch
       + ",barGapMain=" + barGapMain
+      + ",rowsOk=" + rowsOk
+      + ",rowCount=" + rowLabels.length
+      + ",descStacked=" + descStacked
       + ",mainBottom=" + mainBottom
+      + ",sideText=" + sideText.slice(0, 200)
+      + ",infoText=" + infoPaneText.slice(0, 260)
       + ",detailH=" + detailH
       + ",previewH=" + previewH
       + ",tabsH=" + tabsH
@@ -1384,6 +1438,28 @@ def main():
                   and fields.get("infoClips") == "true",
                   f"  信息列底边 - 控制条上沿 = {fields.get('infoOverlap')}px；"
                   f"overflow-y={fields.get('infoOverflow')}")
+            # 字段归属：预览区右侧只放四项，其余七项在「信息」页签。
+            # 逐项核对，因为漏掉一个字段时界面「看着还是正常的」。
+            side_text = fields.get("sideText", "")
+            info_text = fields.get("infoText", "")
+            claim("预览区右侧含文件名/投影名称/作者/描述",
+                  all(k in side_text for k in ["文件名", "投影名称", "作者", "描述"]),
+                  f"  实际：{side_text[:90]}")
+            missing_side = [k for k in ["制作版本", "数据版本", "投影格式", "尺寸", "区域数量", "方块总数", "实体数量"]
+                            if k in side_text]
+            claim("预览区右侧不再重复显示已迁走的七项",
+                  not missing_side,
+                  f"  仍出现在右侧：{missing_side}" if missing_side else "  七项均已迁走")
+            missing_info = [k for k in ["制作版本", "数据版本", "投影格式", "尺寸", "区域数量", "方块总数", "实体数量"]
+                            if k not in info_text]
+            claim("「信息」页签含制作版本/数据版本/投影格式/尺寸/区域数量/方块总数/实体数量",
+                  not missing_info,
+                  f"  缺少：{missing_info}" if missing_info else f"  已核对 7 项：{info_text[:90]}")
+            claim("文件名/投影名称/作者为标签在左、控件在右",
+                  fields.get("rowsOk") == "true" and int(fields.get("rowCount", "0")) == 3,
+                  f"  横排行数 {fields.get('rowCount')}（应为 3：文件名/投影名称/作者）")
+            claim("描述为标签在上、输入框在下",
+                  fields.get("descStacked") == "true")
             claim("信息列高度足够编辑（不低于 180px）",
                   int(fields.get("infoBodyH", "0")) >= 180,
                   f"  信息列高 {fields.get('infoBodyH')}px")

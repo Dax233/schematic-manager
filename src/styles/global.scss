@@ -567,27 +567,44 @@ $preview-row-h: $preview-stage-h + 16px;
     border-top: 1px solid var(--color-border-2);
   }
 
-  // 只读基本信息：两列（标签 + 值），字号比正文小一档，
-  // 以便把纵向空间让给下面的描述框
-  &__facts {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 2px 10px;
-    margin: 0 0 10px;
+  // 信息栏的一行：标签在左、控件在右（用户要求「名称在左侧、文本框在右侧」）。
+  //
+  // 自己写 flex 而不用 a-form 的 label-col/wrapper-col：那一套按 24 栅格
+  // 分栏，而这一栏宽度随窗口变化（stage 固定 398 之后它吃掉剩余宽度），
+  // 栅格化会让标签宽度跟着窗口漂移。固定像素的标签列才稳定。
+  &__row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  // 标签列固定宽度，且**按最长标签**定：这一栏里最长的标签是「投影名称」
+  // （4 个全角字 ≈ 48px），56px 留出安全余量，不随窗口变化。
+  &__row-label {
+    flex: 0 0 auto;
+    width: 56px;
+    color: var(--color-text-3);
     font-size: 12px;
+    text-align: right;
+    white-space: nowrap;
+  }
 
-    dt {
-      color: var(--color-text-3);
-      white-space: nowrap;
-    }
+  // 控件列：吃掉剩余宽度。min-width: 0 是让内部输入框能正确收缩的必要条件
+  // （否则 flex 子项按内容宽度撑开，长文件名会把这一行顶出去）。
+  &__row-control,
+  &__row-value {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
 
-    dd {
-      margin: 0;
-      overflow: hidden;
-      color: var(--color-text-1);
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
+  // 只读值：单行省略，完整内容靠 title 提示
+  &__row-value {
+    overflow: hidden;
+    color: var(--color-text-1);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   // 表单项收紧间距，否则三个输入框加描述框会顶到页面底部
