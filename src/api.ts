@@ -11,6 +11,8 @@ import type {
   ConvertOutcome,
   ConvertTarget,
   DuplicateScan,
+  EntityTexture,
+  EntityTextureStatus,
   FileOpOutcome,
   ReplaceOutcome,
   ReplaceRule,
@@ -228,6 +230,26 @@ export function revealInFileManager(path: string): Promise<void> {
 /** 重命名投影文件（只传文件名，不含目录），备份会一并重新链接 */
 export function renameSchematic(path: string, newName: string): Promise<RenameOutcome> {
   return invoke<RenameOutcome>("rename_schematic", { path, newName });
+}
+
+// ---------------------------------------------------------------- 实体贴图
+
+/** 实体贴图库的可用情况（版本数、贴图数、路径数） */
+export function entityTextureStatus(): Promise<EntityTextureStatus> {
+  return invoke<EntityTextureStatus>("entity_texture_status");
+}
+
+/**
+ * 取一张实体贴图的 RGBA 像素。
+ *
+ * 路径形如 `entity/chest/normal`。查不到时后端返回错误，
+ * 而不是一张空图——否则界面上只会看到一张纯黑贴图，无从判断原因。
+ */
+export function entityTexturePixels(
+  dataVersion: number,
+  path: string,
+): Promise<EntityTexture> {
+  return invoke<EntityTexture>("entity_texture_pixels", { dataVersion, path });
 }
 
 // ---------------------------------------------------------------- 界面状态记忆

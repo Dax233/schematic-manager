@@ -62,6 +62,30 @@ pub struct EntityCount {
     pub en_name: String,
 }
 
+/// 实体贴图库的可用情况
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityTextureStatusDto {
+    pub available: bool,
+    pub versions: usize,
+    pub textures: usize,
+    pub paths: usize,
+    /// 不可用时的原因；可用时为空串
+    pub error: String,
+}
+
+/// 一张实体贴图的像素
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityTextureDto {
+    pub path: String,
+    pub width: u16,
+    pub height: u16,
+    pub has_alpha: bool,
+    /// RGBA8888 像素，长度恒为 width * height * 4
+    pub rgba: Vec<u8>,
+}
+
 /// 一个实体实例（id + 投影内坐标）。
 ///
 /// 名字不放在这里、只在 `EntityCount` 上放一份：同一个实体可能有上千个实例，

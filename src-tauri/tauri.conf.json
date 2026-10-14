@@ -42,7 +42,8 @@
     "shortDescription": "Minecraft 投影文件管理器",
     "longDescription": "读取 .litematic 投影文件，提供 3D 预览、方块统计、方块替换、版本转换与预览图导出。",
     "resources": [
-      "resources/blocks.dat.z"
+      "resources/blocks.dat.z",
+      "resources/entities.dat.z"
     ]
   }
 }

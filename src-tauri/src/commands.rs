@@ -9,7 +9,8 @@ use crate::error::{AppError, AppResult};
 use crate::dto::{
     AnalysisResult, BackupEntryDto, BlockCount, BlockHitDto, BlockIconDto, BlockVersionDto,
     ConvertItemDto, ConvertOutcomeDto, ConvertTargetDto, DuplicateGroupDto, DuplicateScanDto,
-    EntityCount, EntityInstanceDto, FileOpOutcome, ImportOutcomeDto, ModsImportDto, PackEntryDto, PackListDto, PackLoadFailureDto,
+    EntityCount, EntityInstanceDto, EntityTextureDto, EntityTextureStatusDto, FileOpOutcome,
+    ImportOutcomeDto, ModsImportDto, PackEntryDto, PackListDto, PackLoadFailureDto,
     RenameOutcomeDto,
     ReplaceOutcomeDto, ReplaceRuleDto, SceneDto, SaveOutcome, ScanResult, SchematicSummary,
     UnreadableFileDto, VersionOptionDto,
@@ -367,8 +368,106 @@ pub fn render_block_icons(
         .collect())
 }
 
-/// 内置方块库压缩包的位置。
+/// 内置实体贴图库压缩包的位置。
 ///
+/// 与方块库同样的三级回退：随包资源目录、可执行文件同级的 res/、开发时的源码树。
+/// 实体贴图是后加的功能，旧安装里可能没有这个文件，因此找不到时不能直接报错——
+/// 那样会让整个程序起不来。调用方按「可选资源」处理。
+fn entity_archive(app: Option<&tauri::AppHandle>) -> Option<PathBuf> {
+    if let Some(a) = app {
+        if let Ok(p) = a.path().resolve("resources/entities.dat.z", BaseDirectory::Resource) {
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    let beside = exe_dir().join("res").join("entities.dat.z");
+    if beside.is_file() {
+        return Some(beside);
+    }
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join("entities.dat.z");
+    if dev.is_file() {
+        return Some(dev);
+    }
+    None
+}
+
+/// 已载入的实体贴图库。
+///
+/// 与方块库一样做进程内缓存：解析一次 1 MB 的包并解压像素池是有成本的，
+/// 而导出/预览会反复查询。
+static ENTITY_DB: std::sync::OnceLock<Option<std::sync::Arc<crate::entitydb::EntityDb>>> =
+    std::sync::OnceLock::new();
+
+fn open_entity_db(app: Option<&tauri::AppHandle>) -> Option<std::sync::Arc<crate::entitydb::EntityDb>> {
+    ENTITY_DB
+        .get_or_init(|| {
+            let p = entity_archive(app)?;
+            match crate::entitydb::EntityDb::load(&p) {
+                Ok(db) => Some(std::sync::Arc::new(db)),
+                Err(e) => {
+                    // 不静默：贴图库损坏会让实体渲染全部没有贴图，
+                    // 必须留下线索，否则用户只会看到一堆白模
+                    eprintln!("载入实体贴图库失败 {}：{e}", p.display());
+                    None
+                }
+            }
+        })
+        .clone()
+}
+
+/// 实体贴图库的可用情况。
+///
+/// 前端据此判断实体预览能否显示贴图，而不是拿到一张空白图去猜原因。
+#[tauri::command]
+pub fn entity_texture_status(app: tauri::AppHandle) -> EntityTextureStatusDto {
+    match open_entity_db(Some(&app)) {
+        Some(db) => EntityTextureStatusDto {
+            available: true,
+            versions: db.versions.len(),
+            textures: db.textures.len(),
+            paths: db.paths.len(),
+            error: String::new(),
+        },
+        None => EntityTextureStatusDto {
+            available: false,
+            versions: 0,
+            textures: 0,
+            paths: 0,
+            error: "未找到实体贴图库 entities.dat.z".into(),
+        },
+    }
+}
+
+/// 按版本与路径取一张实体贴图的 RGBA 像素。
+///
+/// 返回宽高与像素，前端直接建纹理。路径形如 `entity/chest/normal`；
+/// 查不到时返回错误而不是空图，避免界面上出现一张「看起来是纯黑」的贴图。
+#[tauri::command]
+pub fn entity_texture_pixels(
+    app: tauri::AppHandle,
+    data_version: i32,
+    path: String,
+) -> Result<EntityTextureDto, String> {
+    let db = open_entity_db(Some(&app)).ok_or_else(|| "实体贴图库不可用".to_string())?;
+    let ver = db
+        .version_for(data_version)
+        .ok_or_else(|| format!("实体贴图库里没有 dataVersion {data_version}"))?;
+    let (t, px) = db
+        .pixels_of(ver, &path)
+        .ok_or_else(|| format!("实体贴图库里没有 {path}（版本 {}）", ver.name))?;
+    Ok(EntityTextureDto {
+        path,
+        width: t.w,
+        height: t.h,
+        has_alpha: t.has_alpha,
+        rgba: px.to_vec(),
+    })
+}
+
+/// 内置方块库压缩包的位置。///
 /// 依次尝试：可执行文件同级的 res/（旧版布局）、随包分发的资源目录、
 /// 以及开发时的源码树。三者都不存在时给出明确错误，而不是让载入在
 /// 更深处报出难以理解的解析失败。
@@ -944,6 +1043,78 @@ mod tests {
         ));
         std::fs::create_dir_all(&d).expect("建临时目录失败");
         d
+    }
+
+    /// 开发环境下必须能找到实体贴图库。
+    ///
+    /// 三级回退里只有第三级（源码树）在测试进程里可用——没有 AppHandle，
+    /// 也没有 exe 同级的 res/。这条同时守住两件事：回退链本身没写错，
+    /// 以及 `resources/entities.dat.z` 确实随仓库分发（漏提交时这里会失败）。
+    #[test]
+    fn entity_archive_is_found_from_the_source_tree() {
+        let p = entity_archive(None).expect(
+            "源码树里应能找到 resources/entities.dat.z；\
+             缺这个文件说明实体贴图库没有随仓库分发",
+        );
+        assert!(p.is_file(), "{} 不是文件", p.display());
+        assert_eq!(
+            p.file_name().unwrap().to_string_lossy(),
+            "entities.dat.z",
+            "回退链应指向实体贴图库，而不是别的文件"
+        );
+
+        // 载入一次，确认这个文件真的能被解析（而不只是存在）
+        let db = crate::entitydb::EntityDb::load(&p).expect("随仓库分发的包应能解析");
+        assert!(!db.textures.is_empty(), "包里的贴图不应为空");
+        assert!(!db.versions.is_empty(), "包里应含版本表");
+    }
+
+    /// 实体贴图库里必须能查到实体渲染要用的那几类贴图。
+    ///
+    /// 覆盖本阶段真正会用到的方块实体：箱子、潜影盒、床、旗帜、告示牌、
+    /// 装饰陶罐、钟、 conduit、头颅。缺其中任何一类，对应方块在预览里就会没贴图。
+    ///
+    /// 注意旗帜：1.20.1 里**没有**按颜色分的旗帜贴图，只有一张灰度的
+    /// `entity/banner/base`，颜色靠染色（tint）得到。断言按真实存在的路径写，
+    /// 写成 `entity/banner/white` 会失败——而那条路径并不该存在。
+    #[test]
+    fn entity_archive_covers_the_block_entities_we_render() {
+        let p = entity_archive(None).expect("应能找到实体贴图库");
+        let db = crate::entitydb::EntityDb::load(&p).expect("解析失败");
+        // 用 1.20.1（dataVersion 3465），这是最常用的版本
+        let ver = db
+            .version_for(3465)
+            .expect("实体贴图库应含 dataVersion 3465");
+
+        for path in [
+            "entity/chest/normal",
+            "entity/chest/ender",
+            "entity/chest/trapped",
+            "entity/chest/christmas",
+            "entity/shulker/shulker",
+            "entity/shulker/shulker_white",
+            "entity/bed/white",
+            "entity/bed/red",
+            "entity/banner/base",
+            "entity/banner_base",
+            "entity/signs/oak",
+            "entity/signs/bamboo",
+            "entity/decorated_pot/decorated_pot_base",
+            "entity/decorated_pot/decorated_pot_side",
+            "entity/bell/bell_body",
+            "entity/conduit/base",
+        ] {
+            let got = db.pixels_of(ver, path);
+            assert!(
+                got.is_some(),
+                "1.20.1 应含 {path}（方块实体渲染要用）"
+            );
+        }
+
+        // 反向确认：不存在的路径必须查不到，避免上面的断言被「任何路径都返回
+        // 一张图」这种错误实现蒙混过去
+        assert!(db.pixels_of(ver, "entity/banner/white").is_none());
+        assert!(db.pixels_of(ver, "entity/not_a_real_thing").is_none());
     }
 
     #[test]

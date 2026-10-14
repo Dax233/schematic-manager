@@ -64,6 +64,26 @@ export interface EntityInstance {
   z: number;
 }
 
+/** 实体贴图库的可用情况 */
+export interface EntityTextureStatus {
+  available: boolean;
+  versions: number;
+  textures: number;
+  paths: number;
+  /** 不可用时的原因；可用时为空串 */
+  error: string;
+}
+
+/** 一张实体贴图的像素 */
+export interface EntityTexture {
+  path: string;
+  width: number;
+  height: number;
+  hasAlpha: boolean;
+  /** RGBA8888 像素，长度恒为 width * height * 4 */
+  rgba: number[];
+}
+
 /** 目录扫描结果 */
 export interface ScanResult {  items: SchematicSummary[];
   /** 因权限或 IO 错误被跳过的目录数 */

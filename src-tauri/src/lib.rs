@@ -10,6 +10,7 @@ mod commands;
 mod convert;
 mod dto;
 mod duplicate;
+mod entitydb;
 mod error;
 mod file_ops;
 mod geometry;
@@ -82,6 +83,8 @@ pub fn run() {
             commands::reveal_in_file_manager,
             commands::rename_schematic,
             commands::open_directory,
+            commands::entity_texture_status,
+            commands::entity_texture_pixels,
             commands::load_ui_state,
             commands::save_ui_state,
         ])
