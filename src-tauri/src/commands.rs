@@ -468,6 +468,14 @@ where
 /// 必须传入 AppHandle：打包后方块库位于 Tauri 的资源目录，
 /// 只查 exe_dir()/res/ 或编译期的 CARGO_MANIFEST_DIR 在用户机器上都不存在，
 /// 忽略资源目录会让方块检索与替换在发布版整块失效。
+///
+/// 测试里可以传 None：此时会退到编译期的 CARGO_MANIFEST_DIR，而那个路径在
+/// 开发机上确实存在，因此诊断用例能在命令行里直接跑真实文件。
+#[cfg(test)]
+pub(crate) fn open_db_for_test() -> AppResult<std::sync::Arc<LoadedDb>> {
+    open_db(None)
+}
+
 fn open_db(app: Option<&tauri::AppHandle>) -> AppResult<std::sync::Arc<LoadedDb>> {
     {
         let g = db_cache().read().unwrap_or_else(|e| e.into_inner());

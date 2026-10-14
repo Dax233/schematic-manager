@@ -499,9 +499,14 @@ SHIM = r"""
     }
 
     // ---- 方块栏（用户要求：中文名/列宽调整/明显分割线/自适应到最低位置/导出表格）----
-    // 先切到「方块」页签，否则量的是「信息」页签
+    // 先切到「方块」页签，否则量的是「信息」页签。
+    //
+    // 选择器必须是 .arco-tabs-tab：此前写的 .arco-tabs-header-title 在这份
+    // Arco 版本里**一个都匹配不到**，于是这里从来没真正切过页签，
+    // 「方块栏」那一批断言全都在量未激活的页签——而那正是问题所在，
+    // 假绿的根源就在这里。
     var blockTab = null;
-    var tabTitles = document.querySelectorAll(".detail__tabs .arco-tabs-header-title");
+    var tabTitles = document.querySelectorAll(".detail__tabs .arco-tabs-tab");
     for (var ti = 0; ti < tabTitles.length; ti++) {
       if ((tabTitles[ti].textContent || "").trim() === "方块") { blockTab = tabTitles[ti]; break; }
     }
@@ -515,6 +520,22 @@ SHIM = r"""
     }
     var bBox = bTable ? bTable.getBoundingClientRect() : null;
     var bPaneBox = bPane ? bPane.getBoundingClientRect() : null;
+    // 激活的内容项与「内容是否落在面板内」。
+    //
+    // 必须在 bBox 之后算：这两个都依赖 bBox。
+    // 页签的重新渲染是异步的（Vue 在微任务里更新 class），
+    // 因此驱动里要**提前一拍**点页签，不能在这里点完就量。
+    var bItem = bTable ? bTable.closest(".arco-tabs-content-item") : null;
+    var bItemActive = bItem ? bItem.className.indexOf("active") >= 0 : false;
+    var bItemCssH = bItem ? parseFloat(getComputedStyle(bItem).height) || 0 : -1;
+    // Arco 用 translateX 在横向排列的项之间滑动；一旦有人把 content-list
+    // 改成纵向，激活项就会被推到面板左侧之外，表现是「页签一片空白」。
+    var bPanelEl = document.querySelector(".detail");
+    var bPanelBox = bPanelEl ? bPanelEl.getBoundingClientRect() : null;
+    var bTableLeft = bBox ? Math.round(bBox.left) : -1;
+    var bInsidePanel = (bBox && bPanelBox)
+      ? (bBox.left >= bPanelBox.left - 2 && bBox.right <= bPanelBox.right + 2)
+      : false;
     // 表格底边距页签底边：0 表示真的撑到底
     var bGap = (bBox && bPaneBox) ? Math.round(bPaneBox.bottom - bBox.bottom) : -9999;
     var bHandles = bTable ? bTable.querySelectorAll(".arco-table-column-handle").length : 0;
@@ -580,11 +601,17 @@ SHIM = r"""
     var barBtn = document.querySelector(".preview__bar .arco-radio-button");
     var barBox = barBtn ? barBtn.getBoundingClientRect() : null;
     var barOk = barBox ? Math.round(barBox.height) <= 30 : false;
-    // 控制条应紧贴舞台底部：信息列比舞台高时若任其撑开，控制条会被推下去，
-    // 预览与按钮之间留下大片空白（实测被推到 637px vs 舞台底 484px）。
+    // 控制条应紧贴预览行下沿。
+    //
+    // 原先断言的是「距舞台底部 ≤40px」——那是舞台自适应放大、高度等于整行
+    // 高度时才成立的等量关系。舞台固定 200×200 之后，行高由信息列决定，
+    // 舞台下天然会留一块空白，这条等量关系不再成立。
+    // 真正的不变量是「控制条紧跟在预览行之后，中间不夹空隙」，与两者谁高无关。
     var barEl = document.querySelector(".preview__bar");
-    var stageBottom = stBox ? stBox.bottom : 0;
-    var gapBar = barEl ? Math.round(barEl.getBoundingClientRect().top - stageBottom) : 9999;
+    var mainEl = document.querySelector(".preview__main");
+    var barRowGap = (barEl && mainEl)
+      ? Math.round(barEl.getBoundingClientRect().top - mainEl.getBoundingClientRect().bottom)
+      : 9999;
 
     return "LAYOUT:"
       + "gapWb=" + gapWb
@@ -608,7 +635,7 @@ SHIM = r"""
       + ",previewOk=" + previewOk
       + ",canvasOverflow=" + canvasOverflow
       + ",barOk=" + barOk
-      + ",gapBar=" + gapBar
+      + ",gapBar=" + barRowGap
       + ",selOk=" + selOk
       + ",bTh=" + bThs.length
       + ",bBorder=" + bBorder
@@ -616,6 +643,14 @@ SHIM = r"""
       + ",bIcons=" + bIcons.length
       + ",bIconDecoded=" + bIconDecoded
       + ",bIconW=" + bIconW
+      + ",bItemActive=" + bItemActive
+      + ",bItemCssH=" + bItemCssH
+      + ",bInsidePanel=" + bInsidePanel
+      + ",bTableLeft=" + bTableLeft
+      + ",bPanelLeft=" + (bPanelBox ? Math.round(bPanelBox.left) : -1)
+      + ",bPanelRight=" + (bPanelBox ? Math.round(bPanelBox.right) : -1)
+      + ",bTabFound=" + (blockTab ? "true" : "false")
+      + ",bTabCount=" + tabTitles.length
       + ",bTableH=" + bTableH
       + ",bRowH=" + bRowH
       + ",bHeadH=" + bHeadH
@@ -722,6 +757,8 @@ SHIM = r"""
   var dragState = null;
   /** 列宽核对只跑一次：pending 为空会一直是空，需要显式守卫 */
   var widthChecked = false;
+  /** 是否已把「方块」页签切过去（必须提前于量布局，见驱动里的说明） */
+  var tabSwitched = false;
 
   // 用真实指针事件拖动分隔条，确认宽度确实随之改变。
   //
@@ -821,6 +858,23 @@ SHIM = r"""
       else if (!row) { state = "no-row"; }
       status();
     } else if (!dialogsDone) {
+      // 先把「方块」页签切过去，**提前很多拍**。
+      //
+      // Vue 的 class 更新在微任务里，点完当拍读到的是旧状态；而 layout()
+      // 是在所有对话框核对完之后同步调用的，那时早已渲染完成。
+      // 因此这里只负责点，不在同一拍量。
+      if (!tabSwitched) {
+        var tabsForSwitch = document.querySelectorAll(".detail__tabs .arco-tabs-tab");
+        for (var ts = 0; ts < tabsForSwitch.length; ts++) {
+          if ((tabsForSwitch[ts].textContent || "").trim() === "方块") {
+            tabsForSwitch[ts].click();
+            break;
+          }
+        }
+        tabSwitched = true;
+        status();
+        return;
+      }
       // 对话框开始之前，趁画布还在，先把「有没有画出东西」量下来
       if (!pixEarly) {
         var s0 = sampleCanvas();
@@ -956,6 +1010,14 @@ def free_port():
 
 
 def main():
+    # 控制台可能是 GBK（Windows 中文环境），而断言详情里会出现 GBK 之外的
+    # 字符（例如 U+2212 减号）。不设 replace 的话脚本会在 print 时直接崩掉，
+    # 表现是「渲染检查没有任何输出」，比一堆问号难查得多。
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
     if not os.path.isdir(DIST) or not os.path.exists(os.path.join(DIST, "index.html")):
         print(f"未找到构建产物 {DIST}/index.html，请先执行 pnpm build")
         return 2
@@ -1231,20 +1293,12 @@ def main():
             stage_h = int(fields.get("stageH", "-1"))
             stage_left = int(fields.get("stageLeft", "-1"))
             detail_left = int(fields.get("detailLeft", "-1"))
-            # 预览区必须够大：「太小」正是用户当初提的问题。
-            #
-            # 门槛不能写成一个固定像素：纵向要在预览与页签之间分空间、横向要在
-            # 预览与信息列之间分，小窗口下不可能都拿满。因此判据是
-            # 「预览吃掉信息列下限（300px）之外的全部可用宽度」，并给 450px
-            # 一个「够用」的封顶。窗口小到连 450 都放不下时按实际可用值算，
-            # 这时真正被验的是「没有把空间浪费掉」。
-            win_w = int(WIN.split(",")[0])
-            avail = win_w - detail_left - 8 - 12 - 300 - 20
-            expect_stage = min(450, max(220, avail))
-            claim(f"预览区为正方形且不小于 {expect_stage}",
-                  abs(stage_w - stage_h) <= 1 and stage_w >= expect_stage,
-                  f"  实际 {stage_w}×{stage_h}；窗口宽 {win_w}、详情栏左缘 {detail_left}"
-                  f" → 信息列之外可用 {avail}px")
+            # 预览舞台：用户要求固定 200×200。
+            # 之前是自适应放大，结果舞台把预览面板撑得很高、真正的数据区
+            # （方块/实体页签）被挤在下面。这条现在就钉死 200×200。
+            claim("预览区为固定 200×200",
+                  stage_w == 200 and stage_h == 200,
+                  f"  实际 {stage_w}×{stage_h}")
             # 容许 --preview__main 的 8px 内边距：舞台在详情栏左缘内侧一点，
             # 这是有意的留白，不是「没有靠左」
             claim("预览区靠左（贴住详情栏左缘）", abs(stage_left - detail_left) <= 12,
@@ -1254,15 +1308,13 @@ def main():
                   f"  画布宽 {fields.get('canvasW')}px / 舞台宽 {stage_w}px")
             # 控制条不应被挤压到文字竖排：曾实测单选按钮 47×44（「正面」竖排）
             bar_h = int(fields.get("barBtnH", "-1"))
-            # 控制条要贴着预览底部。这个间距来自「信息列比舞台高」——舞台宽度
-            # 受限时（窄窗口）舞台会明显矮于信息列，间距就压不到 0。
-            # 实测用户窗口为 8px、应用最小窗口为 0px、1200×760 这类窄而高的
-            # 窗口最大 56px；写死 40 会在窄窗口下误报。真正不能出现的是
-            # 上百像素的空档（曾实测 153px，控制条被推到很远）。
+            # 控制条要紧跟在预览行之后：间隙 = 控制条上沿 − 预览行下沿。
+            # 用「行」而不是「舞台」做基准，是因为舞台固定 200×200 后行高由
+            # 信息列决定，舞台下方本来就有空白，拿舞台当基准的断言已不成立。
             gap_bar = int(fields.get("gapBar", "9999"))
-            claim("控制条未被信息列推远",
-                  abs(gap_bar) <= 80,
-                  f"  距舞台底 {gap_bar}px（窗口窄时舞台偏矮，会有几十像素的间距）")
+            claim("控制条紧跟在预览行之后",
+                  abs(gap_bar) <= 2,
+                  f"  控制条上沿 - 预览行下沿 = {gap_bar}px（>0 表示夹了空档）")
             claim("选中的文件行有高亮", fields.get("selOk") == "true",
                   "  命中 .row-selected")
             claim("信息区在预览图右侧", fields.get("infoRight") == "true",
@@ -1288,6 +1340,25 @@ def main():
                   f"  表格底边距页签底边 {fields.get('bGap')}px")
             claim("方块栏有导出与复制表格按钮",
                   fields.get("bExport") == "true" and fields.get("bCopy") == "true")
+            # 页面能被真正切到「方块」页签，并且切过去之后内容落在面板内。
+            #
+            # 这两条是「页签一片空白」的正面防线：
+            #   1) 找不到页签元素 → 后面所有「方块栏」断言其实都在量未激活页签
+            #      （此前用的 .arco-tabs-header-title 在这份 Arco 里并不存在）；
+            #   2) 内容被水平平移出面板 → rect 有高度、像素却全在面板之外，
+            #      只断言高度会假绿（实测表格左缘 x=-251，详情栏从 673 开始）。
+            claim("能切到「方块」页签并激活它",
+                  fields.get("bTabFound") == "true" and fields.get("bItemActive") == "true",
+                  f"  页签数 {fields.get('bTabCount')} / 内容项激活 {fields.get('bItemActive')}")
+            claim("方块内容未被平移到面板之外",
+                  fields.get("bInsidePanel") == "true",
+                  f"  表格 x={fields.get('bTableLeft')}，面板 "
+                  f"{fields.get('bPanelLeft')}..{fields.get('bPanelRight')}")
+            # 内容项被 Arco 用 height:0 隐藏，而 rect 不受 overflow 裁剪影响，
+            # 因此必须断言 computed height，不能只看 rect。
+            claim("方块页签内容项高度不为 0（未被 Arco 裁掉）",
+                  float(fields.get("bItemCssH", "0")) > 60,
+                  f"  computed height={fields.get('bItemCssH')}px")
             # 渲染图：既要画出来，也要真的解码成功。
             # 只数 <img> 会漏掉「data URL 坏了、浏览器解不出图」的情况，
             # 那种表现在界面上同样是一列空白。

@@ -462,36 +462,29 @@ $info-min-w: 300px;
   background: var(--color-bg-2);
   overflow: hidden;
 
-  // 预览舞台：随窗口大小自适应，并保持正方形。
+  // 预览舞台：用户要求固定最大 200×200。
   //
-  // 用户在窗口变大时觉得「投影渲染得太小」，因此从固定 400×400 改为
-  // 随可用空间伸缩：
-  //   - 宽度用 flex 吃掉信息区左边的剩余空间；
-  //   - aspect-ratio: 1 让高度跟着宽度走，始终是正方形；
-  //   - 上限取三者较小值：可用宽度、视口高度减去固定开销、
-  //     以及「留下信息区最小宽度」后的余量。**必须同时限高与限宽**，
-  //     否则 max-height 会把高度压下去而宽度仍撑满，得到 847×844
-  //     这种看着像正方形其实不是的尺寸。
-  //
-  // 固定开销从 250 提到 360：下面要同时容纳标题栏(32)、状态栏(26)、
-  // 控制条(约 50) 与页签的 200px 下限，留不够就会把页签挤没。
+  // 之前是「随窗口自适应放大」，结果舞台把整个预览面板撑得很高、右侧反倒
+  // 只剩一条信息列，而真正的数据区（方块/实体页签）被挤在下面。
+  // 现在写死 200×200：预览够看清结构，其余空间全部留给信息与页签。
   &__stage {
-    flex: 1 1 auto;
-    aspect-ratio: 1 / 1;
-    min-width: 220px;
-    max-width: min(100%, calc(100vh - 360px), calc(100% - #{$info-min-w}));
-    max-height: calc(100vh - 360px);
+    flex: 0 0 auto;
+    width: 200px;
+    height: 200px;
+    min-width: 0;
+    max-width: 200px;
+    max-height: 200px;
     align-self: flex-start;
     overflow: hidden;
     background: var(--color-fill-1);
   }
 
   // 预览与信息并排。
-  // align-items: stretch 让信息列跟着预览舞台的高度走——舞台现在是自适应的，
-  // 写死高度会让两者错位。
+  // align-items: flex-start 让信息列按自身高度排版，而不是被拉到与舞台同高；
+  // 舞台是固定 200×200，拉伸它没有意义，反而会让舞台下方的空白变成一整块面板。
   &__main {
     display: flex;
-    align-items: stretch;
+    align-items: flex-start;
     gap: 12px;
     padding: 8px;
     min-width: 0;
@@ -502,13 +495,7 @@ $info-min-w: 300px;
   // 否则单行文字会长到难以阅读。
   //
   // 用 flex:0 1 auto 而不是 flex:1 1 auto：两列都按 flex-grow 分空间时，
-  // 信息列会白白吃掉一半宽度，预览区反而被挤小——用户要的是预览尽量大。
-  // 让它按内容宽度取（上限 620px），剩余全给预览；宽度不够时它会收缩
-  // （min-width:0），不会把预览挤没。
-  //
-  // 高度由 flex 拉伸到与舞台一致，并**必须限高**：内容比舞台高时若任其撑开，
-  // 下方的控制条会被推下去、页签会被压没。内容超出时由内部滚动
-  // （见 preview__info-body 的 overflow-y）。
+  // 信息列会白白吃掉一半宽度。让它按内容宽度取（上限 620px），其余留白。
   &__info {
     display: flex;
     flex-direction: column;
@@ -516,6 +503,8 @@ $info-min-w: 300px;
     min-width: 0;
     max-width: 620px;
     min-height: 0;
+    // 高度上限按视口给，超出时由内部滚动（见 preview__info-body）。
+    // 不再依赖舞台高度：舞台现在固定 200px，信息列本来就会比它高。
     max-height: calc(100vh - 360px);
   }
 
@@ -662,22 +651,55 @@ $info-min-w: 300px;
 
 // 方块/实体页签要撑满详情区剩余高度（用户反馈「没有自适应到最低位置」）。
 //
-// Arco 的页签结构是 .arco-tabs → .arco-tabs-content → .arco-tabs-content-list
-// → .arco-tabs-pane，默认都按内容高度；要让表格吃满剩余高度必须逐层把
-// 高度传下去。少传一层，表格就停在内容高度、下方留一大片空白。
+// Arco 的页签结构：
+//   .arco-tabs → .arco-tabs-content（overflow:hidden）
+//     → .arco-tabs-content-list（**display:flex 横向排列**，靠 translateX 滑动）
+//       → .arco-tabs-content-item（未激活 height:0、激活 height:auto、都 overflow:hidden）
+//         → .arco-tabs-pane（height:100%）
 //
-// 另外必须给页签留一个**下限**：预览区原本 flex:0 0 auto（完全不收缩），
-// 信息列一高就会把页签压到只剩标签栏，方块/实体页签整块空白——用户截图里
-// 那片区域是纯白，一个像素都没有（实测 69000 个像素全是 255,255,255）。
-// 200px 够放下标签栏、统计条、提示与两三行表格。
+// 要让表格吃满高度就得把高度逐层传下去，但**不能动 content-list 的排列方向**：
+// 它是横向 flex，Arco 用 translateX(-100% × 激活序号) 在其中滑动。
+// 之前这里给它加了 flex-direction: column，等于把三项纵向堆叠，
+// 而 translateX 照旧生效，结果激活的表格被整体平移到面板左侧之外
+// （实测表格左缘 x=-251，而详情栏从 673 开始，面板内只剩 8px）——
+// 界面表现就是「方块栏/实体栏一片空白」。这是纯 CSS 造成的，与数据无关。
+//
+// 因此这里的做法是：只让各级吃掉高度，排列方式保持 Arco 原样。
 .detail__tabs {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
+  // 给页签一个下限：预览区若完全不收缩，信息列一高就会把页签压到只剩标签栏
   min-height: 200px;
 
-  .arco-tabs-content,
-  .arco-tabs-content-list,
+  // 内容区是纵向容器（只有一个孩子：content-list），可以放心改成 flex 传高度
+  .arco-tabs-content {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  // content-list：**保持 Arco 的 display:flex 横向排列**，只让它吃满高度
+  .arco-tabs-content-list {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  // 激活项：占满内容区高度，并且**自己成为纵向 flex 容器**。
+  //
+  // 必须让 item 当 flex 容器：Arco 给 .arco-tabs-pane 设的是 height:100%，
+  // 而百分比高度要求父级高度「被显式指定」；实测在 Arco 这套结构里它解析不成
+  // 内容项的高度——pane 的计算高度是 1109.8px（按内容撑开），而内容项只有
+  // 454px 且 overflow:hidden，结果整张表格被悬在裁切区外，界面上就是一片空白。
+  // 改成 flex 子项后高度由布局直接给出，与百分比解析无关。
+  .arco-tabs-content-item.arco-tabs-content-item-active {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  // 页签：作为 flex 子项吃掉内容项的高度（不再依赖 height:100%）
   .arco-tabs-pane,
   .arco-spin,
   .arco-spin-children {
@@ -685,6 +707,13 @@ $info-min-w: 300px;
     flex: 1 1 auto;
     flex-direction: column;
     min-height: 0;
+  }
+
+  // 覆盖 Arco 的 height:100%：百分比在这条链路上不可靠（见上），
+  // 统一交给 flex 决定，否则又会按内容撑开。
+  .arco-tabs-pane {
+    height: auto;
+    overflow-y: auto;
   }
 
   // 表格本体：占满剩余高度，滚动交给 Arco 的滚动容器

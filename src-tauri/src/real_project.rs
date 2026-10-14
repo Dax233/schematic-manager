@@ -1618,3 +1618,91 @@ fn every_real_project_backs_up_and_restores_byte_for_byte() {
     assert!(checked > 0, "没有一个文件走完备份还原，这组用例没验到东西");
     assert!(failed.is_empty(), "以下文件未通过：\n{}", failed.join("\n"));
 }
+
+/// 诊断单个投影「分析」这条路是否通：方块表为什么会是空的。
+///
+/// 复刻 `commands::analyze_schematic` 的全部步骤（载入 → 选版本 → 统计），
+/// 但不经过 AppHandle，因此可以在命令行里直接跑真实文件。
+///
+/// 输入文件优先取 `SM_ANALYZE_ONE`；没设时取 `SM_REAL_DIR` 下的第一个投影，
+/// 这样它跟着 `--ignored` 那套真实投影用例一起跑也不会失败。
+/// 两个都没设时直接报错——这个用例本来就是「要指定文件才有意义」的诊断，
+/// 不写成「读不到就返回」：那样在报告里会显示为通过，看不出一次都没跑。
+#[test]
+#[ignore = "需设置 SM_ANALYZE_ONE（或 SM_REAL_DIR）指向真实投影"]
+fn diagnose_analyze_one_file() {
+    let p = match std::env::var("SM_ANALYZE_ONE") {
+        Ok(v) => v,
+        Err(_) => {
+            let files = collect_litematic(&real_dir());
+            files
+                .first()
+                .map(|f| f.to_string_lossy().into_owned())
+                .expect("SM_REAL_DIR 下没有 .litematic")
+        }
+    };
+    let sc = crate::litematic::Schematic::load(&p).expect("载入失败");
+    let s = sc.summary();
+    println!("文件 {p}");
+    println!("  dataVersion={} mc={}", s.data_version, s.mc_version_name);
+    println!("  enclosing={:?} 区域数={}", s.enclosing, sc.regions.len());
+
+    let a = sc.analyze();
+    println!("  非空气={} 空气={}", a.non_air_total, a.air_total);
+    println!("  方块状态种类={}", a.blocks_by_state.len());
+    println!("  实体种类={} 方块实体种类={}", a.entities_by_id.len(), a.tile_entities_by_id.len());
+    let mut top: Vec<(&String, &u64)> = a.blocks_by_state.iter().collect();
+    top.sort_by(|x, y| y.1.cmp(x.1));
+    for (k, v) in top.iter().take(8) {
+        println!("    {v:>6}  {k}");
+    }
+
+    let loaded = crate::commands::open_db_for_test().expect("方块库载入失败");
+    let db = &loaded.db;
+    let vi = db.pick_version(s.data_version);
+    println!("  选中版本下标={vi:?} 名称={:?}", vi.map(|i| db.versions[i].name.clone()));
+
+    // 把与前端拿到的完全相同的形状写出来，供无头检查用真实数据复现界面
+    if let Ok(out) = std::env::var("SM_ANALYZE_OUT") {
+        let blocks: Vec<serde_json::Value> = a
+            .blocks_by_state
+            .iter()
+            .map(|(state, count)| {
+                let name = state.split('[').next().unwrap_or(state).to_string();
+                let (zh, en) = crate::commands::block_display_names(db, vi, &name);
+                serde_json::json!({
+                    "name": name, "state": state, "count": count,
+                    "zhName": zh, "enName": en
+                })
+            })
+            .collect();
+        let entities: Vec<serde_json::Value> = a
+            .entities_by_id
+            .iter()
+            .map(|(id, count)| {
+                let (zh, en) = crate::commands::entity_display_names(db, vi, id);
+                serde_json::json!({ "id": id, "count": count, "zhName": zh, "enName": en })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "blocks": blocks,
+            "entities": entities,
+            "tileEntities": [],
+            "nonAirTotal": a.non_air_total,
+            "airTotal": a.air_total,
+            // 与命令里同口径：按**名称**去重的种类数，而不是状态数
+            "distinctBlockTypes": a
+                .blocks_by_state
+                .keys()
+                .map(|s| s.split('[').next().unwrap_or(s))
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            "distinctStates": blocks.len(),
+        });
+        std::fs::write(&out, serde_json::to_string_pretty(&payload).unwrap())
+            .expect("写分析结果失败");
+        println!("  已写出 {out}");
+    }
+
+    assert!(!a.blocks_by_state.is_empty(), "该投影应当有方块");
+}
