@@ -16,36 +16,47 @@ pub struct FaceCorners {
     pub uv: [[f32; 2]; 4],
 }
 
+/// 按面的 rotation 字段旋转**四个角点各自取到的贴图坐标**。
+///
+/// 输入是 `build_face_corners` 给出的四个 uv（顺序为 v0..v3），
+/// 输出是旋转后每个顶点应取的 uv。
+///
+/// 依据 Minecraft 模型格式的定义（Minecraft Wiki, Model）：
+///   - 「rotation 把贴图顺时针旋转给定角度（**down 面为逆时针**）」；
+///   - 「旋转**不改变取贴图的那块区域**，只是把所选到的贴图顶点做一次置换」。
+/// 所以这里只对四个角做循环置换，采样区域原样保留。
+///
+/// 不能改成「把 uv 坐标绕贴图中心 (0.5,0.5) 旋转」：当 uv 只占贴图一角时
+/// （活塞杆是 `[0,0,16,4]`，即 `piston_side` 顶部 16×4 的那条），绕中心一转
+/// 采样区域就挪到贴图的另一块地方，于是贴图整个错位。这正是用户报的
+/// 「活塞臂贴图渲染位置有错误」。
+///
+/// 方向：顺时针时，贴图左上角的图案转到面的右上角，即顶点 i 取原来的
+/// 角 c_{(i-1)}，故用 `i - k`。down 面按定义反过来。
+pub fn rotate_uv_corners(face: Face, uv: [[f32; 2]; 4], rotation: u16) -> [[f32; 2]; 4] {
+    let k = ((rotation % 360) / 90) as usize;
+    if k == 0 {
+        return uv;
+    }
+    if face == Face::Down {
+        // down 面按格式定义是逆时针
+        std::array::from_fn(|i| uv[(i + k) % 4])
+    } else {
+        std::array::from_fn(|i| uv[(i + 4 - k) % 4])
+    }
+}
+
 /// 按面朝向生成角点。
 ///
 /// `from` / `to` 为元素的两个对角（模型空间 0..16），
-/// `uv` 为该面的 [u1, v1, u2, v2]。
+/// `uv` 为该面的 [u1, v1, u2, v2]（**未旋转**；旋转由调用方用
+/// `rotate_uv_corners` 处理）。
 ///
 /// 各面的 u/v 增长方向由 Minecraft 模型规范固定，不能随意调换：
 ///   Down  u:+x v:-z     Up    u:+x v:+z
 ///   North u:-x v:-y     South u:+x v:-y
 ///   West  u:+z v:-y     East  u:-z v:-y
-/// 按面的 rotation 字段旋转 UV。
-///
-/// 角度以顺时针 90 度为单位，取值 0 / 90 / 180 / 270。
-/// 与 legacy-cpp/render.cpp 的贴图旋转一致：先把 UV 归一化到 0..1，
-/// 旋转后再还原，因此这里输入输出都保持 0..16 的原始尺度。
-pub fn rotate_uv(uv: [f32; 4], rotation: u16) -> [f32; 4] {
-    let [u1, v1, u2, v2] = uv;
-    // 归一化到 0..1
-    let mut p = [[u1 / 16.0, v1 / 16.0], [u2 / 16.0, v2 / 16.0]];
-    for q in p.iter_mut() {
-        let (fu, fv) = (q[0], q[1]);
-        *q = match rotation {
-            90 => [fv, 1.0 - fu],
-            180 => [1.0 - fu, 1.0 - fv],
-            270 => [1.0 - fv, fu],
-            _ => [fu, fv],
-        };
-    }
-    [p[0][0] * 16.0, p[0][1] * 16.0, p[1][0] * 16.0, p[1][1] * 16.0]
-}
-
+/// 四个角点依次取 (u1,v1) (u2,v1) (u2,v2) (u1,v2)。
 pub fn build_face_corners(face: Face, from: [f32; 3], to: [f32; 3], uv: [f32; 4]) -> FaceCorners {
     let [x1, y1, z1] = from;
     let [x2, y2, z2] = to;
@@ -209,9 +220,122 @@ mod tests {
         }
     }
 
+    /// 贴图旋转只能重新分配四个角，**不能改变采样的那块区域**。
+    ///
+    /// 这是活塞臂贴图错位的根因所在：原先的实现把 uv 坐标绕贴图中心
+    /// (0.5,0.5) 旋转，当 uv 只占贴图一角时（活塞杆是 [0,0,16,4]）会把采样
+    /// 区域挪到另一块地方，于是取到的是贴图上完全不相干的像素。
     #[test]
-    fn degenerate_element_does_not_panic() {
-        // 零体积元素（from == to）在真实模型中存在，不应 panic 或产生 NaN
+    fn uv_rotation_keeps_the_sampled_region() {
+        // 一个不方正的 uv 矩形：只占左上角，宽 16 高 4
+        let uv = [[0.0f32, 0.0], [1.0, 0.0], [1.0, 0.25], [0.0, 0.25]];
+        for rot in [0u16, 90, 180, 270] {
+            let got = rotate_uv_corners(Face::East, uv, rot);
+            // 四个角必须与原来那四个角是同一个集合（顺次置换）
+            let mut a: Vec<[f32; 2]> = uv.to_vec();
+            let mut b: Vec<[f32; 2]> = got.to_vec();
+            a.sort_by(|x, y| x.partial_cmp(y).unwrap());
+            b.sort_by(|x, y| x.partial_cmp(y).unwrap());
+            assert_eq!(a, b, "rotation={rot} 改变了采样区域：{got:?}");
+            // down 面走另一套方向，采样区域同样不能变
+            let got_down = rotate_uv_corners(Face::Down, uv, rot);
+            let mut c: Vec<[f32; 2]> = got_down.to_vec();
+            c.sort_by(|x, y| x.partial_cmp(y).unwrap());
+            assert_eq!(a, c, "rotation={rot}（down 面）改变了采样区域：{got_down:?}");
+        }
+    }
+
+    /// rotation=0 是恒等；四次 90° 回到原状。
+    #[test]
+    fn uv_rotation_zero_is_identity_and_four_steps_wrap() {
+        let uv = [[0.0f32, 0.0], [1.0, 0.0], [1.0, 0.25], [0.0, 0.25]];
+        assert_eq!(rotate_uv_corners(Face::East, uv, 0), uv);
+        let mut cur = uv;
+        for _ in 0..4 {
+            cur = rotate_uv_corners(Face::East, cur, 90);
+        }
+        assert_eq!(cur, uv, "四次 90° 应回到原状");
+        // 360 与 0 等价，超过 360 的取值也应先取模
+        assert_eq!(rotate_uv_corners(Face::East, uv, 360), uv);
+        assert_eq!(
+            rotate_uv_corners(Face::East, uv, 450),
+            rotate_uv_corners(Face::East, uv, 90)
+        );
+    }
+
+    /// 活塞：rotation 必须让 east 与 west 两侧的 u/v 落在正确的几何轴上。
+    ///
+    /// `piston_head` 的侧面用 uv=[0,0,16,4]：u 覆盖 16 个单位、v 覆盖 4 个单位。
+    /// 这两侧的几何都是「y 方向 16 单位、z 方向 4 单位」，因此旋转后必须是
+    /// u 沿 y 跑满 16、v 沿 z 跑满 4。写成坐标等式断言，方向搞反或采样区域
+    /// 被挪走都会失败。
+    #[test]
+    fn piston_side_faces_map_uv_to_correct_axes() {
+        let uv = [0.0f32, 0.0, 16.0, 4.0];
+        // 活塞头侧面元素：[0,0,0] → [16,16,4]
+        let (from, to) = ([0.0f32, 0.0, 0.0], [16.0f32, 16.0, 4.0]);
+
+        // East rot=90：顺时针 → u 应等于 16 - y，v 应等于 z
+        let mut c = build_face_corners(Face::East, from, to, uv);
+        c.uv = rotate_uv_corners(Face::East, c.uv, 90);
+        for i in 0..4 {
+            let (y, z) = (c.pos[i][1], c.pos[i][2]);
+            assert!(
+                (c.uv[i][0] - (16.0 - y)).abs() < 1e-4,
+                "East rot=90 顶点 {i}：u={} 应为 16-y={}",
+                c.uv[i][0],
+                16.0 - y
+            );
+            assert!(
+                (c.uv[i][1] - z).abs() < 1e-4,
+                "East rot=90 顶点 {i}：v={} 应为 z={z}",
+                c.uv[i][1]
+            );
+        }
+
+        // West rot=270：u 应等于 y，v 应等于 z
+        let mut c = build_face_corners(Face::West, from, to, uv);
+        c.uv = rotate_uv_corners(Face::West, c.uv, 270);
+        for i in 0..4 {
+            let (y, z) = (c.pos[i][1], c.pos[i][2]);
+            assert!(
+                (c.uv[i][0] - y).abs() < 1e-4,
+                "West rot=270 顶点 {i}：u={} 应为 y={y}",
+                c.uv[i][0]
+            );
+            assert!(
+                (c.uv[i][1] - z).abs() < 1e-4,
+                "West rot=270 顶点 {i}：v={} 应为 z={z}",
+                c.uv[i][1]
+            );
+        }
+    }
+
+    /// 旋转方向：除 down 面外为顺时针，down 面为逆时针。
+    ///
+    /// 方向搞反时贴图会上下颠倒 180°，对活塞那条只有 16×4 的贴图条尤其明显。
+    /// 顺时针 90° 时贴图左上角的图案转到面的右上角，因此顶点 0 取原左下角。
+    #[test]
+    fn uv_rotation_direction_follows_spec() {
+        let uv = [[0.0f32, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        // 顺时针：顶点 i 取原角 (i-1)
+        let got = rotate_uv_corners(Face::East, uv, 90);
+        assert_eq!(got[0], uv[3], "顺时针 90° 时顶点 0 应取原左下角");
+        assert_eq!(got[1], uv[0], "顺时针 90° 时顶点 1 应取原左上角");
+        assert_eq!(got[2], uv[1]);
+        assert_eq!(got[3], uv[2]);
+        // down 面按格式定义是逆时针：顶点 i 取原角 (i+1)
+        let down = rotate_uv_corners(Face::Down, uv, 90);
+        assert_eq!(down[0], uv[1], "down 面逆时针 90° 时顶点 0 应取原右上角");
+        assert_eq!(down[3], uv[0]);
+        // 其余面与 East 一致，不能把 down 的例外扩散出去
+        for f in [Face::Up, Face::North, Face::South, Face::West] {
+            assert_eq!(rotate_uv_corners(f, uv, 90), got, "{f:?} 应与 East 同向");
+        }
+    }
+
+    #[test]
+    fn degenerate_element_does_not_panic() {        // 零体积元素（from == to）在真实模型中存在，不应 panic 或产生 NaN
         for f in [Face::Down, Face::Up, Face::North, Face::South, Face::West, Face::East] {
             let c = build_face_corners(f, [2.0; 3], [2.0; 3], UV);
             for p in c.pos {

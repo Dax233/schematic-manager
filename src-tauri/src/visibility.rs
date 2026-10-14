@@ -5,7 +5,7 @@
 
 use crate::block_model::resolve_models;
 use crate::blockdb::{BlockDb, Face, NO_TEXTURE};
-use crate::geometry::{build_face_corners, cull_neighbor_offset, face_shade, rotate_uv};
+use crate::geometry::{build_face_corners, cull_neighbor_offset, face_shade, rotate_uv_corners};
 use crate::transform::{rotate_cull_offset, to_world};
 use crate::litematic::{BlockState, Schematic};
 
@@ -190,13 +190,13 @@ pub fn collect_quads(sc: &Schematic, db: &BlockDb, ver_idx: usize) -> Vec<Quad> 
                             }
                         }
 
-                        // 面的 rotation 字段只影响贴图方向，不影响几何
-                        let corners = build_face_corners(
-                            face,
-                            elem.from,
-                            elem.to,
-                            rotate_uv(mf.uv, mf.rotation),
-                        );
+                        // 面的 rotation 字段只影响贴图方向，不影响几何。
+                        // 旋转的是「每个顶点取 uv 矩形的哪个角」，采样区域不变——
+                        // 见 geometry::rotate_uv_corners 的说明（活塞臂就是被
+                        // 绕贴图中心旋转害错的）。
+                        let mut corners =
+                            build_face_corners(face, elem.from, elem.to, mf.uv);
+                        corners.uv = rotate_uv_corners(face, corners.uv, mf.rotation);
                         // 角点此刻仍在模型空间：既不随元素旋转、也不随变体
                         // 旋转、也没有平移到方块位置，尺度是方块坐标的 16 倍。
                         // 不在这里变换，所有方块的所有面会重叠在原点。
