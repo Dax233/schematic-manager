@@ -920,6 +920,109 @@ fn real_project_two_axis_rotation_matches_reference() {
     );
 }
 
+/// 红石线的亮度必须随**实际充能等级**变化，而不是一律亮红。
+///
+/// 用户看到「投影里很多红石粉都是亮的」，怀疑没有按充能判定。
+/// 这条走真实投影：把每个红石线方块按它的 power 属性分组，
+/// 核对最终落到四边形上的染色确实随 power 单调变化。
+///
+/// 用真实数据而不是自造区域：既验证了属性解析，也验证了染色真的
+/// 传到了四边形上（中间任何一环断掉，这里都会发现）。
+#[test]
+#[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
+fn redstone_wire_brightness_follows_power() {
+    use std::collections::BTreeMap;
+
+    let files = collect_litematic(&real_dir());
+    let db = bundled_db();
+
+    // power -> 该档在四边形上出现的染色（取红通道最大者）
+    let mut by_power: BTreeMap<i32, [f32; 3]> = BTreeMap::new();
+    let mut wire_quads = 0usize;
+
+    for f in &files {
+        let Ok(sc) = crate::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
+        let Some(vi) = db.pick_version(sc.summary().data_version) else { continue };
+
+        // 坐标 -> 该处红石线的 power
+        let mut power_at: BTreeMap<[i32; 3], i32> = BTreeMap::new();
+        for r in &sc.regions {
+            for (i, pi) in r.indices.iter().enumerate() {
+                let Some(st) = r.palette.get(*pi as usize) else { continue };
+                if st.name != "minecraft:redstone_wire" {
+                    continue;
+                }
+                let power = st
+                    .props
+                    .iter()
+                    .find(|(k, _)| k == "power")
+                    .and_then(|(_, v)| v.parse::<i32>().ok())
+                    .unwrap_or(0);
+                let local = r.pos_from_index(i);
+                let (Some(x), Some(y), Some(z)) = (
+                    r.pos[0].checked_add(local[0]),
+                    r.pos[1].checked_add(local[1]),
+                    r.pos[2].checked_add(local[2]),
+                ) else {
+                    continue;
+                };
+                power_at.insert([x, y, z], power);
+            }
+        }
+        if power_at.is_empty() {
+            continue;
+        }
+
+        for q in crate::visibility::collect_quads(&sc, &db, vi) {
+            let Some(&power) = power_at.get(&q.block_pos) else { continue };
+            // 只认真正染色过的面（overlay 那层 tint=-1，不参与）
+            if q.tint == crate::tint::NO_TINT {
+                continue;
+            }
+            wire_quads += 1;
+            let e = by_power.entry(power).or_insert([0.0, 0.0, 0.0]);
+            if q.tint[0] > e[0] {
+                *e = q.tint;
+            }
+        }
+    }
+
+    println!("  红石线染色四边形 {wire_quads} 个，覆盖 {} 个充能档位", by_power.len());
+    for (p, c) in &by_power {
+        println!("    power={p:<2} 染色 ({:.3}, {:.3}, {:.3})", c[0], c[1], c[2]);
+    }
+
+    assert!(wire_quads > 0, "真实投影里没有采集到任何红石线四边形");
+    assert!(
+        by_power.len() >= 2,
+        "真实投影只覆盖了 {} 个充能档位，样本不足以验证「亮度随充能变化」",
+        by_power.len()
+    );
+
+    // 逐档单调递增
+    let mut prev: Option<(i32, f32)> = None;
+    for (p, c) in &by_power {
+        if let Some((pp, pv)) = prev {
+            assert!(
+                c[0] > pv,
+                "power={p} 的红通道 {:.3} 未比 power={pp} 的 {pv:.3} 更大，\
+                 说明亮度没有随充能变化",
+                c[0]
+            );
+        }
+        prev = Some((*p, c[0]));
+    }
+
+    // 未充能必须明显暗于满充能
+    let lo = by_power.values().next().unwrap()[0];
+    let hi = by_power.values().next_back().unwrap()[0];
+    assert!(
+        hi > lo + 0.3,
+        "最亮档与最暗档差别太小（{lo:.3} -> {hi:.3}），红石线看起来会「都是亮的」"
+    );
+    println!("  亮度随充能单调变化：{lo:.3} -> {hi:.3}");
+}
+
 #[test]
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn real_project_piston_states_all_resolve() {
