@@ -412,6 +412,10 @@ body,
 }
 
 // 3D 预览区
+// 信息区至少要留出的宽度。预览舞台自适应当大时不能把它挤没，
+// 否则「信息显示在预览图右侧」这条要求会在宽窗口下名存实亡。
+$info-min-w: 300px;
+
 .preview {
   flex: 0 0 auto;
   display: flex;
@@ -419,28 +423,33 @@ body,
   border-bottom: 1px solid var(--color-border-1);
   background: var(--color-bg-2);
 
-  // 预览舞台固定为 400×400 并靠左显示。
+  // 预览舞台：随窗口大小自适应，并保持正方形。
   //
-  // 之前是 height:400px 且宽度铺满整个详情栏（实测 862px），
-  // 即「满了整个右侧窗口」。投影是体素模型，正方形容器更贴合。
-  // 400 是用户要求的边长：同屏看清结构，同时给右侧信息区留出空间。
-  //
-  // 固定尺寸而不是 flex:1，是为了让「靠左 + 限定边长」这条要求
-  // 不随窗口宽度变化：无论右侧多宽，预览区始终是左上角那块 400×400。
+  // 用户在窗口变大时觉得「投影渲染得太小」，因此从固定 400×400 改为
+  // 随可用空间伸缩：
+  //   - 宽度用 flex 吃掉信息区左边的剩余空间；
+  //   - aspect-ratio: 1 让高度跟着宽度走，始终是正方形；
+  //   - 上限取三者较小值：可用宽度、视口高度减去固定开销、
+  //     以及「留下信息区最小宽度」后的余量。**必须同时限高与限宽**，
+  //     否则 max-height 会把高度压下去而宽度仍撑满，得到 847×844
+  //     这种看着像正方形其实不是的尺寸。
   &__stage {
-    width: 400px;
-    height: 400px;
-    flex: 0 0 auto;
+    flex: 1 1 auto;
+    aspect-ratio: 1 / 1;
+    min-width: 220px;
+    max-width: min(100%, calc(100vh - 250px), calc(100% - #{$info-min-w}));
+    max-height: calc(100vh - 250px);
     align-self: flex-start;
-    min-width: 0;
     overflow: hidden;
     background: var(--color-fill-1);
   }
 
-  // 预览与信息并排
+  // 预览与信息并排。
+  // align-items: stretch 让信息列跟着预览舞台的高度走——舞台现在是自适应的，
+  // 写死高度会让两者错位。
   &__main {
     display: flex;
-    align-items: flex-start;
+    align-items: stretch;
     gap: 12px;
     padding: 8px;
     min-width: 0;
@@ -449,16 +458,15 @@ body,
   // 信息列：占满预览右侧的剩余宽度，并在很宽的窗口下拉住上限，
   // 否则单行文字会长到难以阅读。
   //
-  // 高度与预览舞台对齐（400px）：内容比舞台高时若任其撑开，
-  // 下方的控制条会被推下去，预览与按钮之间出现大片空白（实测被推到 637px）。
-  // 面板本身是纵向 flex：中间可滚，操作行钉在底部。
+  // 高度由 flex 拉伸到与舞台一致：内容比舞台高时若任其撑开，
+  // 下方的控制条会被推下去。面板内部是纵向 flex：中间可滚，操作行钉在底部。
   &__info {
     display: flex;
     flex-direction: column;
     flex: 1 1 auto;
     min-width: 0;
     max-width: 620px;
-    max-height: 400px;
+    min-height: 0;
   }
 
   // 可滚动区：基本信息 + 输入框。内容实测 513px > 400px，

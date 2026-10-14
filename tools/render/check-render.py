@@ -382,7 +382,9 @@ SHIM = r"""
     var cvBox = cvEl ? cvEl.getBoundingClientRect() : null;
     var previewOk = false, canvasOverflow = false;
     if (stBox && cvBox) {
-      previewOk = Math.round(stBox.width) === 400 && Math.round(stBox.height) === 400;
+      // 预览舞台改为自适应：核对它是正方形、且明显大于原来的 400（说明真的放大了）
+      previewOk = Math.abs(Math.round(stBox.width) - Math.round(stBox.height)) <= 1
+        && Math.round(stBox.width) >= 400;
       canvasOverflow =
         cvBox.left < stBox.left - 1 || cvBox.right > stBox.right + 1 ||
         cvBox.top < stBox.top - 1 || cvBox.bottom > stBox.bottom + 1;
@@ -979,7 +981,7 @@ def main():
             stage_h = int(fields.get("stageH", "-1"))
             stage_left = int(fields.get("stageLeft", "-1"))
             detail_left = int(fields.get("detailLeft", "-1"))
-            claim("预览区为 400×400", stage_w == 400 and stage_h == 400,
+            claim("预览区为正方形且不小于 400", abs(stage_w - stage_h) <= 1 and stage_w >= 400,
                   f"  实际 {stage_w}×{stage_h}")
             # 容许 --preview__main 的 8px 内边距：舞台在详情栏左缘内侧一点，
             # 这是有意的留白，不是「没有靠左」

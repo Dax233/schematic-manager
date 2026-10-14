@@ -623,14 +623,23 @@ const columns = computed<TableColumnData[]>(() => [
   { title: "", dataIndex: "__filler", width: 1, className: "sidebar__filler-col" },
 ]);
 
+/** 方块栏列。
+ *
+ * 中文名在前、ID 在后：玩家认的是「橡树树叶」而不是「minecraft:oak_leaves」，
+ * 但出问题时仍需要看到 ID，因此两者都保留。
+ * 中文名查不到时由 slot 回退显示 ID（见模板里的 zh 插槽）。
+ */
 const blockColumns: TableColumnData[] = [
+  { title: "中文名", slotName: "zhName", width: 150, ellipsis: true, tooltip: true },
   { title: "方块", dataIndex: "name", ellipsis: true, tooltip: true },
   { title: "状态", dataIndex: "state", ellipsis: true, tooltip: true },
   { title: "数量", dataIndex: "count", width: 90 },
   { title: "堆叠", slotName: "stacks", width: 110 },
 ];
 
+/** 实体栏列。与方块栏同理：中文名在前，ID 保留。 */
 const entityColumns: TableColumnData[] = [
+  { title: "中文名", slotName: "zhName", width: 150, ellipsis: true, tooltip: true },
   { title: "实体ID", dataIndex: "id" },
   { title: "数量", dataIndex: "count", width: 90 },
 ];
@@ -2085,6 +2094,12 @@ void followSystemTheme();
                   @row-click="onBlockRowClick"
                   :scroll="{ y: 360 }"
                 >
+                  <template #zhName="{ record }">
+                    <span v-if="record.zhName">{{ record.zhName }}</span>
+                    <span v-else class="hint-dim" :title="record.enName || '语言表中没有这一项'">
+                      {{ record.enName || "—" }}
+                    </span>
+                  </template>
                   <template #stacks="{ record }">{{ formatStacks(record.count) }}</template>
                 </a-table>
               </template>
@@ -2100,7 +2115,14 @@ void followSystemTheme();
                 :pagination="false"
                 row-key="id"
                 size="small"
-              />
+              >
+                <template #zhName="{ record }">
+                  <span v-if="record.zhName">{{ record.zhName }}</span>
+                  <span v-else class="hint-dim" :title="record.enName || '语言表中没有这一项'">
+                    {{ record.enName || "—" }}
+                  </span>
+                </template>
+              </a-table>
               <a-empty
                 v-if="analysis.entities.length === 0"
                 description="该投影不含实体"

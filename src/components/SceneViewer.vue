@@ -32,6 +32,14 @@ let controls: OrbitControls | null = null;
 // 会让笔记本常态占用 GPU，而这是静态预览，不操作时画面不会变。
 let raf = 0;
 let needsRender = true;
+// 容器尺寸变化用 ResizeObserver 而不是只监听 window：预览舞台会因
+// 侧栏拖动、分隔条拖动、页签切换而改变大小，这些都不触发 window resize。
+//
+// 只重设画布尺寸、不重新取景：相机 FOV 是垂直方向的，舞台恒为正方形
+// （见 global.scss 的 aspect-ratio），因此画布变大后同一个相机看到的是
+// 同一个角范围——模型占画面的**比例**不变而**像素**变多，正好是
+// 「窗口变大就画得更大」。重新取景反而会把用户转好的视角掰回去。
+let resizeObserver: ResizeObserver | null = null;
 
 /** 请求在下一帧重绘 */
 function requestRender() {
@@ -169,6 +177,13 @@ onMounted(() => {
     loop();
 
     window.addEventListener("resize", onResize);
+    // 窗口 resize 事件只在窗口尺寸变化时触发，而预览舞台现在会随
+    // **侧栏宽度、分隔条拖动、页签切换**等多种原因改变大小。
+    // 只用 window 事件会让画布停留在旧尺寸（表现为图像被拉伸或裁掉）。
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => onResize());
+      resizeObserver.observe(el);
+    }
     onResize();
     if (props.scene) {
       rebuild(props.scene);
@@ -183,6 +198,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf);
   window.removeEventListener("resize", onResize);
+  resizeObserver?.disconnect();
+  resizeObserver = null;
   disposeScene();
   controls?.dispose();
   renderer.value?.dispose();

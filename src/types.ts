@@ -39,12 +39,21 @@ export interface FileOpOutcome {
 
 export interface BlockCount {
   name: string;
-  state: string;  count: number;
+  state: string;
+  count: number;
+  /** 中文名，取自方块库语言表；查不到时为空串 */
+  zhName: string;
+  /** 英文名，取自方块库语言表；查不到时为空串 */
+  enName: string;
 }
 
 export interface EntityCount {
   id: string;
   count: number;
+  /** 中文名，取自方块库语言表；查不到时为空串 */
+  zhName: string;
+  /** 英文名，取自方块库语言表；查不到时为空串 */
+  enName: string;
 }
 
 /** 目录扫描结果 */
