@@ -613,6 +613,39 @@ SHIM = r"""
       ? Math.round(barEl.getBoundingClientRect().top - mainEl.getBoundingClientRect().bottom)
       : 9999;
 
+    // ---- 预览区是否刚性、信息列有没有压到控制条上 ----
+    //
+    // 用户反馈过两件事，都需要专门量：
+    //   1) 信息列被夹短后内容**溢出可见**，画到了下面的控制条上
+    //      （「投影名称」被控制条压住）；
+    //   2) 高度随窗口/内容自行变化，分割线来回移动。
+    // 因此这里同时量「重叠」与「面板高度」，两者都不能变。
+    var infoEl2 = document.querySelector(".preview__info");
+    var infoBody = document.querySelector(".preview__info-body");
+    var barEl2 = document.querySelector(".preview__bar");
+    var mainEl2 = document.querySelector(".preview__main");
+    var infoBottom = infoEl2 ? infoEl2.getBoundingClientRect().bottom : -1;
+    var barTop = barEl2 ? barEl2.getBoundingClientRect().top : -1;
+    // >0 表示信息列越过控制条上沿：那就是「盖住内容」
+    var infoOverlap = (infoEl2 && barEl2) ? Math.round(infoBottom - barTop) : 9999;
+    // 信息列必须是**裁剪**容器。
+    //
+    // 只比盒子边界抓不到这个缺陷：去掉 overflow 之后盒子尺寸不变，
+    // 溢出的内容照样画到控制条上（用户截图里「投影名称」被压住就是这个）。
+    // 能反映「内容会不会画到外面」的只有 overflow 的取值。
+    var infoOverflow = infoEl2 ? window.getComputedStyle(infoEl2).overflowY : "-";
+    var infoClips = infoOverflow !== "visible";
+    // 信息列的可用高度：太矮就编辑不了（用户反馈过「信息栏过于低矮」）
+    var infoBodyH = infoEl2 ? Math.round(infoEl2.getBoundingClientRect().height) : -1;
+    var infoBodyClient = infoBody ? Math.round(infoBody.clientHeight) : -1;
+    var infoBodyScroll = infoBody ? Math.round(infoBody.scrollHeight) : -1;
+    var previewPanelH = hOf(".preview");
+    var tabsPanelH2 = hOf(".detail__tabs");
+    var mainBottom = mainEl2 ? Math.round(mainEl2.getBoundingClientRect().bottom) : -1;
+    var barGapMain = (mainEl2 && barEl2)
+      ? Math.round(barEl2.getBoundingClientRect().top - mainEl2.getBoundingClientRect().bottom)
+      : 9999;
+
     return "LAYOUT:"
       + "gapWb=" + gapWb
       + ",gapDt=" + gapDt
@@ -655,6 +688,18 @@ SHIM = r"""
       + ",bRowH=" + bRowH
       + ",bHeadH=" + bHeadH
       + ",bPaneH=" + bPaneH
+      + ",infoOverlap=" + infoOverlap
+      + ",infoOverflow=" + infoOverflow
+      + ",infoClips=" + infoClips
+      + ",infoBodyH=" + infoBodyH
+      + ",infoBodyClient=" + infoBodyClient
+      + ",infoBodyScroll=" + infoBodyScroll
+      + ",previewPanelH=" + previewPanelH
+      + ",tabsPanelH=" + tabsPanelH2
+      + ",panelHBeforeSwitch=" + panelHBeforeSwitch
+      + ",tabsHBeforeSwitch=" + tabsHBeforeSwitch
+      + ",barGapMain=" + barGapMain
+      + ",mainBottom=" + mainBottom
       + ",detailH=" + detailH
       + ",previewH=" + previewH
       + ",tabsH=" + tabsH
@@ -759,6 +804,18 @@ SHIM = r"""
   var widthChecked = false;
   /** 是否已把「方块」页签切过去（必须提前于量布局，见驱动里的说明） */
   var tabSwitched = false;
+  /**
+   * 跳过「逐个打开对话框」这一步。
+   *
+   * 只为人工看图用：默认流程会把四个对话框开开关关，截图里主界面被弹层
+   * 盖住，没法核对布局。设置 SM_SKIP_DIALOGS=1 后直接走布局测量，
+   * 自动化断言仍与默认流程完全一致（对话框那一批会记为未核对，
+   * 因此只在人工看图时用，不能当作 CI 通过依据）。
+   */
+  var SKIP_DIALOGS = window.__SM_SKIP_DIALOGS__ === "1";
+  /** 切页签之前的预览面板高度与页签区高度，用于核对「切页签不改变尺寸」 */
+  var panelHBeforeSwitch = -1;
+  var tabsHBeforeSwitch = -1;
 
   // 用真实指针事件拖动分隔条，确认宽度确实随之改变。
   //
@@ -865,6 +922,14 @@ SHIM = r"""
       // 因此这里只负责点，不在同一拍量。
       if (!tabSwitched) {
         var tabsForSwitch = document.querySelectorAll(".detail__tabs .arco-tabs-tab");
+        // 切页签**之前**先记下预览面板与页签区的高度。
+        // 用户要求「界面不许自行变化尺寸、分割线不要来回变化」，
+        // 因此切换前后这两个高度必须完全一样——这一条只有在这里才量得到，
+        // 等到 layout() 时页签早就切完了。
+        var pvBefore = document.querySelector(".preview");
+        var tbBefore = document.querySelector(".detail__tabs");
+        panelHBeforeSwitch = pvBefore ? Math.round(pvBefore.getBoundingClientRect().height) : -1;
+        tabsHBeforeSwitch = tbBefore ? Math.round(tbBefore.getBoundingClientRect().height) : -1;
         for (var ts = 0; ts < tabsForSwitch.length; ts++) {
           if ((tabsForSwitch[ts].textContent || "").trim() === "方块") {
             tabsForSwitch[ts].click();
@@ -923,7 +988,7 @@ SHIM = r"""
       }
 
       // 依次打开每个功能对话框；打开后立刻关闭，再看下一个
-      var pending = DIALOG_BUTTONS.filter(function (n) { return !dialogTried.includes(n); })[0];
+      var pending = SKIP_DIALOGS ? null : DIALOG_BUTTONS.filter(function (n) { return !dialogTried.includes(n); })[0];
       if (!pending) {
         // 只执行一次：pending 在所有对话框试完后会一直是 undefined，
         // 不加守卫的话每到一拍都会重跑一遍（会反复重置拖动态）。
@@ -1044,7 +1109,9 @@ def main():
             f"window.__SM_BLOCK_ROWS__={json.dumps(BLOCK_ROWS, ensure_ascii=False)};"
             f"window.__SM_ENTITY_ROWS__={json.dumps(ENTITY_ROWS, ensure_ascii=False)};"
             f"window.__SM_ICON_URL__={json.dumps(icon_data_url())};"
-            f"window.__SM_ANALYZE__={json.dumps(os.environ.get('SM_ANALYZE', 'ok'))};</script>"
+            f"window.__SM_ANALYZE__={json.dumps(os.environ.get('SM_ANALYZE', 'ok'))};"
+            f"window.__SM_SKIP_DIALOGS__={json.dumps('1' if os.environ.get('SM_SKIP_DIALOGS') else '0')};"
+            "</script>"
         )
         # SM_FORCE_STAGE：把预览舞台钉到指定边长，用来复现「页签只剩很少高度」
         # 的真实窗口（用户那边实测页签只有约 106 CSS px，比默认的 249 小得多）。
@@ -1290,15 +1357,35 @@ def main():
                   f"为 0 说明面被当成背面剔除，即看穿方块")
             # 预览舞台必须是 400×400 且靠左（其左缘对齐详情栏左缘）
             stage_w = int(fields.get("stageW", "-1"))
+            preview_panel_h = int(fields.get("previewPanelH", "-1"))
             stage_h = int(fields.get("stageH", "-1"))
             stage_left = int(fields.get("stageLeft", "-1"))
             detail_left = int(fields.get("detailLeft", "-1"))
-            # 预览舞台：用户要求固定 200×200。
-            # 之前是自适应放大，结果舞台把预览面板撑得很高、真正的数据区
-            # （方块/实体页签）被挤在下面。这条现在就钉死 200×200。
+            # 预览区为固定 200×200（用户明确要求），且整块面板在切换页签前后
+            # 高度完全一致——「分割线来回变化」指的就是这里不一致。
             claim("预览区为固定 200×200",
                   stage_w == 200 and stage_h == 200,
                   f"  实际 {stage_w}×{stage_h}")
+            claim("切换页签不改变预览面板高度",
+                  int(fields.get("panelHBeforeSwitch", "-1")) == preview_panel_h
+                  and preview_panel_h > 0,
+                  f"  切换前 {fields.get('panelHBeforeSwitch')}px / 切换后 {preview_panel_h}px")
+            claim("切换页签不改变页签区高度",
+                  int(fields.get("tabsHBeforeSwitch", "-1")) == int(fields.get("tabsPanelH", "-1"))
+                  and int(fields.get("tabsPanelH", "-1")) > 0,
+                  f"  切换前 {fields.get('tabsHBeforeSwitch')}px / 切换后 {fields.get('tabsPanelH')}px")
+            # 信息列不能盖到控制条上，也不能短到没法编辑。
+            # 前一条是用户截图里的实际缺陷（「投影名称」被控制条压住）。
+            # 180px 是应用最小窗口（1180×700）下的实测值：那里「信息列」与
+            # 「方块表露出两行」互相挤占，两者都要留住。
+            claim("信息列没有盖住控制条",
+                  int(fields.get("infoOverlap", "9999")) <= 0
+                  and fields.get("infoClips") == "true",
+                  f"  信息列底边 - 控制条上沿 = {fields.get('infoOverlap')}px；"
+                  f"overflow-y={fields.get('infoOverflow')}")
+            claim("信息列高度足够编辑（不低于 180px）",
+                  int(fields.get("infoBodyH", "0")) >= 180,
+                  f"  信息列高 {fields.get('infoBodyH')}px")
             # 容许 --preview__main 的 8px 内边距：舞台在详情栏左缘内侧一点，
             # 这是有意的留白，不是「没有靠左」
             claim("预览区靠左（贴住详情栏左缘）", abs(stage_left - detail_left) <= 12,

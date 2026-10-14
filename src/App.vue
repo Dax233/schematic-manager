@@ -2273,31 +2273,15 @@ void followSystemTheme();
               </a-spin>
             </div>
             <div class="preview__info" v-if="selected">
-              <!-- 可滚动区：基本信息 + 三个输入框。操作行在它外面，
+              <!-- 可滚动区：三个输入框 + 基本信息。操作行在它外面，
                    因此内容再长也不会把保存按钮挤出可视范围。 -->
               <div class="preview__info-body">
-              <!-- 只读基本信息。用紧凑的两列排布并缩小字号，
-                   把纵向空间让给下面的描述框。 -->
-              <dl class="preview__facts">
-                <dt>文件名</dt>
-                <dd :title="selected.fileName">{{ selected.fileName }}</dd>
-                <dt>制作版本</dt>
-                <dd :title="`数据版本 ${selected.dataVersion}`">
-                  {{ selected.mcVersionName || "未知" }}（数据版本 {{ selected.dataVersion }}）
-                </dd>
-                <dt>投影格式</dt>
-                <dd>v{{ selected.formatVersion }}</dd>
-                <dt>尺寸</dt>
-                <dd>{{ formatDims(selected.enclosing) }}</dd>
-                <dt>区域数量</dt>
-                <dd>{{ selected.regionCount }}</dd>
-                <dt>方块总数</dt>
-                <dd>{{ selected.totalBlocks }}</dd>
-                <dt>实体数量</dt>
-                <dd>{{ selected.entityCount }}</dd>
-              </dl>
-
-              <!-- 可编辑元数据。描述按需求做成多行大输入框 -->
+              <!-- 可编辑元数据放在**最前面**。
+                   预览区右侧这一栏的高度是固定的（见 global.scss 的
+                   $preview-row-h），而「三个输入框 + 七行只读信息」比它高，
+                   必然有一部分要滚动。可编辑的三项是这一栏存在的理由，
+                   放前面才能保证一直看得见；只读信息在下方滚动即可——
+                   其中大部分字段在「信息」页签里也能看到。 -->
               <a-form :model="draft" layout="vertical" size="small" class="preview__form">
                 <a-form-item label="投影名称">
                   <a-input
@@ -2323,11 +2307,36 @@ void followSystemTheme();
                   />
                 </a-form-item>
                 </a-form>
+
+              <!-- 只读基本信息放在可编辑项**之后**。
+                   预览区右侧这一栏高度是固定的（见 global.scss 的
+                   $preview-row-h），而「三个输入框 + 七行只读信息」比它高，
+                   必然有一部分要滚动。可编辑的三项是这一栏存在的理由，
+                   放前面才能保证一直看得见；只读信息在下方滚动即可——
+                   其中大部分字段在「信息」页签里也能看到。 -->
+              <dl class="preview__facts">
+                <dt>文件名</dt>
+                <dd :title="selected.fileName">{{ selected.fileName }}</dd>
+                <dt>制作版本</dt>
+                <dd :title="`数据版本 ${selected.dataVersion}`">
+                  {{ selected.mcVersionName || "未知" }}（数据版本 {{ selected.dataVersion }}）
+                </dd>
+                <dt>投影格式</dt>
+                <dd>v{{ selected.formatVersion }}</dd>
+                <dt>尺寸</dt>
+                <dd>{{ formatDims(selected.enclosing) }}</dd>
+                <dt>区域数量</dt>
+                <dd>{{ selected.regionCount }}</dd>
+                <dt>方块总数</dt>
+                <dd>{{ selected.totalBlocks }}</dd>
+                <dt>实体数量</dt>
+                <dd>{{ selected.entityCount }}</dd>
+              </dl>
               </div>
               <!-- 操作行钉在面板底部，不随内容一起滚。
-                   面板高度与预览舞台对齐（400px），而「基本信息 + 三个输入框 +
-                   多行描述」实测有 513px：不钉住的话保存按钮会落到折叠线以下
-                   113px，用户得先滚动才能保存，等于按钮藏起来了。 -->
+                   面板高度是固定的（$preview-row-h），而「三个输入框 + 多行描述
+                   + 只读信息」比它高：不钉住的话保存按钮会落到折叠线以下，
+                   用户得先滚动才能保存，等于按钮藏起来了。 -->
               <div class="preview__actions">
                 <a-button
                   type="primary"
