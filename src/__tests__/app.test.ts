@@ -1553,6 +1553,64 @@ describe("方块栏渲染图", () => {
     expect(calls[0]).not.toContain("minecraft:b60");
     w.unmount();
   });
+
+  it("翻到第二页会去取第二页的渲染图", async () => {
+    const many: BlockCount[] = Array.from({ length: 120 }, (_, i) => ({
+      name: `minecraft:b${i}`,
+      state: `minecraft:b${i}`,
+      count: i + 1,
+      zhName: `方块${i}`,
+      enName: `B${i}`,
+    }));
+    // 必须按**请求到的**状态回，只回请求的那一批：
+    // 一次性把 120 个都回给前端，第二页就全在缓存里了，翻页不会发请求。
+    // 场景等其余命令仍交给 stubInvoke——只回 [] 会让 loadScene 拿到无效数据，
+    // 详情面板整块渲染不出来，那样测到的是替身的问题。
+    stubInvoke({
+      analyze_schematic: {
+        blocks: many,
+        entities: [],
+        tileEntities: [],
+        nonAirTotal: 0,
+        airTotal: 0,
+        distinctBlockTypes: many.length,
+        distinctStates: many.length,
+      },
+    });
+    const base = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((async (cmd: string, args: unknown) => {
+      if (cmd === "render_block_icons") {
+        const asked = (args as { states: string[] }).states;
+        return asked.map((s) => ({
+          state: s,
+          dataUrl: "data:image/png;base64,AA==",
+          error: "",
+        }));
+      }
+      return base(cmd, args);
+    }) as never);
+
+    mockOpen.mockResolvedValue("/p");
+    const w = mountApp();
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+
+    const page2 = [...document.querySelectorAll(".arco-pagination-item")].find(
+      (el) => (el.textContent ?? "").trim() === "2",
+    ) as HTMLElement | undefined;
+    expect(page2, "应能定位到第 2 页按钮").toBeTruthy();
+    page2!.click();
+    await flushPromises();
+
+    const states = mockInvoke.mock.calls
+      .filter((c) => c[0] === "render_block_icons")
+      .map((c) => (c[1] as { states: string[] }).states);
+    expect(states.length, "应发生第二批请求").toBe(2);
+    expect(states[1][0], "第二批应是第 51 行起的方块").toBe("minecraft:b50");
+    w.unmount();
+  });
 });
 
 /** 资源包管理：导入来源、删除、打开资源包目录 */
