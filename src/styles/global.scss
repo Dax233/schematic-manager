@@ -720,3 +720,23 @@ $info-min-w: 300px;
     }
   }
 }
+
+// 方块渲染图。源图是 64×64，这里按 32 显示：
+// 高 DPI 屏上浏览器会用多出来的像素做降采样，比 1:1 显示更清楚。
+.block-icon {
+  display: block;
+  width: 32px;
+  height: 32px;
+  margin: 0 auto;
+  object-fit: contain;
+}
+
+// 没有渲染图时的占位。用次要文字色，避免看起来像内容
+.block-icon--failed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-4);
+  font-size: 11px;
+  cursor: help;
+}

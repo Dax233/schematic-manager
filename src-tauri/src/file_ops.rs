@@ -185,6 +185,29 @@ pub fn reveal_in_file_manager(path: &Path) -> AppResult<()> {
     }
 }
 
+/// 在文件管理器里打开一个目录本身（不是定位到它）。
+///
+/// 与 `reveal_in_file_manager` 的区别：那个的语义是「选中这个文件」，
+/// Windows 上走 `explorer /select,`，打开的其实是**父目录**。
+/// 这里要打开的正是传入的目录，因此走各自的「打开这个路径」入口。
+pub fn open_directory(path: &Path) -> AppResult<()> {
+    if !path.is_dir() {
+        return Err(AppError::Parse(format!("目录不存在：{}", path.display())));
+    }
+    #[cfg(windows)]
+    let (exe, arg) = ("explorer.exe", path.as_os_str().to_os_string());
+    #[cfg(target_os = "macos")]
+    let (exe, arg) = ("open", path.as_os_str().to_os_string());
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let (exe, arg) = ("xdg-open", path.as_os_str().to_os_string());
+
+    std::process::Command::new(exe)
+        .arg(arg)
+        .spawn()
+        .map_err(|e| AppError::Parse(format!("无法打开文件夹：{e}")))?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------- Windows
 
 /// Windows 回收站。

@@ -1,7 +1,8 @@
-//! PNG 解码。
+//! PNG 编解码。
 //!
-//! 用途：Minecraft 客户端与模组 jar 里的贴图是 PNG，而内部资源包格式存的
+//! 解码用于：Minecraft 客户端与模组 jar 里的贴图是 PNG，而内部资源包格式存的
 //! 是 RGBA8888 原始像素，导入 jar 时必须解码。
+//! 编码用于：方块栏的方块渲染图要作为 PNG 交给前端显示，见 `block_icon`。
 //!
 //! 本机无法获取 png 类依赖（crates.io 不可达），故自行实现。只解实际会用到的
 //! 子集：8 位与 4 位、非隔行。遇到不支持的形式明确报错，而不是给出错色。
@@ -381,6 +382,88 @@ pub fn decode(data: &[u8]) -> AppResult<Image> {
     Ok(Image { width, height, rgba })
 }
 
+/// CRC32 查表（PNG 各块用的就是这一种）。
+fn crc_table() -> &'static [u32; 256] {
+    static TABLE: std::sync::OnceLock<[u32; 256]> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut t = [0u32; 256];
+        for (i, slot) in t.iter_mut().enumerate() {
+            let mut c = i as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+            *slot = c;
+        }
+        t
+    })
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let t = crc_table();
+    let mut c = 0xFFFF_FFFFu32;
+    for &b in data {
+        c = t[((c ^ b as u32) & 0xFF) as usize] ^ (c >> 8);
+    }
+    c ^ 0xFFFF_FFFF
+}
+
+/// 写一个 PNG 块：长度 + 类型 + 数据 + 覆盖「类型 + 数据」的 CRC32
+fn write_chunk(out: &mut Vec<u8>, kind: &[u8; 4], body: &[u8]) {
+    out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    let start = out.len();
+    out.extend_from_slice(kind);
+    out.extend_from_slice(body);
+    let crc = crc32(&out[start..]);
+    out.extend_from_slice(&crc.to_be_bytes());
+}
+
+/// 编码 8 位 RGBA PNG。
+///
+/// 只写必需的那几块：不做调色板、不做隔行、逐行滤波固定用 0（不滤波）。
+/// 图标只有几十像素见方，滤波换来的一点体积收益抵不上实现与验证的成本。
+/// 解压用的同样是 flate2 的 zlib，与解码路径同一套实现。
+pub fn encode(width: u32, height: u32, rgba: &[u8]) -> AppResult<Vec<u8>> {
+    if width == 0 || height == 0 {
+        return Err(AppError::Corrupt("PNG 尺寸为 0".into()));
+    }
+    let want = width as usize * height as usize * 4;
+    if rgba.len() < want {
+        return Err(AppError::Corrupt(format!(
+            "编码 PNG 需要 {want} 字节像素，实际只有 {}",
+            rgba.len()
+        )));
+    }
+
+    // 每条扫描线前面一个滤波类型字节
+    let stride = width as usize * 4;
+    let mut raw = Vec::with_capacity(height as usize * (1 + stride));
+    for y in 0..height as usize {
+        raw.push(0);
+        raw.extend_from_slice(&rgba[y * stride..y * stride + stride]);
+    }
+
+    use std::io::Write;
+    let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    enc.write_all(&raw)
+        .map_err(|e| AppError::Corrupt(format!("PNG 压缩失败: {e}")))?;
+    let compressed = enc
+        .finish()
+        .map_err(|e| AppError::Corrupt(format!("PNG 压缩失败: {e}")))?;
+
+    let mut out = Vec::with_capacity(compressed.len() + 64);
+    out.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&height.to_be_bytes());
+    // 位深 8、色型 6（RGBA）、压缩/滤波/隔行方式均为 0
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    write_chunk(&mut out, b"IHDR", &ihdr);
+    write_chunk(&mut out, b"IDAT", &compressed);
+    write_chunk(&mut out, b"IEND", &[]);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,5 +727,59 @@ mod tests {
     fn unsupported_color_type_is_rejected() {
         let e = channels(7).unwrap_err().to_string();
         assert!(e.contains("色型"), "应指出色型不支持：{e}");
+    }
+
+    /// 自己编出来的 PNG 必须能被自己的解码器原样解回来。
+    ///
+    /// 断言逐字节相等而不是「解得出图」：CRC 写错、扫描线少一个滤波字节、
+    /// 通道顺序反了，这些缺陷都会让图还能解出来但像素不对。
+    #[test]
+    fn encode_round_trips_through_decode() {
+        let rgba: Vec<u8> = (0..8u32 * 5)
+            .flat_map(|i| {
+                let i = i as u8;
+                [i.wrapping_mul(3), i.wrapping_mul(5), i.wrapping_mul(7), i.wrapping_add(1)]
+            })
+            .collect();
+        let png = encode(8, 5, &rgba).expect("编码失败");
+        let img = decode(&png).expect("编出来的 PNG 应能解回");
+        assert_eq!(img.width, 8);
+        assert_eq!(img.height, 5);
+        assert_eq!(img.rgba, rgba, "往返后的像素必须与原像素一致");
+    }
+
+    /// 编码结果里的每个块都要带正确的 CRC32。
+    ///
+    /// 这台机器上的解码器不看 CRC，所以前面那条往返测试发现不了 CRC 写错；
+    /// 但浏览器（前端用 data URL 显示渲染图）校验 CRC，写错就直接不显示。
+    #[test]
+    fn every_chunk_carries_a_valid_crc() {
+        let png = encode(3, 2, &[0u8; 24]).expect("编码失败");
+        let mut pos = 8usize;
+        let mut seen = 0;
+        while pos + 8 <= png.len() {
+            let len = be32(&png[pos..]) as usize;
+            let kind = &png[pos + 4..pos + 8];
+            let body_end = pos + 8 + len;
+            let want = be32(&png[body_end..]);
+            let got = crc32(&png[pos + 4..body_end]);
+            assert_eq!(
+                want,
+                got,
+                "块 {} 的 CRC32 不符",
+                String::from_utf8_lossy(kind)
+            );
+            seen += 1;
+            pos = body_end + 4;
+        }
+        assert_eq!(seen, 3, "应写出 IHDR / IDAT / IEND 三个块");
+        assert_eq!(pos, png.len(), "块序列应恰好铺满整个文件");
+    }
+
+    /// 像素少于声明的尺寸时必须报错，而不是拿越界的图去编码。
+    #[test]
+    fn encode_rejects_short_pixel_buffer() {
+        let e = encode(4, 4, &[0u8; 32]).unwrap_err().to_string();
+        assert!(e.contains("4"), "错误信息应说明需要多少字节：{e}");
     }
 }

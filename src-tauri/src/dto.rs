@@ -333,6 +333,8 @@ pub struct PackEntryDto {
     pub name: String,
     /// 来源 jar 路径
     pub source: String,
+    /// 来源所在目录；旧清单没有这一列时为空串
+    pub source_dir: String,
     /// 类型：0 内置、1 MC 版本包、2 模组包
     pub kind: i32,
     /// 类型的中文名，供界面直接显示
@@ -346,6 +348,35 @@ pub struct PackEntryDto {
     /// 文件是否实际存在。清单可能与磁盘不一致（用户手工删过文件），
     /// 界面据此提示而不是显示一个点开就报错的条目。
     pub exists: bool,
+}
+
+/// 一个方块的渲染图。
+///
+/// 逐项带上 `state` 而不是按数组下标对齐：调用方一次可能只请求其中一部分，
+/// 只靠下标迟早会把图片贴到错误的行上。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockIconDto {
+    /// 方块状态键，与请求里的一致，形如 `minecraft:oak_stairs[facing=east]`
+    pub state: String,
+    /// `data:image/png;base64,...`；渲染失败时为空串
+    pub data_url: String,
+    /// 渲染失败的原因；成功时为空串。
+    /// 必须逐项回报：某个方块画不出来不该让整批失败，但用户需要知道为什么。
+    pub error: String,
+}
+
+/// 从 mods 文件夹批量导入的结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModsImportDto {
+    /// 被扫描的目录
+    pub dir: String,
+    /// 成功导入的模组 jar 文件名
+    pub imported: Vec<String>,
+    /// 失败项及原因。**必须回报**：某一个模组坏掉不该让其余都导不进来，
+    /// 但用户也需要知道少了哪些、为什么。
+    pub failed: Vec<UnreadableFileDto>,
 }
 
 /// 导入 jar 的结果
@@ -388,6 +419,9 @@ pub struct PackLoadFailureDto {
 #[serde(rename_all = "camelCase")]
 pub struct PackListDto {
     pub packs: Vec<PackEntryDto>,
+    /// 资源包存放目录。界面上要能直接打开它去管理磁盘上的文件
+    /// （手工删掉某个包、拷入别人给的包），因此必须带出来。
+    pub packs_dir: String,
     /// 已启用但载入或合并失败的包：`(文件名, 原因)`。
     ///
     /// 必须上报：这类包在界面上看起来是启用状态，实际却不参与解析，
@@ -441,6 +475,7 @@ mod tests {
             file: "a.pack".into(),
             name: "A".into(),
             source: "/j/a.jar".into(),
+            source_dir: "/j".into(),
             kind: 2,
             kind_label: "模组包".into(),
             data_version: 3465,
@@ -452,7 +487,7 @@ mod tests {
         let v = serde_json::to_value(&dto).expect("序列化失败");
         assert_keys(&v, &[
                 "dataVersion", "enabled", "exists", "file", "kind", "kindLabel",
-                "mcVersion", "name", "size", "source",
+                "mcVersion", "name", "size", "source", "sourceDir",
             ]);
     }
 
@@ -486,6 +521,7 @@ mod tests {
     fn pack_list_keys_match_frontend() {
         let dto = PackListDto {
             packs: Vec::new(),
+            packs_dir: "C:/app/packs".into(),
             load_failures: vec![PackLoadFailureDto {
                 file: "broken.pack".into(),
                 reason: "载入失败：文件不存在".into(),
@@ -493,7 +529,7 @@ mod tests {
             skipped: vec!["第 3 行有误".into()],
         };
         let v = serde_json::to_value(&dto).expect("序列化失败");
-        assert_keys(&v, &["loadFailures", "packs", "skipped"]);
+        assert_keys(&v, &["loadFailures", "packs", "packsDir", "skipped"]);
     }
 
 

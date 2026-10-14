@@ -95,6 +95,16 @@ export interface BlockHit {
   versions: BlockVersion[];
 }
 
+/** 一个方块的渲染图 */
+export interface BlockIcon {
+  /** 方块状态键，与请求里的一致 */
+  state: string;
+  /** `data:image/png;base64,...`；渲染失败时为空串 */
+  dataUrl: string;
+  /** 渲染失败的原因；成功时为空串 */
+  error: string;
+}
+
 /** 方块库中的版本选项 */
 export interface VersionOption {
   index: number;
@@ -209,6 +219,11 @@ export interface PackEntry {
   name: string;
   /** 来源 jar 路径 */
   source: string;
+  /**
+   * 来源所在目录。从 mods 文件夹批量导入时同一个目录会带出多个包，
+   * 界面据此把它们归成一组。
+   */
+  sourceDir: string;
   /** 类型：0 内置、1 MC 版本包、2 模组包 */
   kind: number;
   /** 类型的中文名 */
@@ -230,6 +245,8 @@ export interface PackLoadFailure {
 
 export interface PackList {
   packs: PackEntry[];
+  /** 资源包存放目录，供界面直接打开去管理磁盘上的文件 */
+  packsDir: string;
   /** 已启用但载入或合并失败的包 */
   loadFailures: PackLoadFailure[];
   /** 清单里解析失败而被跳过的行说明 */
@@ -253,4 +270,17 @@ export interface ImportOutcome {
   failedBlocks: number;
   namespaces: number;
   size: number;
+}
+
+/** 从 mods 文件夹批量导入的结果 */
+export interface ModsImport {
+  /** 被扫描的目录 */
+  dir: string;
+  /** 成功导入的模组 jar 文件名 */
+  imported: string[];
+  /**
+   * 失败项及原因。必须回报：某一个模组坏掉不该让其余都导不进来，
+   * 但用户也需要知道少了哪些、为什么。
+   */
+  failed: { path: string; reason: string }[];
 }

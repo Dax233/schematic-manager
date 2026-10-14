@@ -43,7 +43,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "../App.vue";
-import type { SchematicSummary, SceneData, DuplicateGroup, ConvertItem } from "../types";
+import type { SchematicSummary, SceneData, DuplicateGroup, ConvertItem, BlockCount } from "../types";
 
 const mockInvoke = vi.mocked(invoke);
 const mockOpen = vi.mocked(open);
@@ -131,7 +131,7 @@ function stubInvoke(overrides: Record<string, unknown> = {}) {
         // 返回 PackListDto（后端类型），不是数组：App.vue 打开资源包面板时
         // 立刻读 r.packs / r.skipped / r.loadFailures，给数组会在
         // r.skipped.length 处抛 TypeError，被 catch 变成「读取资源包清单失败」。
-        return { packs: [], skipped: [], loadFailures: [] };
+        return { packs: [], packsDir: "/app/packs", skipped: [], loadFailures: [] };
       case "list_backups":
       case "read_operation_log":
         return [];
@@ -1407,6 +1407,214 @@ describe("界面状态记忆", () => {
       w.find(".sidebar").element.getAttribute("style"),
       "不认识的版本不应被套用".replace("不应被套用", "不应被采用"),
     ).not.toContain("111");
+    w.unmount();
+  });
+});
+
+/** 方块栏里的方块渲染图。
+ *
+ * 渲染图是异步、按页批量取回来的。它坏掉的表现只是「有一列空着」，
+ * 既不会让构建失败，也不会让别的用例失败，因此单独覆盖。
+ */
+describe("方块栏渲染图", () => {
+  const rows: BlockCount[] = [
+    {
+      name: "minecraft:stone",
+      state: "minecraft:stone",
+      count: 10,
+      zhName: "石头",
+      enName: "Stone",
+    },
+    {
+      name: "minecraft:oak_log",
+      state: "minecraft:oak_log[axis=y]",
+      count: 3,
+      zhName: "橡木原木",
+      enName: "Oak Log",
+    },
+  ];
+
+  /** 选中投影并让分析返回给定的方块行 */
+  async function selectWithBlocks(blocks: BlockCount[], extra: Record<string, unknown> = {}) {
+    stubInvoke({
+      analyze_schematic: {
+        blocks,
+        entities: [],
+        tileEntities: [],
+        nonAirTotal: 0,
+        airTotal: 0,
+        distinctBlockTypes: 1,
+        distinctStates: blocks.length,
+      },
+      ...extra,
+    });
+    mockOpen.mockResolvedValue("/p");
+    const w = mountApp();
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+    return w;
+  }
+
+  it("按状态键批量取回渲染图并显示出来", async () => {
+    const dataUrl = "data:image/png;base64,iVBORw0KGgo=";
+    const w = await selectWithBlocks(rows, {
+      render_block_icons: rows.map((r) => ({ state: r.state, dataUrl, error: "" })),
+    });
+
+    const imgs = w.findAll("img.block-icon");
+    expect(imgs.length, "两行都应显示出渲染图").toBe(2);
+    expect(imgs[0].attributes("src")).toBe(dataUrl);
+
+    // 一次一批，而不是逐行一次
+    const calls = mockInvoke.mock.calls.filter((c) => c[0] === "render_block_icons");
+    expect(calls.length, "同一页应只用一次请求").toBe(1);
+    expect(calls[0][1]).toMatchObject({
+      dataVersion: summary.dataVersion,
+      states: rows.map((r) => r.state),
+    });
+    w.unmount();
+  });
+
+  it("单个方块画不出来时显示失败说明，而不是留一个破图", async () => {
+    const w = await selectWithBlocks(rows, {
+      render_block_icons: [
+        { state: rows[0].state, dataUrl: "data:image/png;base64,iVBORw0KGgo=", error: "" },
+        { state: rows[1].state, dataUrl: "", error: "方块库中没有这个方块" },
+      ],
+    });
+
+    expect(w.findAll("img.block-icon").length, "只有成功的那一行有图").toBe(1);
+    const failed = w.find(".block-icon--failed");
+    expect(failed.exists(), "失败的那一行应显示占位").toBe(true);
+    expect(failed.attributes("title")).toContain("方块库中没有这个方块");
+    w.unmount();
+  });
+
+  it("整批请求失败时提示一次，并且不反复重试", async () => {
+    const errSpy = vi.spyOn(Message, "error");
+    mockInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === "load_ui_state") return null;
+      if (cmd === "scan_litematics") {
+        return { items: [summary], skippedDirs: 0, skippedPaths: [] };
+      }
+      if (cmd === "analyze_schematic") {
+        return {
+          blocks: rows,
+          entities: [],
+          tileEntities: [],
+          nonAirTotal: 0,
+          airTotal: 0,
+          distinctBlockTypes: 1,
+          distinctStates: rows.length,
+        };
+      }
+      if (cmd === "render_block_icons") throw new Error("方块库载入失败");
+      return undefined;
+    }) as never);
+
+    const w = mountApp();
+    mockOpen.mockResolvedValue("/p");
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+
+    // 失败必须让用户看见，不能被静默吞掉
+    expect(errSpy).toHaveBeenCalled();
+    const calls = mockInvoke.mock.calls.filter((c) => c[0] === "render_block_icons");
+    expect(calls.length, "失败后不应无限重试同一批").toBe(1);
+    expect(w.findAll(".block-icon--failed").length, "失败的行应显示占位").toBe(rows.length);
+
+    errSpy.mockRestore();
+    w.unmount();
+  });
+
+  it("只请求当前页的方块，不把整表一次拉回来", async () => {
+    const many: BlockCount[] = Array.from({ length: 120 }, (_, i) => ({
+      name: `minecraft:b${i}`,
+      state: `minecraft:b${i}`,
+      count: i + 1,
+      zhName: `方块${i}`,
+      enName: `B${i}`,
+    }));
+    const w = await selectWithBlocks(many, {
+      render_block_icons: many
+        .slice(0, 50)
+        .map((r) => ({ state: r.state, dataUrl: "data:image/png;base64,AA==", error: "" })),
+    });
+
+    const calls = mockInvoke.mock.calls
+      .filter((c) => c[0] === "render_block_icons")
+      .map((c) => (c[1] as { states: string[] }).states);
+    expect(calls.length).toBe(1);
+    expect(calls[0].length, "一页 50 行，只该请求这 50 个").toBe(50);
+    expect(calls[0]).not.toContain("minecraft:b60");
+    w.unmount();
+  });
+});
+
+/** 资源包管理：导入来源、删除、打开资源包目录 */
+describe("资源包管理", () => {
+  const pack = {
+    file: "mod-x.pack",
+    name: "某模组",
+    source: "C:/mods/mod-x.jar",
+    sourceDir: "C:/mods",
+    kind: 2,
+    kindLabel: "模组包",
+    dataVersion: 3465,
+    mcVersion: "1.20.1",
+    enabled: true,
+    size: 1024,
+    exists: true,
+  };
+
+  /** 打开资源包管理弹窗并等加载完成。
+   *
+   * 断言一律查 `document.body` 而不是 `w.text()`：Arco 的弹窗通过 teleport
+   * 挂到 body 上，wrapper 的文本里拿不到它的内容。
+   */
+  async function openPacks(extra: Record<string, unknown> = {}) {
+    stubInvoke({
+      list_packs: { packs: [pack], packsDir: "C:/app/packs", skipped: [], loadFailures: [] },
+      ...extra,
+    });
+    const w = mountApp();
+    await flushPromises();
+    const entry = w.findAll("button").find((b) => b.text().includes("资源包管理"));
+    expect(entry, "工具栏应有「资源包管理」").toBeTruthy();
+    await entry!.trigger("click");
+    await flushPromises();
+    return w;
+  }
+
+  /** 在弹窗里按文字找按钮 */
+  function bodyButton(label: string): HTMLElement | undefined {
+    return [...document.querySelectorAll("button")].find((b) =>
+      (b.textContent ?? "").includes(label),
+    ) as HTMLElement | undefined;
+  }
+
+  it("列出模组名与来源目录", async () => {
+    const w = await openPacks();
+    const text = document.body.textContent ?? "";
+    expect(text, "应显示模组名").toContain("某模组");
+    expect(text, "应显示来源目录").toContain("C:/mods");
+    w.unmount();
+  });
+
+  it("「打开资源包目录」把后端给的目录交给文件管理器", async () => {
+    const w = await openPacks();
+    const btn = bodyButton("打开资源包目录");
+    expect(btn, "应有「打开资源包目录」按钮").toBeTruthy();
+    btn!.click();
+    await flushPromises();
+
+    const call = mockInvoke.mock.calls.find((c) => c[0] === "open_directory");
+    expect(call, "应调用 open_directory").toBeTruthy();
+    expect(call![1]).toEqual({ path: "C:/app/packs" });
     w.unmount();
   });
 });

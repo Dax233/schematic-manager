@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { ImportOutcome, PackEntry, PackLoadFailure } from "./types";
+import type { ImportOutcome, ModsImport, PackEntry, PackLoadFailure } from "./types";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import type { TableColumnData, TableData } from "@arco-design/web-vue";
 import { Message } from "@arco-design/web-vue";
@@ -16,8 +16,10 @@ import {
   loadUiState,
   saveUiState,
   importJar,
+  importModsFolder,
   listBlockVersions,
   listPacks,
+  openDirectory,
   revealInFileManager,
   setPackEnabled,
   previewReplace,
@@ -28,6 +30,7 @@ import {
   applyConversion,
   convertTargets,
   readOperationLog,
+  renderBlockIcons,
   scanDuplicates,
   restoreBackup,
   saveMetadata,
@@ -691,6 +694,7 @@ const columns = computed<TableColumnData[]>(() => [
  * 否则最后一列永远没有拖动手柄。这里同样补一个 1px 占位列。
  */
 const blockColumns: TableColumnData[] = [
+  { title: "渲染图", slotName: "icon", width: 60 },
   { title: "中文名", slotName: "zhName", width: 150, ellipsis: true, tooltip: true },
   { title: "方块", dataIndex: "name", ellipsis: true, tooltip: true },
   { title: "状态", dataIndex: "state", ellipsis: true, tooltip: true },
@@ -732,6 +736,91 @@ function resetBlockColumnWidths() {
   blockColWidths.value = {};
   blockTableKey.value += 1;
 }
+
+/** 方块栏每页行数。渲染图按页加载，所以这个值同时决定了加载节奏。 */
+const BLOCK_PAGE_SIZE = 50;
+/** 一次请求多少张渲染图。远小于后端的单批上限，避免一次塞进过大的 IPC 负载。 */
+const ICON_BATCH = 128;
+const blockPage = ref(1);
+
+/** 当前页的行。渲染图只给可见的这批，整表一次性加载会有几 MB 的 data URL。 */
+const blockPageRows = computed<BlockCount[]>(() => {
+  const all = analysis.value?.blocks ?? [];
+  const start = (blockPage.value - 1) * BLOCK_PAGE_SIZE;
+  return all.slice(start, start + BLOCK_PAGE_SIZE);
+});
+
+/** 状态键 → data URL。用普通 Map 而不是 reactive：
+ * 这里会有几百上千项，逐项做响应式代理得不偿失，
+ * 改动后统一靠 iconVersion 触发重绘。 */
+const iconCache = new Map<string, string>();
+/** 状态键 → 渲染失败原因。同样需要缓存，否则每次翻页都会重试同一个坏方块。 */
+const iconErrors = new Map<string, string>();
+/** 渲染图缓存的版本号：Map 本身不是响应式的，靠它通知模板重新求值 */
+const iconVersion = ref(0);
+/** 换投影后旧请求的结果必须丢弃，否则会把上一个投影的图贴到新表上 */
+let iconGeneration = 0;
+
+/** 取某行的渲染图；没有时返回空串。 */
+function iconOf(state: string): string {
+  void iconVersion.value; // 建立响应式依赖
+  return iconCache.get(state) ?? "";
+}
+
+/** 取某行渲染图的失败原因；成功或尚未加载时返回空串。 */
+function iconErrorOf(state: string): string {
+  void iconVersion.value;
+  return iconErrors.get(state) ?? "";
+}
+
+/** 按需加载这一页里还没有渲染图的行。 */
+async function ensureBlockIcons(rows: BlockCount[]) {
+  const dataVersion = selected.value?.dataVersion ?? 0;
+  if (dataVersion <= 0) return;
+  const missing = rows
+    .map((r) => r.state)
+    .filter((s) => !iconCache.has(s) && !iconErrors.has(s));
+  if (missing.length === 0) return;
+
+  const gen = iconGeneration;
+  for (let i = 0; i < missing.length; i += ICON_BATCH) {
+    const chunk = missing.slice(i, i + ICON_BATCH);
+    let icons;
+    try {
+      icons = await renderBlockIcons(dataVersion, chunk);
+    } catch (e) {
+      if (gen !== iconGeneration) return;
+      // 整批失败通常是方块库出了问题。把这一批标记成已处理，
+      // 否则每次翻回这一页都会重试并再弹一次同样的错误。
+      const reason = `渲染方块图失败：${e}`;
+      for (const s of chunk) iconErrors.set(s, reason);
+      iconVersion.value += 1;
+      Message.error(reason);
+      return;
+    }
+    if (gen !== iconGeneration) return;
+    for (const icon of icons) {
+      if (icon.error) iconErrors.set(icon.state, icon.error);
+      else if (icon.dataUrl) iconCache.set(icon.state, icon.dataUrl);
+    }
+    iconVersion.value += 1;
+  }
+}
+
+/** 换了投影就把渲染图与页码一起重置：缓存是按状态键存的，
+ * 跨投影复用看起来没问题，但不同版本的同一状态可能贴图不同。
+ *
+ * 必须先把 generation 加一，正在飞的那批请求才会被丢弃；
+ * 否则它们的回调会按老投影的图写进刚清空的缓存。 */
+function resetBlockIcons() {
+  iconGeneration += 1;
+  iconCache.clear();
+  iconErrors.clear();
+  iconVersion.value += 1;
+  blockPage.value = 1;
+}
+
+watch(blockPageRows, (rows) => void ensureBlockIcons(rows), { immediate: true });
 
 /** 导出方块统计为文本表格（制表符分隔，可直接粘进 Excel）。
  *
@@ -1343,6 +1432,8 @@ const packBusy = ref(false);
 /** 打开弹窗过程中的加载态，供工具栏按钮显示 */
 const packOnOpen = ref(false);
 const packs = ref<PackEntry[]>([]);
+/** 资源包存放目录；打开它才能看到、清理磁盘上实际存在的文件 */
+const packsDir = ref("");
 /** 清单里解析失败被跳过的行；必须显示，否则"导入的包不见了"无从解释 */
 const packSkipped = ref<string[]>([]);
 /**
@@ -1357,6 +1448,9 @@ const importKind = ref<number>(1);
 /** 模组包叠加到哪个数据版本：0 表示尚未选择 */
 const importDataVersion = ref<number>(0);
 const importBusy = ref(false);
+/** mods 文件夹批量导入是否进行中：与单个 jar 导入分开，
+ * 否则批量导入期间「导入 jar」按钮会一起转圈，用户以为点错了。 */
+const modsBusy = ref(false);
 
 /**
  * 可选的叠加目标版本。
@@ -1370,6 +1464,9 @@ const packColumns = [
   { title: "名称", dataIndex: "name", ellipsis: true, tooltip: true },
   { title: "类型", slotName: "kind", width: 110 },
   { title: "适用版本", slotName: "version", width: 150 },
+  // 来源目录：用户要求「记录导入来源文件夹目录与模组名字」。
+  // 名称列已经在显示模组名，这里给出来源目录，两者合起来即可追溯。
+  { title: "来源目录", slotName: "sourceDir", ellipsis: true, tooltip: true, width: 220 },
   { title: "大小", slotName: "size", width: 100 },
   { title: "状态", slotName: "state", width: 90 },
   { title: "操作", slotName: "actions", width: 140 },
@@ -1403,6 +1500,7 @@ async function refreshPacks() {
     // 已有更新的请求发出过，丢弃本次结果
     if (seq !== refreshSeq) return;
     packs.value = r.packs;
+    packsDir.value = r.packsDir;
     packSkipped.value = r.skipped;
     packLoadFailures.value = r.loadFailures;
     if (r.skipped.length > 0) {
@@ -1417,6 +1515,20 @@ async function refreshPacks() {
   } finally {
     // 只有最后一次请求才能解除加载态，否则先返回的会把后面的加载态清掉
     if (seq === refreshSeq) packBusy.value = false;
+  }
+}
+
+/** 打开资源包目录，去管理磁盘上的文件 */
+async function openPacksDir() {
+  const dir = packsDir.value;
+  if (!dir) {
+    Message.warning("尚未取到资源包目录，请先点刷新");
+    return;
+  }
+  try {
+    await openDirectory(dir);
+  } catch (e) {
+    Message.error(`打开资源包目录失败：${e}`);
   }
 }
 
@@ -1480,6 +1592,56 @@ async function runImportJar() {
     Message.error(`导入失败：${e}`);
   } finally {
     importBusy.value = false;
+  }
+}
+
+/** 从 mods 文件夹批量导入。
+ *
+ * 用户要求「模组包要选择到 mods 文件夹，导入所有模组方块贴图」。
+ * 逐个选 jar 在装了上百个模组时不可行，因此提供整目录导入。
+ */
+async function runImportModsFolder() {
+  if (modsBusy.value) return;
+  // 模组包必须指明叠加到哪个版本：jar 内没有这个信息
+  const dv = importDataVersion.value;
+  if (dv <= 0) {
+    Message.warning("请先选择模组包要叠加到的游戏版本");
+    return;
+  }
+  const picked = await open({
+    directory: true,
+    multiple: false,
+    title: "选择 mods 文件夹",
+  });
+  if (typeof picked !== "string") return;
+
+  modsBusy.value = true;
+  try {
+    const out: ModsImport = await importModsFolder(picked, dv);
+    if (out.imported.length > 0) {
+      Message.success({
+        content: `已从该文件夹导入 ${out.imported.length} 个模组`,
+        duration: 6000,
+      });
+    }
+    // 失败项必须逐条列出：用户需要知道少了哪些模组、为什么
+    if (out.failed.length > 0) {
+      Message.warning({
+        content:
+          `${out.failed.length} 个模组导入失败：` +
+          out.failed
+            .slice(0, 3)
+            .map((f) => `${f.path}（${f.reason}）`)
+            .join("；") +
+          (out.failed.length > 3 ? ` …等 ${out.failed.length} 个` : ""),
+        duration: 12000,
+      });
+    }
+    await refreshPacks();
+  } catch (e) {
+    Message.error(`批量导入失败：${e}`);
+  } finally {
+    modsBusy.value = false;
   }
 }
 
@@ -1850,6 +2012,7 @@ async function restoreUiState() {
 async function onRowClick(raw: TableData) {
   const record = raw as unknown as SchematicSummary;
   selected.value = record;
+  resetBlockIcons();
   analysis.value = null;
   resetDraft(record);
   if (record.error) return;
@@ -2291,14 +2454,31 @@ void followSystemTheme();
                   class="block-table"
                   :columns="blockTableColumns"
                   :data="analysis.blocks"
-                  :pagination="{ pageSize: 50 }"
+                  :pagination="{ pageSize: BLOCK_PAGE_SIZE, current: blockPage }"
                   row-key="state"
                   size="small"
                   column-resizable
                   @column-resize="onBlockColumnResize"
+                  @page-change="(p: number) => (blockPage = p)"
                   @row-click="onBlockRowClick"
                   :scroll="{ y: '100%' }"
                 >
+                  <template #icon="{ record }">
+                    <img
+                      v-if="iconOf(record.state)"
+                      class="block-icon"
+                      :src="iconOf(record.state)"
+                      :alt="record.zhName || record.name"
+                      :title="record.zhName || record.name"
+                    />
+                    <!-- 画不出来时说清楚原因，而不是留一个让人以为是加载慢的空位 -->
+                    <span
+                      v-else-if="iconErrorOf(record.state)"
+                      class="block-icon block-icon--failed"
+                      :title="iconErrorOf(record.state)"
+                      >无图</span
+                    >
+                  </template>
                   <template #zhName="{ record }">
                     <span v-if="record.zhName">{{ record.zhName }}</span>
                     <span v-else class="hint-dim" :title="record.enName || '语言表中没有这一项'">
@@ -2434,13 +2614,31 @@ void followSystemTheme();
         <a-button size="small" type="primary" :loading="importBusy" @click="runImportJar">
           导入 jar…
         </a-button>
+        <!-- 整目录导入：装了上百个模组时逐个选 jar 不可行 -->
+        <a-button size="small" :loading="modsBusy" @click="runImportModsFolder">
+          导入 mods 文件夹…
+        </a-button>
+        <a-button
+          size="small"
+          title="在文件管理器里打开资源包存放目录"
+          @click="openPacksDir"
+        >
+          打开资源包目录
+        </a-button>
         <a-button size="small" :loading="packBusy" @click="refreshPacks">刷新</a-button>
       </a-space>
 
       <div class="hint-dim" style="margin-bottom: 10px">
-        选具体的 .jar 文件而不是文件夹：
-        <code>.minecraft\versions\&lt;版本&gt;\&lt;版本&gt;.jar</code>
-        。要选客户端而不是服务端——服务端没有贴图资源。
+        <template v-if="importKind === 2">
+          「导入 mods 文件夹」会一次导入该文件夹下<strong>所有</strong>模组 jar
+          （只扫描这一层、不递归），并跳过客户端 jar；
+          单个模组失败不会中断整批。
+        </template>
+        <template v-else>
+          选具体的 .jar 文件而不是文件夹：
+          <code>.minecraft\versions\&lt;版本&gt;\&lt;版本&gt;.jar</code>
+          。要选客户端而不是服务端——服务端没有贴图资源。
+        </template>
       </div>
 
       <a-alert
@@ -2494,6 +2692,14 @@ void followSystemTheme();
           </template>
           <template #version="{ record }">
             <span>{{ record.mcVersion || "-" }}</span>
+          </template>
+          <!-- 来源目录：旧清单没有这一列（升级前导入的包），显示占位而不是
+               空白，否则用户会以为是界面坏了。 -->
+          <template #sourceDir="{ record }">
+            <span v-if="record.sourceDir" :title="record.sourceDir">
+              {{ record.sourceDir }}
+            </span>
+            <span v-else class="hint-dim">（旧记录未保存）</span>
           </template>
           <template #size="{ record }">
             <span v-if="record.exists">{{ formatSize(record.size) }}</span>

@@ -4,6 +4,7 @@ import type {
   AnalysisResult,
   BackupEntry,
   BlockHit,
+  BlockIcon,
   SaveOutcome,
   ScanResult,
   ConvertItem,
@@ -14,6 +15,7 @@ import type {
   ReplaceOutcome,
   ReplaceRule,
   ImportOutcome,
+  ModsImport,
   PackList,
   SceneData,
   SchematicSummary,
@@ -151,6 +153,43 @@ export function importJar(
     dataVersion,
     name: name ?? null,
   });
+}
+
+/**
+ * 从一个 mods 文件夹批量导入其中的模组。
+ *
+ * 只扫描该目录本身（不递归），且会跳过形如版本号的客户端 jar。
+ * 单个模组失败不会中断整批，失败项在返回值里列出。
+ */
+export function importModsFolder(
+  dir: string,
+  dataVersion: number,
+): Promise<ModsImport> {
+  return invoke<ModsImport>("import_mods_folder", { dir, dataVersion });
+}
+
+/**
+ * 批量渲染方块的等轴测小图。
+ *
+ * `states` 是方块状态键（`BlockCount.state`），一次一批而不是一行一次：
+ * 方块栏一页 50 行，逐行调用就是 50 次跨进程往返。
+ * 单项失败会在返回值里带上原因，不会让整批失败。
+ */
+export function renderBlockIcons(
+  dataVersion: number,
+  states: string[],
+  size?: number,
+): Promise<BlockIcon[]> {
+  return invoke<BlockIcon[]>("render_block_icons", {
+    dataVersion,
+    states,
+    size: size ?? null,
+  });
+}
+
+/** 在文件管理器里打开一个目录（不存在时由后端先创建） */
+export function openDirectory(path: string): Promise<void> {
+  return invoke<void>("open_directory", { path });
 }
 
 /** 启用或停用某个资源包 */

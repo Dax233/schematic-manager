@@ -7,9 +7,9 @@ use crate::backup;
 use crate::blockdb::BlockDb;
 use crate::error::{AppError, AppResult};
 use crate::dto::{
-    AnalysisResult, BackupEntryDto, BlockCount, BlockHitDto, BlockVersionDto,
+    AnalysisResult, BackupEntryDto, BlockCount, BlockHitDto, BlockIconDto, BlockVersionDto,
     ConvertItemDto, ConvertOutcomeDto, ConvertTargetDto, DuplicateGroupDto, DuplicateScanDto,
-    EntityCount, FileOpOutcome, ImportOutcomeDto, PackEntryDto, PackListDto, PackLoadFailureDto,
+    EntityCount, FileOpOutcome, ImportOutcomeDto, ModsImportDto, PackEntryDto, PackListDto, PackLoadFailureDto,
     ReplaceOutcomeDto, ReplaceRuleDto, SceneDto, SaveOutcome, ScanResult, SchematicSummary,
     UnreadableFileDto, VersionOptionDto,
 };
@@ -305,6 +305,52 @@ pub fn analyze_schematic(app: tauri::AppHandle, path: String) -> Result<Analysis
         non_air_total: a.non_air_total,
         air_total: a.air_total,
     })
+}
+
+/// 一次最多渲染多少张方块图。
+///
+/// 前端一页 50 行、按 128 一批请求，正常远低于这个数；
+/// 设上限是因为这是跨进程入口，参数由前端给出，不该接受无上限的工作量。
+const MAX_ICON_BATCH: usize = 256;
+
+/// 批量渲染方块图标。
+///
+/// 一次一批而不是一行一次：方块栏一页 50 行，逐行调用就是 50 次跨进程往返，
+/// 界面会明显顿一下。
+///
+/// 单个方块画不出来（模型缺失、贴图缺失）只让那一项返回错误，
+/// 不整批失败——某一行没有图标不该让整张表都空着。
+#[tauri::command]
+pub fn render_block_icons(
+    app: tauri::AppHandle,
+    data_version: i32,
+    states: Vec<String>,
+    size: Option<u32>,
+) -> Result<Vec<BlockIconDto>, String> {
+    if states.len() > MAX_ICON_BATCH {
+        return Err(format!(
+            "一次最多渲染 {MAX_ICON_BATCH} 张方块图，本次请求了 {} 张",
+            states.len()
+        ));
+    }
+    if states.is_empty() {
+        return Ok(Vec::new());
+    }
+    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let db = &loaded.db;
+    // 用投影自己的 dataVersion 选版本，语言表与贴图才与投影内容对得上
+    let vi = db
+        .pick_version(data_version)
+        .ok_or_else(|| format!("方块库中没有数据版本 {data_version} 对应的版本"))?;
+    let size = size.unwrap_or(crate::block_icon::ICON_SIZE);
+
+    Ok(states
+        .into_iter()
+        .map(|state| match crate::block_icon::render_data_url(db, vi, &state, size) {
+            Ok(data_url) => BlockIconDto { state, data_url, error: String::new() },
+            Err(e) => BlockIconDto { state, data_url: String::new(), error: e.to_string() },
+        })
+        .collect())
 }
 
 /// 内置方块库压缩包的位置。
@@ -954,6 +1000,55 @@ mod tests {
     // std::path::Path 按各平台的分隔符切分，在 Unix 上反斜杠只是普通字符，
     // 因此 Windows 风格的 "Z:\\x.litematic" 在 Linux 上会被整体当作文件名。
     // 测试只关心「文件不存在时的行为」，用纯文件名即可。
+    /// 版本号形如 1.20.1 / 26.2 的文件名要被识别出来，
+    /// 否则客户端 jar 会被当成模组导入，污染资源包清单。
+    #[test]
+    fn mc_version_names_are_detected() {
+        for good in ["1.20.1", "1.20", "26.2", "26.1.2", "1.13.2"] {
+            assert!(is_mc_version_name(good), "{good} 是版本号，应被识别");
+        }
+        for bad in [
+            "fabric-api-0.92.2",   // 模组名里也有数字与点，但含字母
+            "sodium",              // 纯字母
+            "iris-1.7",            // 字母+数字
+            "1.20.1-beta",         // 段里含非数字
+            "",                    // 空
+            "1",                   // 只有一段
+            "a.b.c.d",             // 四段
+        ] {
+            assert!(!is_mc_version_name(bad), "{bad} 不是版本号，不应被识别");
+        }
+    }
+
+    /// 不存在的目录要报错，而不是返回「导入 0 个」让人以为成功了。
+    #[test]
+    fn import_mods_folder_rejects_missing_dir() {
+        let r = import_mods_folder("__sm_no_such_mods__".into(), 3465);
+        assert!(r.is_err(), "目录不存在时应报错");
+        let msg = r.unwrap_err();
+        assert!(msg.contains("不是目录"), "错误信息应说明原因，实际：{msg}");
+    }
+
+    /// 目录里没有 jar 时要明确报错，而不是静默返回空结果。
+    #[test]
+    fn import_mods_folder_reports_when_no_jars() {
+        let d = std::env::temp_dir().join(format!(
+            "sm_mods_empty_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|v| v.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        // 放一个非 jar 文件，确认它不会被误收
+        std::fs::write(d.join("readme.txt"), b"x").unwrap();
+        let r = import_mods_folder(d.to_string_lossy().into_owned(), 3465);
+        assert!(r.is_err(), "目录里没有 jar 时应报错");
+        assert!(r.unwrap_err().contains("没有可导入"));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[test]
     fn scan_missing_dir_returns_empty() {
         let r = scan_litematics("__sm_not_exist_dir__".into(), Some(2));
@@ -1149,6 +1244,7 @@ mod tests {
             file: file.into(),
             name: file.into(),
             source: "/j/x.jar".into(),
+            source_dir: "/j".into(),
             kind,
             data_version: 3465,
             enabled,
@@ -1499,6 +1595,7 @@ pub fn list_packs() -> Result<PackListDto, String> {
                 file: e.file,
                 name: e.name,
                 source: e.source,
+                source_dir: e.source_dir,
                 data_version: e.data_version,
                 enabled: e.enabled,
                 size,
@@ -1520,7 +1617,12 @@ pub fn list_packs() -> Result<PackListDto, String> {
             .collect(),
         Err(_) => Vec::new(),
     };
-    Ok(PackListDto { packs, load_failures, skipped })
+    Ok(PackListDto {
+        packs_dir: dir.to_string_lossy().to_string(),
+        packs,
+        load_failures,
+        skipped,
+    })
 }
 
 /// 从 jar 导入资源包。
@@ -1581,6 +1683,12 @@ pub fn import_jar(
             file: file.clone(),
             name: pack_name.clone(),
             source: jar_path.clone(),
+            // 来源目录从 jar 路径推出来。从 mods 文件夹批量导入时，
+            // 界面靠这个字段把同一批包归成一组。
+            source_dir: Path::new(&jar_path)
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             kind,
             data_version: actual_dv,
             enabled: true,
@@ -1605,6 +1713,99 @@ pub fn import_jar(
         namespaces: stats.namespaces,
         size,
     })
+}
+
+/// 从一个 mods 文件夹批量导入其中所有模组。
+///
+/// 用户要求「模组包要选择到 mods 文件夹，导入所有模组方块贴图」——
+/// 逐个选 jar 在装了上百个模组时不可行，因此提供整目录导入。
+///
+/// 行为约定：
+/// - 只处理目录**本身**下的 `.jar`，不递归。子目录里是模组自己的资源，
+///   不是可导入的模组包；递归会撞上大量非模组文件。
+/// - **单个失败不中断整批**：模组 jar 五花八门，其中一个坏掉不该让
+///   其余几十个都导不进来。失败项连同原因一并回报，由界面列出。
+/// - 跳过 MC 客户端 jar（名字形如 `1.20.1.jar` 或含 `client`）：
+///   它们属于版本包而非模组，混进来会把整份清单搞乱。
+#[tauri::command]
+pub fn import_mods_folder(
+    dir: String,
+    data_version: i32,
+) -> Result<ModsImportDto, String> {
+    let root = Path::new(&dir);
+    if !root.is_dir() {
+        return Err(format!("{dir} 不是目录"));
+    }
+    let mut jars: Vec<PathBuf> = Vec::new();
+    let entries = std::fs::read_dir(root).map_err(|e| format!("无法读取目录 {dir}：{e}"))?;
+    for e in entries.flatten() {
+        let p = e.path();
+        if !p.is_file() {
+            continue;
+        }
+        if !p
+            .extension()
+            .map(|x| x.eq_ignore_ascii_case("jar"))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let stem = p
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // 客户端 jar 属于版本包，不是模组
+        if stem.contains("client") || is_mc_version_name(&stem) {
+            continue;
+        }
+        jars.push(p);
+    }
+    jars.sort();
+
+    if jars.is_empty() {
+        return Err(format!("{dir} 里没有可导入的模组 jar"));
+    }
+
+    let mut imported: Vec<String> = Vec::new();
+    let mut failed: Vec<(String, String)> = Vec::new();
+    for jar in &jars {
+        let label = jar
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        match import_jar(
+            jar.to_string_lossy().into_owned(),
+            None,
+            crate::pack_registry::PackKind::Mod.as_i32(),
+            data_version,
+        ) {
+            Ok(_) => imported.push(label),
+            Err(e) => failed.push((label, e)),
+        }
+    }
+
+    Ok(ModsImportDto {
+        dir,
+        imported,
+        failed: failed
+            .into_iter()
+            .map(|(file, reason)| UnreadableFileDto { path: file, reason })
+            .collect(),
+    })
+}
+
+/// 判断一个文件名主干是否形如 Minecraft 版本号（`1.20.1`、`26.2`）。
+///
+/// 客户端 jar 常以版本号命名，混进模组批量导入会污染清单。
+/// 判据：由点分隔的 2~3 段全数字。不用正则，避免为此引入依赖。
+fn is_mc_version_name(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    if parts.len() < 2 || parts.len() > 3 {
+        return false;
+    }
+    parts
+        .iter()
+        .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// 读回资源包实际使用的数据版本
@@ -1722,6 +1923,17 @@ pub fn copy_files_to_dir(paths: Vec<String>, dest_dir: String) -> Result<FileOpO
 pub fn reveal_in_file_manager(path: String) -> Result<(), String> {
     let p = Path::new(&path);
     crate::file_ops::reveal_in_file_manager(p).map_err(|e| e.to_string())
+}
+
+/// 在文件管理器里打开一个目录。
+///
+/// 目录不存在时先创建：用户还没导入过资源包时 `packs` 目录并不存在，
+/// 而「打开资源包目录」按钮正是那时候最需要能用的——他要往里放东西。
+#[tauri::command]
+pub fn open_directory(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    std::fs::create_dir_all(p).map_err(|e| format!("创建目录 {} 失败：{e}", p.display()))?;
+    crate::file_ops::open_directory(p).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------- 界面状态记忆

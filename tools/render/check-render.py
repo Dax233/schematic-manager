@@ -30,12 +30,16 @@
   # 浏览器可用环境变量 CHROME_PATH 指定，未指定时自动在常见位置查找
 """
 import http.server
+import base64
+import json
 import os
 import re
 import socket
+import struct
 import subprocess
 import sys
 import threading
+import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))  # tools/render -> 仓库根
@@ -49,6 +53,72 @@ PAGE_NAME = "__render__.html"
 # 用同一个条数会漏掉其中一类问题，因此两轮都跑。
 FILLER_ROWS = 40
 FEW_ROWS = 3
+
+# 方块栏的替身数据。
+#
+# 给**真实**方块状态键（含变体、含命名空间），因为渲染图缓存是按键存的：
+# 用 "a"、"b" 这类占位键测不出「键里的 [,],= 会不会出问题」。
+BLOCK_ROWS = [
+    {
+        "name": "minecraft:oak_log",
+        "state": "minecraft:oak_log[axis=y]",
+        "count": 128,
+        "zhName": "橡木原木",
+        "enName": "Oak Log",
+    },
+    {
+        "name": "minecraft:redstone_wire",
+        "state": "minecraft:redstone_wire[east=side,north=none,power=15,south=none,west=none]",
+        "count": 64,
+        "zhName": "红石线",
+        "enName": "Redstone Dust",
+    },
+    {
+        "name": "minecraft:oak_stairs",
+        "state": "minecraft:oak_stairs[facing=east,half=bottom,shape=straight,waterlogged=false]",
+        "count": 32,
+        "zhName": "橡木楼梯",
+        "enName": "Oak Stairs",
+    },
+]
+
+
+def make_png(width, height, rgba):
+    """手写一张 RGBA PNG，供替身当渲染图用。
+
+    不引第三方库：这段代码要在任意一台跑检查的机器上都能用，
+    而 PNG 的最小可用子集（不滤波、单个 IDAT）本身只有十几行。
+    """
+
+    def chunk(kind, body):
+        return (
+            struct.pack(">I", len(body))
+            + kind
+            + body
+            + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+        )
+
+    raw = b"".join(
+        b"\x00" + bytes(rgba[y * width * 4 : (y + 1) * width * 4]) for y in range(height)
+    )
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+
+
+def icon_data_url():
+    """一张 8×8 的实心方块图，转成 data URL。"""
+    pixels = []
+    for y in range(8):
+        for x in range(8):
+            pixels += [40 + x * 12, 90 + y * 9, 200, 255]
+    png = make_png(8, 8, pixels)
+    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
 
 # 无头浏览器的常见位置（Windows / Linux / macOS）
 BROWSER_CANDIDATES = [
@@ -126,10 +196,15 @@ SHIM = r"""
     };
   }
   var scene = quadScene();
+  // 方块栏的渲染图：方块行走的是真实链路（invoke → data URL → <img>）。
+  // ICON_URL 由检查脚本用真 PNG 生成，而不是随手编的 base64——
+  // 坏掉的 base64 在浏览器里 naturalWidth 为 0，这样那条断言才有意义。
+  var ICON_URL = window.__SM_ICON_URL__;
+  var BLOCK_ROWS = window.__SM_BLOCK_ROWS__ || [];
   var analysis = {
-    blocks: [], entities: [], tileEntities: [],
+    blocks: BLOCK_ROWS, entities: [], tileEntities: [],
     nonAirTotal: 1234, airTotal: 1838,
-    distinctBlockTypes: 18, distinctStates: 26
+    distinctBlockTypes: BLOCK_ROWS.length, distinctStates: BLOCK_ROWS.length
   };
   var CALLS = [];
 
@@ -195,12 +270,17 @@ SHIM = r"""
         return Promise.resolve({ items: many, skippedDirs: 0, skippedPaths: [] });
       case "peek_schematic": return Promise.resolve(summary);
       case "analyze_schematic": return Promise.resolve(analysis);
+      case "render_block_icons":
+        // 按状态键逐项回，与后端契约一致；前端据此填缓存
+        return Promise.resolve(BLOCK_ROWS.map(function (r) {
+          return { state: r.state, dataUrl: ICON_URL, error: "" };
+        }));
       case "build_scene": return Promise.resolve(scene);
       case "mc_version_name": return Promise.resolve("1.20.1");
       case "list_block_versions": return Promise.resolve([
         { index: 0, name: "1.20.1", dataVersion: 3465, blockCount: 1234, isOverlay: false }
       ]);
-      case "list_packs": return Promise.resolve({ packs: [], loadFailures: [], skipped: [] });
+      case "list_packs": return Promise.resolve({ packs: [], packsDir: "C:/应用目录/packs", loadFailures: [], skipped: [] });
       case "list_backups": return Promise.resolve([]);
       case "read_operation_log": return Promise.resolve([]);
       // 各功能对话框打开时会调的命令，必须回合法结构，
@@ -426,6 +506,16 @@ SHIM = r"""
     // 表格底边距页签底边：0 表示真的撑到底
     var bGap = (bBox && bPaneBox) ? Math.round(bPaneBox.bottom - bBox.bottom) : -9999;
     var bHandles = bTable ? bTable.querySelectorAll(".arco-table-column-handle").length : 0;
+    // 渲染图：既要「画出来了」，也要「data URL 真能解码」。
+    // naturalWidth 为 0 说明浏览器解不出这张 PNG（base64 或 PNG 本身坏了），
+    // 只看 <img> 存在会漏掉这种情况。
+    var bIcons = bTable ? bTable.querySelectorAll("img.block-icon") : [];
+    var bIconDecoded = 0;
+    var bIconW = 0;
+    for (var bk = 0; bk < bIcons.length; bk++) {
+      if (bIcons[bk].naturalWidth > 0) bIconDecoded++;
+      bIconW = Math.max(bIconW, Math.round(bIcons[bk].getBoundingClientRect().width));
+    }
     var bExport = false;
     var bCopy = false;
     var bBtns = document.querySelectorAll(".block-head button");
@@ -490,6 +580,9 @@ SHIM = r"""
       + ",bTh=" + bThs.length
       + ",bBorder=" + bBorder
       + ",bHandles=" + bHandles
+      + ",bIcons=" + bIcons.length
+      + ",bIconDecoded=" + bIconDecoded
+      + ",bIconW=" + bIconW
       + ",bGap=" + bGap
       + ",bExport=" + bExport
       + ",bCopy=" + bCopy
@@ -806,7 +899,11 @@ def main():
         内容多时才是「表体可滚动」的场景。固定用其中一个条数会漏掉另一类问题。
         """
         html = index.replace("<head>", "<head>" + SHIM, 1) if "<head>" in index else SHIM + index
-        inject = f"<script>window.__SM_FILLER_ROWS__={rows};</script>"
+        inject = (
+            f"<script>window.__SM_FILLER_ROWS__={rows};"
+            f"window.__SM_BLOCK_ROWS__={json.dumps(BLOCK_ROWS, ensure_ascii=False)};"
+            f"window.__SM_ICON_URL__={json.dumps(icon_data_url())};</script>"
+        )
         return html.replace("<head>", "<head>" + inject, 1) if "<head>" in html else inject + html
 
     html = make_page(FILLER_ROWS)
@@ -1066,6 +1163,17 @@ def main():
                   f"  表格底边距页签底边 {fields.get('bGap')}px")
             claim("方块栏有导出与复制表格按钮",
                   fields.get("bExport") == "true" and fields.get("bCopy") == "true")
+            # 渲染图：既要画出来，也要真的解码成功。
+            # 只数 <img> 会漏掉「data URL 坏了、浏览器解不出图」的情况，
+            # 那种表现在界面上同样是一列空白。
+            b_icons = int(fields.get("bIcons", "0"))
+            b_decoded = int(fields.get("bIconDecoded", "0"))
+            claim("方块栏每行都显示渲染图",
+                  b_icons >= len(BLOCK_ROWS) and b_decoded == b_icons,
+                  f"  {b_icons} 个 <img>，其中 {b_decoded} 个解码成功（共 {len(BLOCK_ROWS)} 行）")
+            claim("渲染图尺寸可见",
+                  int(fields.get("bIconW", "0")) >= 16,
+                  f"  实测宽 {fields.get('bIconW')}px")
             claim("保存按钮无需滚动即可点到", fields.get("saveOk") == "true",
                   f"  按钮底边相对面板底边 {fields.get('saveGap')}px（>0 表示被挤出可视范围）")
             claim("预览控制条未被挤压（按钮不竖排）", fields.get("barOk") == "true",

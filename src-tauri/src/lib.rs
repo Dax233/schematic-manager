@@ -1,4 +1,5 @@
 mod backup;
+mod block_icon;
 mod block_model;
 mod block_search;
 mod blockstate;
@@ -54,6 +55,7 @@ pub fn run() {
             commands::peek_schematic,
             commands::scan_litematics,
             commands::analyze_schematic,
+            commands::render_block_icons,
             commands::mc_version_name,
             commands::build_scene,
             commands::list_backups,
@@ -70,6 +72,7 @@ pub fn run() {
             commands::apply_conversion,
             commands::save_metadata,
             commands::list_packs,
+            commands::import_mods_folder,
             commands::import_jar,
             commands::set_pack_enabled,
             commands::delete_pack,
@@ -77,6 +80,7 @@ pub fn run() {
             commands::copy_files_to_clipboard,
             commands::copy_files_to_dir,
             commands::reveal_in_file_manager,
+            commands::open_directory,
             commands::load_ui_state,
             commands::save_ui_state,
         ])

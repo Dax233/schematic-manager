@@ -54,6 +54,9 @@ pub struct PackEntry {
     pub name: String,
     /// 来源 jar 的路径，供界面显示与「重新导入」使用
     pub source: String,
+    /// 来源所在目录。从 mods 文件夹批量导入时同一个目录会带出多个包，
+    /// 界面据此把它们归成一组，用户也能看出「这批是从哪来的」。
+    pub source_dir: String,
     pub kind: PackKind,
     /// 适用的数据版本
     pub data_version: i32,
@@ -61,7 +64,7 @@ pub struct PackEntry {
 }
 
 /// 清单的表头。带 `#` 前缀，便于用户直接看懂文件内容。
-const HEADER: &str = "# enabled\tfile\tname\tsource\tkind(1=MC,2=mod)\tdataVersion";
+const HEADER: &str = "# enabled\tfile\tname\tsource\tkind(1=MC,2=mod)\tdataVersion\tsourceDir";
 
 /// 制表符转义：字段内出现制表符、换行或反斜杠时必须转义，
 /// 否则一行会被解析成更多字段，整份清单错位。
@@ -162,10 +165,14 @@ pub fn parse_with_errors(text: &str) -> (Vec<PackEntry>, Vec<String>) {
             skipped.push(format!("第 {} 行没有文件名", lineno + 1));
             continue;
         }
+        // 来源目录是后来追加的第 7 列：旧清单没有这一列，缺失时留空即可。
+        // 不能因为少一列就判整行无效——那会让新版程序读不了旧清单。
+        let source_dir = if f.len() > 6 { unescape(f[6]) } else { String::new() };
         out.push(PackEntry {
             file,
             name: unescape(f[2]),
             source: unescape(f[3]),
+            source_dir,
             kind,
             data_version,
             enabled,
@@ -190,6 +197,8 @@ pub fn serialize(entries: &[PackEntry]) -> String {
         o.push_str(&e.kind.as_i32().to_string());
         o.push('\t');
         o.push_str(&e.data_version.to_string());
+        o.push('\t');
+        o.push_str(&escape(&e.source_dir));
         o.push('\n');
     }
     o
@@ -305,11 +314,55 @@ pub fn pack_file_name(name: &str, existing: &[PackEntry]) -> AppResult<String> {
 mod tests {
     use super::*;
 
+    /// 旧清单（6 列、没有 sourceDir）必须仍能解析。
+    ///
+    /// 这条守的是升级路径：新版本给清单追加了第 7 列，而用户盘上已有
+    /// 旧清单。若解析时因「字段不足」整行跳过，升级后所有已导入的资源包
+    /// 会一起消失。
+    #[test]
+    fn old_manifest_without_source_dir_still_parses() {
+        let old = "# enabled\tfile\tname\tsource\tkind(1=MC,2=mod)\tdataVersion\n\
+                   1\ta.pack\tA\t/jars/a.jar\t2\t3465\n";
+        let (entries, skipped) = parse_with_errors(old);
+        assert!(skipped.is_empty(), "旧清单不应被判为坏行：{skipped:?}");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].file, "a.pack");
+        assert_eq!(entries[0].source, "/jars/a.jar");
+        assert_eq!(entries[0].source_dir, "", "旧清单缺该列时应留空");
+    }
+
+    /// 新清单的来源目录要能往返。
+    #[test]
+    fn source_dir_round_trips() {
+        let mut e = entry("a.pack", "A", PackKind::Mod, 3465);
+        e.source_dir = "/mods".into();
+        let text = serialize(&[e.clone()]);
+        let (back, skipped) = parse_with_errors(&text);
+        assert!(skipped.is_empty());
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].source_dir, "/mods", "来源目录应能往返");
+    }
+
+    /// 来源目录里含制表符时也必须转义，否则整份清单错位。
+    #[test]
+    fn source_dir_with_tab_is_escaped() {
+        let mut e = entry("a.pack", "A", PackKind::Mod, 3465);
+        // `\t` 是真制表符：来源目录里含制表符时必须被转义成 `\t` 两个字符，
+        // 否则它会把这一行拆成 8 个字段，整份清单错位。
+        e.source_dir = "C:\\a\tb".into();
+        let text = serialize(&[e.clone()]);
+        let line = text.lines().find(|l| l.starts_with('1')).unwrap();
+        assert_eq!(line.matches('\t').count(), 6, "转义后仍应是 7 个字段");
+        let (back, _) = parse_with_errors(&text);
+        assert_eq!(back[0].source_dir, "C:\\a\tb");
+    }
+
     fn entry(file: &str, name: &str, kind: PackKind, dv: i32) -> PackEntry {
         PackEntry {
             file: file.into(),
             name: name.into(),
             source: format!("/jars/{name}.jar"),
+            source_dir: "/jars".into(),
             kind,
             data_version: dv,
             enabled: true,
