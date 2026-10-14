@@ -97,7 +97,7 @@
   已通过实测验证的语义，是 Rust 重写时的对照依据。
 - `tools/typecheck/` —— 无网络环境下的离线类型检查与单元测试脚本
 - `tools/render/` —— 用无头浏览器渲染构建产物、核对界面确实画得出来
-- `.github/workflows/release.yml` —— 多平台自动构建与发布
+- `.github/workflows/ci.yml` —— 多平台质量检查、自动构建与发布
 
 ## 构建
 
@@ -186,13 +186,13 @@ python tools/render/check-render.py
 
 ## 版本号规则
 
-- 预发布：`v<MAJOR>.<MINOR>.<PATCH>+snapshot.<构建次数>`（推送自动生成）
-- 正式版：`v<MAJOR>.<MINOR>.<PATCH>`（手动打 tag 触发，随后仓库内各版本号
-  自动提升到下一个 PATCH）
+- 开发构建（预发布）：`v<MAJOR>.<MINOR>.<PATCH>-dev.<构建次数>`，推送 main 自动生成
+- 正式版：`v<MAJOR>.<MINOR>.<PATCH>`，推送同版本号的 tag 触发；tag 版本必须与
+  仓库内版本号一致，不一致时工作流直接失败
 
-「下一个 PATCH」以**所打的 tag** 为基准：`v2.0.0` 之后仓库内版本号变为
-`2.0.1`（而不是「仓库原版本 + 1」）。两者在常规流程下一致，但直接发一个
-与仓库版本不同的 tag 时，只有以 tag 为基准才不会让版本号倒退。
+正式发布后，工作流自动把仓库内版本号递增到下一 PATCH 并推回 main。
+递增以**所打的 tag** 为基准，且带幂等守卫：清单版本已经不是已发布版本时
+（重跑或人工已递增过）跳过，不会重复递增或倒退。
 
 仓库内的版本号共四处，由 `scripts/bump-version.mjs` 一并改写：
 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`
@@ -201,5 +201,11 @@ python tools/render/check-render.py
 各平台的产物格式：Windows 为 NSIS 安装包（`-setup.exe`），macOS 为 DMG，
 Linux 为 deb。
 
-推送提交会触发多平台构建并以预发布形式上传；手动打正式版 tag 时以该版本号
-构建发布，Release 说明按提交信息自动归类生成。
+推送 main 触发多平台构建并以预发布形式发布；pull request 与手动触发只运行
+质量检查，不产生 Release。Release 说明（下载表 + What's Changed 提交列表）
+由 `scripts/release-notes-render.mjs` 自动生成。
+
+## 许可证
+
+本项目以 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0-only）
+发布。修改后对外提供（含网络方式）时必须公开对应的源代码。

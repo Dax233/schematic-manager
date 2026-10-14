@@ -22,7 +22,7 @@
  */
 import { readFileSync } from "node:fs";
 
-const WF = ".github/workflows/release.yml";
+const WF = ".github/workflows/ci.yml";
 const raw = readFileSync(WF, "utf8");
 
 let failed = 0;
@@ -120,8 +120,9 @@ check("所有 needs.<job>.outputs 引用都已声明", outOk);
 const matrixKeys = new Set();
 for (const m of raw.matchAll(/matrix\.([a-zA-Z_][\w]*)/g)) matrixKeys.add(m[1]);
 const includeKeys = new Set();
-const incBlock = raw.match(/include:\s*\n((?:\s+- \{[^\n]*\n)+)/);
-if (incBlock) {
+// 工作流里可能有多个矩阵（quality 与 build），每处 include 块都要收集；
+// 条目之间允许夹注释行
+for (const incBlock of raw.matchAll(/include:\s*\n((?:\s+(?:- \{[^\n]*|#[^\n]*)\n)+)/g)) {
   for (const m of incBlock[1].matchAll(/([a-zA-Z_][\w]*):/g)) includeKeys.add(m[1]);
 }
 let matrixOk = true;
@@ -200,12 +201,17 @@ for (const line of lines) {
 check("矩阵流式映射里没有未加引号的逗号值", flowOk);
 
 // ---------------------------------------------------------------- 8 关键步骤存在
-check("有「递增版本号到下一 PATCH」步骤（正式发布才执行）",
+check("有「解析幂等 Release」步骤（prepare 经 resolve-release.sh 创建/复用）",
+  raw.includes("解析幂等 Release") && raw.includes("resolve-release.sh"));
+check("有「生成并写回 Release 说明」步骤", raw.includes("生成并写回 Release 说明"));
+check("构建经 tauri-action 直传 Release（按数字 release_id）",
+  /tauri-apps\/tauri-action@v0/.test(raw) && /releaseId:\s*\$\{\{ needs\.prepare\.outputs\.release_id \}\}/.test(raw));
+check("有「递增版本号到下一 PATCH」任务（正式发布才执行）",
   raw.includes("递增版本号到下一 PATCH"));
-check("有创建 / 更新 Release 步骤", raw.includes("创建 / 更新 Release"));
-check("有生成更新说明步骤", raw.includes("生成更新说明"));
 check("递增版本号以 tag 版本为基准（--next-of）",
   /bump-version\.mjs --next-of/.test(raw));
+check("发布链路只在 push 事件运行（PR 与手动触发只跑检查）",
+  /if:\s*github\.event_name == 'push'/.test(raw));
 
 // ---------------------------------------------------------------- 9 用途说明
 console.log(`\n任务数 ${jobNames.length}，矩阵键 ${[...matrixKeys].join(", ")}`);

@@ -2,6 +2,7 @@
   "name": "schematic-manager",
   "private": true,
   "version": "0.0.1",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,11 +10,13 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "app:build": "tauri build --bundles nsis",
+    "tauri-dev": "tauri dev",
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "check:ipc": "node scripts/check-ipc-contract.mjs",
-    "check:notes": "node scripts/check-release-notes.mjs",
+    "check:versions": "node scripts/check-versions.mjs",
+    "check:notes": "node --test scripts/release-notes-render.test.mjs",
     "check:workflow": "node scripts/check-workflow.mjs",
     "check:retry": "node scripts/check-release-retry.mjs"
   },

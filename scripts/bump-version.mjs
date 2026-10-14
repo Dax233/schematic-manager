@@ -10,6 +10,8 @@
  *
  * 用法：
  *   node scripts/bump-version.mjs 1.0.1              # 指定版本
+ *   node scripts/bump-version.mjs 1.0.1-dev.42       # 指定预发布版本（CI 盖章用，
+ *                                                    # 不写回仓库，仅构建工作区）
  *   node scripts/bump-version.mjs --next             # 仓库当前版本 PATCH + 1
  *   node scripts/bump-version.mjs --next-of 2.0.0    # 指定版本 PATCH + 1
  *                                                    # （正式发布用 tag 的版本作基准）
@@ -124,6 +126,13 @@ if (isCli) {
       console.error("--next-of 需要给出基准版本号，例如 --next-of 2.0.0");
       process.exit(1);
     }
+    // 幂等守卫：清单版本已经不是基准版本时（重跑、或人工已递增过）
+    // 直接跳过，绝不能重复递增或把版本号往回改
+    const current = currentVersion();
+    if (current !== base) {
+      console.log(`清单版本 ${current} 与已发布版本 ${base} 不一致，跳过递增`);
+      process.exit(0);
+    }
   } else {
     v = arg;
   }
@@ -138,8 +147,10 @@ if (isCli) {
       process.exit(1);
     }
   }
-  if (!/^\d+\.\d+\.\d+$/.test(v)) {
-    console.error(`版本号必须是 <MAJOR>.<MINOR>.<PATCH> 形式，收到: ${v}`);
+  // 允许预发布段（CI 给 dev 构建盖章 0.0.1-dev.42）；
+  // 但 --next / --next-of 推出来的永远是纯 X.Y.Z，不受此影响
+  if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(v)) {
+    console.error(`版本号必须是 <MAJOR>.<MINOR>.<PATCH>[-预发布段] 形式，收到: ${v}`);
     process.exit(1);
   }
   apply(v);

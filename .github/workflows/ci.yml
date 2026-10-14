@@ -1,0 +1,346 @@
+name: 构建与发布
+
+# 触发规则：
+#   1. push 到 main          -> 开发构建（pre-release），tag 形如 v0.0.1-dev.<构建次数>
+#   2. push 形如 v1.2.3 的 tag -> 正式发布，tag 版本必须与仓库内版本号一致；
+#                               发布后自动把仓库内版本号递增到下一 PATCH 并推回 main
+#   3. pull_request          -> 只跑质量检查，不产生 Release
+#   4. 手动触发               -> 同 3
+#
+# dev tag 由 prepare 任务用 GITHUB_TOKEN 经 API 创建，按 GitHub 规则
+# 不会触发新的工作流运行，因此不存在自触发循环。
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+# 创建 Release、上传资产、写回说明、回推版本号提交需要 contents: write
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  NODE_VERSION: "20"
+
+# 不设 concurrency。
+#
+# 需求是「每次推送提交时自动构建并创建 Release」，而 concurrency 组与这条
+# 需求根本冲突：GitHub 即使设了 cancel-in-progress: false，也会**取消同一组
+# 内排队中的运行**，只保留最新一个。实测因此丢过三次发布：
+#   #45、#46 被 cancel-in-progress: true 取消
+#   #48 被改成 false 后仍被取消（它排在 #47 之后，属"排队中的旧运行"）
+# 这三次推送都没有对应 Release。
+#
+# 本来也不需要并发保护：每次开发构建用的 tag 是 v<版本>-dev.<run_number>，
+# run_number 在仓库内唯一，因此两次运行永远不会写同一个 Release。
+# 版本号提交只在正式发布（tag 触发）时产生，而正式发布不会连续发生。
+
+jobs:
+  # ---------------------------------------------------------------- 质量检查
+  # 三个平台各跑一遍：前端依赖安装、类型检查、前端单元测试、前端构建、
+  # Rust 单元测试。fail-fast 关闭，一个平台失败不影响其它平台出结果。
+  #
+  # 不跑 cargo fmt --check / clippy -D warnings：本仓库 Rust 源码从未按
+  # 默认 rustfmt 规则格式化，现在引入这两道关会让每次 CI 都失败；
+  # 要加应先做一次全量格式化，属独立任务。
+  quality:
+    name: 质量检查 (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-22.04, platform: linux }
+          - { runner: windows-latest, platform: windows }
+          - { runner: macos-14, platform: macos }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Linux 系统依赖
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            libgtk-3-dev
+
+      # 不在此指定 version：package.json 已声明 packageManager，
+      # 两者同时给出时 pnpm/action-setup 会直接报错退出
+      # （ERR_PNPM_BAD_PM_VERSION）。版本统一由 package.json 决定，
+      # 本地与 CI 因此始终一致。
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust 构建缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.platform }}-quality
+
+      - name: 安装前端依赖
+        # 锁文件已入库，用 frozen 确保装到的版本与本地一致；
+        # 锁文件与 package.json 不一致时直接失败，而不是静默解析出别的版本
+        run: pnpm install --frozen-lockfile
+
+      - name: 类型检查
+        run: pnpm typecheck
+
+      # 覆盖各功能发出的命令名与参数，以及界面挂载与主要交互流程。
+      - name: 前端单元测试
+        run: pnpm test
+
+      - name: 前端构建
+        # SCSS 编译、资源引用一类的错误在本步就会暴露，
+        # 不必等到六个平台打包时各失败一次才发现
+        run: pnpm build
+
+      - name: Rust 单元测试
+        # 位打包、NBT 往返、区域索引、方块库合并等逻辑的回归防线
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --locked -- --nocapture
+
+  # ---------------------------------------------------------------- 链路检查
+  # 发布链路与脚本级的检查：全是纯 node / bash 脚本，不需要装前端依赖，
+  # 与平台无关，只在一个 Linux 任务里跑。
+  integration:
+    name: 发布链路检查
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 版本号同步检查
+        # package.json / Cargo.toml / tauri.conf.json 三处版本必须一致，
+        # 否则「装的版本」与「显示的版本」会对不上
+        run: node scripts/check-versions.mjs
+
+      # 前端 invoke 的命令名或参数名与后端对不上时，Rust 侧编译照样通过，
+      # 只在运行时表现为「点了按钮没反应」。界面无法在 CI 里做真实渲染测试，
+      # 因此这道静态检查是拦住这类错误的主要防线。
+      # 已用四种典型错误验证过它确实会失败：命令名写错、参数写成下划线、
+      # 漏传必填参数、多传后端没有的参数。
+      - name: 前后端命令契约检查
+        run: node scripts/check-ipc-contract.mjs
+
+      # 工作流自身的结构检查。YAML 能被解析不代表 GitHub 能正确执行：
+      # needs 指向不存在的任务、引用未声明的 output、表达式括号不配对、
+      # 矩阵里未加引号的逗号，这些都要等推送之后才由 GitHub 报出来——
+      # 而本工作流的构建阶段要跑六个平台，那时才发现代价很高。
+      # 该脚本不联网，已用五种注入错误验证过确实会失败。
+      - name: 工作流结构检查
+        run: node scripts/check-workflow.mjs
+
+      # resolve-release.sh 里「创建 Release」失败重试循环的正确性。
+      # 它有两种失效方式：该重试时没重试，或把不该重试的错误也重试三遍
+      # 再失败、白等一分钟。脚本用 gh/git 桩模拟 403/422/成功/已存在后
+      # 执行真实的 resolve-release.sh。
+      - name: Release 创建重试逻辑检查
+        run: node scripts/check-release-retry.mjs
+
+      # 下载表分类器与链接渲染的对外契约：产物名一旦超出分类器认知，
+      # 说明里会静默缺行。测试覆盖六个平台产物、中文名 URL 编码、
+      # dev/正式 tag 差异与仅提交模式。
+      - name: Release 说明渲染测试
+        run: node --test scripts/release-notes-render.test.mjs
+
+  # ---------------------------------------------------------------- 准备 Release
+  # Release 在构建开始前就以公开状态建好（连带给出数字 release_id），
+  # 构建任务用 tauri-action 向它直传产物，不再需要「先存 artifact、
+  # 最后集中创建」的发布任务。
+  prepare:
+    name: 解析 Release 与版本
+    needs: [ quality, integration ]
+    # 只在 push（分支或 tag）时发布；PR 与手动触发只跑检查
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # 只做版本计算与几次 API 调用，正常几秒结束；设上限以免异常时长时间占用
+    timeout-minutes: 5
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+      tag:        ${{ steps.release.outputs.tag }}
+      version:    ${{ steps.release.outputs.version }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 完整历史与 tag：prepare 在创建 Release 之前收集
+          # 「What's Changed」提交列表（scripts/collect-commits.sh）
+          fetch-depth: 0
+
+      - name: 解析幂等 Release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: ./scripts/resolve-release.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_RUN_NUMBER" with-commits
+
+  # ---------------------------------------------------------------- 多平台构建
+  build:
+    name: 构建 ${{ matrix.target }}
+    needs: prepare
+    if: github.event_name == 'push'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows 只打 NSIS，不打 MSI。
+          # 原因：项目的 productName 与版权信息是中文，WiX 的 light.exe 会报
+          #   error LGHT0311: A string was provided with characters that are not
+          #   available in the specified database code page
+          # 即 MSI 数据库代码页无法容纳中文字符，打包阶段直接失败
+          # （Rust 代码本身已编译通过）。NSIS 完整支持 Unicode，故改用 NSIS。
+          # 若日后需要 MSI，可为 wix 指定 language: "zh-CN" 后再启用。
+          - { runner: windows-latest,   target: x86_64-pc-windows-msvc,    bundles: nsis }
+          - { runner: windows-11-arm,   target: aarch64-pc-windows-msvc,   bundles: nsis }
+          # Linux 只出 deb。
+          # 曾经写成 `bundles: deb,appimage`，但矩阵是 YAML 流式映射（花括号内），
+          # 逗号会被当作条目分隔符，于是它解析成 `bundles: deb` 加一个多余的
+          # `appimage: null`——AppImage 从未被真正请求（CI 日志里没有任何
+          # appimage 打包记录）。若要同时出 AppImage，必须写成带引号的
+          # `bundles: "deb,appimage"`。
+          - { runner: ubuntu-22.04,     target: x86_64-unknown-linux-gnu,  bundles: deb }
+          - { runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, bundles: deb }
+          # macos-13 已被 GitHub 弃用：实测该标签的任务永远停在 queued，
+          # 会连带让整个运行无法结束（日志也因此无法下载）。改用 macos-15-intel。
+          - { runner: macos-15-intel,   target: x86_64-apple-darwin,       bundles: dmg }
+          - { runner: macos-14,         target: aarch64-apple-darwin,      bundles: dmg }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Linux 系统依赖
+        if: startsWith(matrix.runner, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            libgtk-3-dev
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust 构建缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.target }}
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 盖章构建版本号 ${{ needs.prepare.outputs.version }}
+        # dev 构建把 v<版本>-dev.<运行号> 写进四个清单文件（仅 CI 工作区，
+        # 不提交），应用内「关于」与安装包文件名因此能区分每一次构建；
+        # 正式发布时该值就是清单版本，此步为无操作。
+        run: node scripts/bump-version.mjs ${{ needs.prepare.outputs.version }}
+
+      - name: 环境诊断
+        shell: bash
+        run: |
+          echo "runner=${{ matrix.runner }}  target=${{ matrix.target }}"
+          node --version
+          pnpm --version
+          rustc --version
+          cargo --version
+          rustup target list --installed
+
+      # 打包并直传 prepare 建好的 Release（按数字 release_id，不做 tag 查找）。
+      # tauri-action 内部执行 tauri build，产物按 Tauri 原生命名上传。
+      - name: 打包并上传到 Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          tagName: ${{ needs.prepare.outputs.tag }}
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+  # ---------------------------------------------------------------- 写回说明
+  # 全部平台构建完成后，从提交记录与已上传资产生成说明写回 Release。
+  update-release-notes:
+    name: 更新 Release 说明
+    needs: [ prepare, build ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 完整历史：收集上一个 tag 以来的提交需要能回溯到那个 tag
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 生成并写回 Release 说明
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          ./scripts/update-release-notes.sh \
+            "${{ needs.prepare.outputs.release_id }}" \
+            "${{ needs.prepare.outputs.tag }}" \
+            "${{ needs.prepare.outputs.prerelease }}"
+
+  # ---------------------------------------------------------------- 版本递增
+  # 正式发布（严格的 vX.Y.Z tag）完成后，把仓库内版本号递增到下一 PATCH
+  # 并推回 main。dev 构建与预发布 tag 不触发本任务。
+  # bump-version.mjs --next-of 自带幂等守卫：清单版本已不是已发布版本时
+  # （重跑、或人工已递增过）直接跳过，不会重复递增。
+  bump-version:
+    name: 递增版本号到下一 PATCH
+    needs: [ prepare, build ]
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.prepare.outputs.prerelease == 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 提交要落到 tag 所指的分支（main）
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 递增并回推版本号
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/bump-version.mjs --next-of "${{ needs.prepare.outputs.version }}"
+          next="$(node -p "require('./package.json').version")"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json src-tauri/Cargo.lock
+          if git diff --cached --quiet; then
+            echo "版本号未变化（已递增过），跳过提交"
+            exit 0
+          fi
+          git commit -m "chore: 版本号递增到 ${next}"
+          git push origin HEAD:main
+          echo "已将版本号递增到 ${next}"

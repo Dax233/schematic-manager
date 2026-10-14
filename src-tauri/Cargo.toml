@@ -5,7 +5,7 @@ description = "跨平台 Minecraft 投影(.litematic)文件管理与预览工具
 authors = ["heiheids"]
 edition = "2021"
 rust-version = "1.77"
-license = "MIT"
+license = "AGPL-3.0-only"
 
 [lib]
 name = "schematic_manager_lib"
