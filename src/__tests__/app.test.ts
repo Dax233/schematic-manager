@@ -145,6 +145,7 @@ function stubInvoke(overrides: Record<string, unknown> = {}) {
           blocks: [],
           entities: [],
           tileEntities: [],
+          entityInstances: [],
           nonAirTotal: 0,
           airTotal: 0,
           distinctBlockTypes: 0,
@@ -298,7 +299,7 @@ describe("主要操作流程", () => {
           return scene;
         case "analyze_schematic":
           return {
-            blocks: [], entities: [], tileEntities: [],
+            blocks: [], entities: [], tileEntities: [], entityInstances: [],
             nonAirTotal: 0, airTotal: 0, distinctBlockTypes: 0, distinctStates: 0,
           };
         default:
@@ -353,7 +354,7 @@ describe("主要操作流程", () => {
           return scene;
         case "analyze_schematic":
           return {
-            blocks: [], entities: [], tileEntities: [],
+            blocks: [], entities: [], tileEntities: [], entityInstances: [],
             nonAirTotal: 0, airTotal: 0, distinctBlockTypes: 0, distinctStates: 0,
           };
         default:
@@ -429,7 +430,7 @@ describe("主要操作流程", () => {
           return scene;
         case "analyze_schematic":
           return {
-            blocks: [], entities: [], tileEntities: [],
+            blocks: [], entities: [], tileEntities: [], entityInstances: [],
             nonAirTotal: 0, airTotal: 0, distinctBlockTypes: 0, distinctStates: 0,
           };
         default:
@@ -489,7 +490,7 @@ describe("主要操作流程", () => {
           return scene;
         case "analyze_schematic":
           return {
-            blocks: [], entities: [], tileEntities: [],
+            blocks: [], entities: [], tileEntities: [], entityInstances: [],
             nonAirTotal: 0, airTotal: 0, distinctBlockTypes: 0, distinctStates: 0,
           };
         default:
@@ -1847,12 +1848,12 @@ describe("方块栏渲染图", () => {
   ];
 
   /** 选中投影并让分析返回给定的方块行 */
-  async function selectWithBlocks(blocks: BlockCount[], extra: Record<string, unknown> = {}) {
-    stubInvoke({
+  async function selectWithBlocks(blocks: BlockCount[], extra: Record<string, unknown> = {}) {    stubInvoke({
       analyze_schematic: {
         blocks,
         entities: [],
         tileEntities: [],
+        entityInstances: [],
         nonAirTotal: 0,
         airTotal: 0,
         distinctBlockTypes: 1,
@@ -1868,6 +1869,45 @@ describe("方块栏渲染图", () => {
     await flushPromises();
     return w;
   }
+
+  it("实体栏会如实说明已记录多少个实体的坐标", async () => {
+    // 实体坐标是这次新读出来并存入的（供以后做实体预览）。
+    // 它坏掉的表现是「悄悄没读」，界面上看不出任何异常，因此断言可见文案。
+    stubInvoke({
+      analyze_schematic: {
+        blocks: [],
+        entities: [
+          { id: "minecraft:item", count: 2, zhName: "物品", enName: "Item" },
+        ],
+        tileEntities: [],
+        entityInstances: [
+          { id: "minecraft:item", x: 1.5, y: 2, z: 3 },
+          { id: "minecraft:item", x: 4.5, y: 5, z: 6 },
+        ],
+        nonAirTotal: 0,
+        airTotal: 0,
+        distinctBlockTypes: 0,
+        distinctStates: 0,
+      },
+    });
+    mockOpen.mockResolvedValue("/p");
+    const w = mountApp();
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+
+    // 切到实体页签
+    const entityTab = w.findAll(".detail__tabs .arco-tabs-tab").find(
+      (t) => (t.text() || "").trim() === "实体",
+    );
+    expect(entityTab, "应能定位到实体页签").toBeTruthy();
+    await entityTab!.trigger("click");
+    await flushPromises();
+
+    expect(w.text(), "应说明已记录的实体坐标数量").toContain("已记录 2 个实体的坐标");
+    w.unmount();
+  });
 
   it("按状态键批量取回渲染图并显示出来", async () => {
     const dataUrl = "data:image/png;base64,iVBORw0KGgo=";

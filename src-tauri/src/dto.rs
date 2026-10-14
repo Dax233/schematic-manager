@@ -62,6 +62,19 @@ pub struct EntityCount {
     pub en_name: String,
 }
 
+/// 一个实体实例（id + 投影内坐标）。
+///
+/// 名字不放在这里、只在 `EntityCount` 上放一份：同一个实体可能有上千个实例，
+/// 逐条重复中英文名会让结果体积成倍增长，而名字按 id 查表即可。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityInstanceDto {
+    pub id: String,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+
 /// 目录扫描结果
 ///
 /// 带上 skipped：不可读的子目录会被跳过，若不告知用户，
@@ -336,6 +349,8 @@ pub struct AnalysisResult {
     pub blocks: Vec<BlockCount>,
     pub entities: Vec<EntityCount>,
     pub tile_entities: Vec<EntityCount>,
+    /// 逐个实体的 id 与坐标，供以后做实体预览
+    pub entity_instances: Vec<EntityInstanceDto>,
     pub non_air_total: u64,
     pub air_total: u64,
     pub distinct_block_types: usize,

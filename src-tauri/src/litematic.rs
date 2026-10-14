@@ -285,6 +285,16 @@ pub struct Summary {
     pub file_size: u64,
 }
 
+/// 一个实体实例的位置。
+///
+/// 文件里的 `Pos` 是相对**所属区域原点**的偏移（与方块坐标同一套约定），
+/// 因此这里存的是加上区域位置之后的投影内坐标，供预览直接使用。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedEntity {
+    pub id: String,
+    pub pos: [f64; 3],
+}
+
 /// 完整分析结果
 #[derive(Debug, Clone, Default)]
 pub struct Analysis {
@@ -292,6 +302,8 @@ pub struct Analysis {
     pub blocks_by_state: BTreeMap<String, u64>,
     pub entities_by_id: BTreeMap<String, u64>,
     pub tile_entities_by_id: BTreeMap<String, u64>,
+    /// 逐个实体的 id 与坐标。以后做实体预览要用，现在先读出来存好。
+    pub entities: Vec<PlacedEntity>,
     pub non_air_total: u64,
     pub air_total: u64,
 }
@@ -582,6 +594,26 @@ impl Schematic {
                                     &mut a.tile_entities_by_id
                                 };
                                 *map.entry(id.to_string()).or_insert(0) += 1;
+
+                                // 实体坐标：`Pos` 是相对区域原点的偏移，
+                                // 加上区域位置才是投影内坐标。
+                                // 方块实体的 `Pos` 是可选且常缺省，因此只记实体。
+                                if key == "Entities" {
+                                    let rel = e.get("Pos").and_then(|x| x.as_list());
+                                    let comp = |i: usize| -> f64 {
+                                        rel.and_then(|l| l.get(i))
+                                            .and_then(|v| v.as_f64())
+                                            .unwrap_or(0.0)
+                                    };
+                                    a.entities.push(PlacedEntity {
+                                        id: id.to_string(),
+                                        pos: [
+                                            r.pos[0] as f64 + comp(0),
+                                            r.pos[1] as f64 + comp(1),
+                                            r.pos[2] as f64 + comp(2),
+                                        ],
+                                    });
+                                }
                             }
                         }
                     }
@@ -1245,6 +1277,196 @@ mod tests {
         );
     }
 
+    /// 每个实体都要读出 id 与投影内坐标。
+    ///
+    /// 这条防两类错误：`Pos` 没被读（坐标全是 0）、以及忘了加区域原点
+    /// （多区域投影的实体会全部挤在原点附近）。因此断言坐标不是全零、
+    /// 且至少有实体的坐标落在区域原点之外。
+    #[test]
+    fn real_sample_entity_positions_are_read_with_region_offset() {
+        let sc = Schematic::load(&sample_path()).expect("载入失败");
+        let a = sc.analyze();
+
+        let total: u64 = a.entities_by_id.values().sum();
+        assert_eq!(
+            a.entities.len() as u64,
+            total,
+            "逐个实体列表的数量应与分组统计一致"
+        );
+        assert!(!a.entities.is_empty(), "样本应含实体");
+
+        // id 必须逐个带上，不能出现 unknown
+        assert!(
+            a.entities.iter().all(|e| e.id != "unknown"),
+            "逐个实体的 id 都必须读到"
+        );
+
+        // 坐标不能全是 0：三个分量至少有一个出现过非零值
+        let any_nonzero = a.entities.iter().any(|e| e.pos.iter().any(|v| *v != 0.0));
+        assert!(
+            any_nonzero,
+            "实体坐标全为 0，说明 Pos 没被读到：{:?}",
+            &a.entities[..a.entities.len().min(3)]
+        );
+
+        // 坐标必须是有限的，不能出现 NaN/无穷
+        assert!(
+            a.entities.iter().all(|e| e.pos.iter().all(|v| v.is_finite())),
+            "坐标必须是有限值"
+        );
+
+        // 区域原点非零时，实体的投影内坐标应包含该偏移：
+        // 取一个 Pos 非零的实体，其坐标不可能等于区域原点 + 0 以外的巧合
+        for r in &sc.regions {
+            let has_origin = r.pos.iter().any(|v| *v != 0);
+            if !has_origin {
+                continue;
+            }
+            let limit = r.pos.map(|v| v as f64);
+            // 投影内坐标至少有一个分量达到或超过区域原点的对应分量
+            let reaching = a
+                .entities
+                .iter()
+                .any(|e| (0..3).any(|k| e.pos[k] >= limit[k]));
+            assert!(
+                reaching,
+                "区域 {:?} 原点为 {:?}，但没有任何实体坐标达到该偏移，\
+                 说明可能漏加了区域位置",
+                r.name, r.pos
+            );
+            break;
+        }
+    }
+
+    /// 实体坐标 = 区域原点 + 文件里的相对 `Pos`。
+    ///
+    /// 用固定数值断言而不是看真实样本「不为零」：样本的区域原点可能恰好是
+    /// 零，那样即使漏加偏移也照样通过（实测这条断言在反向变异下确实漏过）。
+    /// 区域原点与 Pos 都刻意取非零、且含小数与负数，四种错误（漏加偏移、
+    /// 丢小数、丢负号、分量错位）都会失败。
+    #[test]
+    fn entity_positions_include_region_origin_exactly() {
+        let dbl = |v: f64| Value::Double(v);
+        let region_nbt = Value::Compound(vec![
+            (
+                "Position".into(),
+                Value::Compound(vec![
+                    ("x".into(), Value::Int(10)),
+                    ("y".into(), Value::Int(5)),
+                    ("z".into(), Value::Int(-3)),
+                ]),
+            ),
+            (
+                "Entities".into(),
+                Value::List(
+                    vec![
+                        Value::Compound(vec![
+                            ("id".into(), Value::String("minecraft:item".into())),
+                            (
+                                "Pos".into(),
+                                Value::List(vec![dbl(1.5), dbl(2.5), dbl(3.5)], 6),
+                            ),
+                        ]),
+                        // 第二个实体：分量各不相同，分量错位会被发现
+                        Value::Compound(vec![
+                            ("id".into(), Value::String("minecraft:boat".into())),
+                            (
+                                "Pos".into(),
+                                Value::List(vec![dbl(-0.5), dbl(0.25), dbl(-8.0)], 6),
+                            ),
+                        ]),
+                    ],
+                    10,
+                ),
+            ),
+        ]);
+        let sc = Schematic {
+            root: Value::Compound(vec![(
+                "Regions".into(),
+                Value::Compound(vec![("r".into(), region_nbt)]),
+            )]),
+            regions: vec![Region {
+                name: "r".into(),
+                pos: [10, 5, -3],
+                size: [1, 1, 1],
+                volume: 1,
+                bits: 1,
+                palette: vec![BlockState::new("minecraft:stone")],
+                indices: vec![0],
+                ..Default::default()
+            }],
+            path: String::new(),
+            meta_modified: false,
+            blocks_modified: false,
+        };
+
+        let a = sc.analyze();
+        assert_eq!(a.entities.len(), 2, "两个实体都应记录");
+        assert_eq!(a.entities[0].id, "minecraft:item");
+        assert_eq!(
+            a.entities[0].pos,
+            [11.5, 7.5, 0.5],
+            "应为区域原点 [10,5,-3] 与 Pos [1.5,2.5,3.5] 之和"
+        );
+        assert_eq!(a.entities[1].id, "minecraft:boat");
+        assert_eq!(
+            a.entities[1].pos,
+            [9.5, 5.25, -11.0],
+            "负数与小数都必须精确保留"
+        );
+        // 分组统计与逐个列表必须一致
+        assert_eq!(a.entities_by_id.get("minecraft:item").copied(), Some(1));
+        assert_eq!(a.entities_by_id.get("minecraft:boat").copied(), Some(1));
+    }
+
+    /// 缺少 `Pos` 的实体不能凭空得到坐标，也不能让解析失败。
+    #[test]
+    fn entity_without_pos_is_recorded_at_region_origin() {
+        let region_nbt = Value::Compound(vec![
+            (
+                "Position".into(),
+                Value::Compound(vec![
+                    ("x".into(), Value::Int(4)),
+                    ("y".into(), Value::Int(0)),
+                    ("z".into(), Value::Int(0)),
+                ]),
+            ),
+            (
+                "Entities".into(),
+                Value::List(
+                    vec![Value::Compound(vec![(
+                        "id".into(),
+                        Value::String("minecraft:pig".into()),
+                    )])],
+                    10,
+                ),
+            ),
+        ]);
+        let sc = Schematic {
+            root: Value::Compound(vec![(
+                "Regions".into(),
+                Value::Compound(vec![("r".into(), region_nbt)]),
+            )]),
+            regions: vec![Region {
+                name: "r".into(),
+                pos: [4, 0, 0],
+                size: [1, 1, 1],
+                volume: 1,
+                bits: 1,
+                palette: vec![BlockState::new("minecraft:stone")],
+                indices: vec![0],
+                ..Default::default()
+            }],
+            path: String::new(),
+            meta_modified: false,
+            blocks_modified: false,
+        };
+        let a = sc.analyze();
+        assert_eq!(a.entities.len(), 1, "缺 Pos 的实体仍应出现在列表里");
+        assert_eq!(a.entities[0].pos, [4.0, 0.0, 0.0], "退化为区域原点");
+    }
+
+    /// 缺少 `Pos` 的实体不能凭空得到坐标，也不能让解析失败。
     #[test]
     fn real_sample_loads_and_regions_are_wellformed() {        let sc = Schematic::load(&sample_path()).expect("载入失败");
         assert!(!sc.regions.is_empty(), "应解析出至少一个区域");

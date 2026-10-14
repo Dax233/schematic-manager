@@ -56,9 +56,16 @@ export interface EntityCount {
   enName: string;
 }
 
+/** 一个实体实例：id 与投影内坐标（已含区域原点） */
+export interface EntityInstance {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+}
+
 /** 目录扫描结果 */
-export interface ScanResult {
-  items: SchematicSummary[];
+export interface ScanResult {  items: SchematicSummary[];
   /** 因权限或 IO 错误被跳过的目录数 */
   skippedDirs: number;
   /** 被跳过的目录路径（最多前若干条） */
@@ -223,6 +230,13 @@ export interface AnalysisResult {
   blocks: BlockCount[];
   entities: EntityCount[];
   tileEntities: EntityCount[];
+  /**
+   * 逐个实体的 id 与投影内坐标。
+   *
+   * 名字只在 `entities` 里放一份：同一实体可能有上千个实例，
+   * 逐条重复中英文名会让结果体积成倍增长。
+   */
+  entityInstances: EntityInstance[];
   nonAirTotal: number;
   airTotal: number;
   distinctBlockTypes: number;

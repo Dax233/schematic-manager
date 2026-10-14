@@ -9,7 +9,7 @@ use crate::error::{AppError, AppResult};
 use crate::dto::{
     AnalysisResult, BackupEntryDto, BlockCount, BlockHitDto, BlockIconDto, BlockVersionDto,
     ConvertItemDto, ConvertOutcomeDto, ConvertTargetDto, DuplicateGroupDto, DuplicateScanDto,
-    EntityCount, FileOpOutcome, ImportOutcomeDto, ModsImportDto, PackEntryDto, PackListDto, PackLoadFailureDto,
+    EntityCount, EntityInstanceDto, FileOpOutcome, ImportOutcomeDto, ModsImportDto, PackEntryDto, PackListDto, PackLoadFailureDto,
     RenameOutcomeDto,
     ReplaceOutcomeDto, ReplaceRuleDto, SceneDto, SaveOutcome, ScanResult, SchematicSummary,
     UnreadableFileDto, VersionOptionDto,
@@ -297,12 +297,24 @@ pub fn analyze_schematic(app: tauri::AppHandle, path: String) -> Result<Analysis
         types.insert(b.name.clone());
     }
 
+    let entity_instances = a
+        .entities
+        .iter()
+        .map(|e| EntityInstanceDto {
+            id: e.id.clone(),
+            x: e.pos[0],
+            y: e.pos[1],
+            z: e.pos[2],
+        })
+        .collect();
+
     Ok(AnalysisResult {
         distinct_block_types: types.len(),
         distinct_states: blocks.len(),
         blocks,
         entities,
         tile_entities: tiles,
+        entity_instances,
         non_air_total: a.non_air_total,
         air_total: a.air_total,
     })

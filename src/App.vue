@@ -2741,6 +2741,12 @@ void followSystemTheme();
                   </span>
                 </template>
               </a-table>
+              <!-- 坐标已随分析一起读出并存入，供以后做实体预览。
+                   这里如实说明读到了多少个，而不是让用户以为只有统计数字。 -->
+              <div v-if="analysis.entities.length > 0" class="hint-dim" style="margin-top: 6px">
+                已记录 {{ analysis.entityInstances.length }} 个实体的坐标（含区域原点），
+                供后续实体预览使用
+              </div>
               <a-empty
                 v-if="analysis.entities.length === 0"
                 description="该投影不含实体"

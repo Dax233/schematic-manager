@@ -89,8 +89,19 @@ impl Value {
         }
     }
 
-    pub fn as_str(&self) -> Option<&str> {
+    /// 取双精度值。
+    ///
+    /// 实体的 `Pos` 是 Double 列表，但同一个字段在别处也可能写成长/整型
+    /// （例如某些导出工具），因此这里把整数类型一并接受，避免坐标被读成 0。
+    pub fn as_f64(&self) -> Option<f64> {
         match self {
+            Value::Double(v) => Some(*v),
+            Value::Float(v) => Some(*v as f64),
+            _ => self.as_i64().map(|v| v as f64),
+        }
+    }
+
+    pub fn as_str(&self) -> Option<&str> {        match self {
             Value::String(s) => Some(s),
             _ => None,
         }
