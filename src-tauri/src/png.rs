@@ -776,6 +776,17 @@ mod tests {
         assert_eq!(pos, png.len(), "块序列应恰好铺满整个文件");
     }
 
+    /// CRC32 必须与协议规定的取值一致。
+    ///
+    /// 上面那条用的是同一个 crc32 函数去核对同一个函数写出来的值，**自洽但不自证**：
+    /// 多项式写错、位序搞反，它照样通过，而浏览器会因为 CRC 不符直接不显示图。
+    /// 这里用 CRC-32/ISO-HDLC 的标准校验值（RFC 1952 里 zlib 用的那一种）定死。
+    #[test]
+    fn crc32_matches_the_standard_check_value() {
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+        assert_eq!(crc32(b""), 0);
+    }
+
     /// 像素少于声明的尺寸时必须报错，而不是拿越界的图去编码。
     #[test]
     fn encode_rejects_short_pixel_buffer() {
