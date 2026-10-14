@@ -668,7 +668,16 @@ const columns = computed<TableColumnData[]>(() => [
   // 而用户要求每一列都能调宽。补一个 1px 宽的占位列放在最右侧，
   // 它就不再是最后一列，从而获得拖动手柄；
   // 占位列自身没有 dataIndex，本来也不参与拖动，且被样式隐藏。
-  { title: "", dataIndex: "__filler", width: 1, className: "sidebar__filler-col" },
+  //
+  // Arco 的列 class 属性是 headerCellClass / bodyCellClass，**没有 className**
+  // （见 interface.d.ts）。原先写 className 会被静默忽略，占位列因此仍带边框。
+  {
+    title: "",
+    dataIndex: "__filler",
+    width: 1,
+    headerCellClass: "sidebar__filler-col",
+    bodyCellClass: "sidebar__filler-col",
+  },
 ]);
 
 /** 方块栏列。
@@ -676,6 +685,10 @@ const columns = computed<TableColumnData[]>(() => [
  * 中文名在前、ID 在后：玩家认的是「橡树树叶」而不是「minecraft:oak_leaves」，
  * 但出问题时仍需要看到 ID，因此两者都保留。
  * 中文名查不到时由 slot 回退显示 ID（见模板里的 zh 插槽）。
+ *
+ * 最后一列是「堆叠」，需要可拖动就必须让**它之后**还有一列：
+ * Arco 判定 resizable 要求 `index2 < row.length - 1`（table.js:1247），
+ * 否则最后一列永远没有拖动手柄。这里同样补一个 1px 占位列。
  */
 const blockColumns: TableColumnData[] = [
   { title: "中文名", slotName: "zhName", width: 150, ellipsis: true, tooltip: true },
@@ -683,7 +696,93 @@ const blockColumns: TableColumnData[] = [
   { title: "状态", dataIndex: "state", ellipsis: true, tooltip: true },
   { title: "数量", dataIndex: "count", width: 90 },
   { title: "堆叠", slotName: "stacks", width: 110 },
+  {
+    title: "",
+    dataIndex: "__block_filler",
+    width: 1,
+    headerCellClass: "block__filler-col",
+    bodyCellClass: "block__filler-col",
+  },
 ];
+
+/** 方块栏列宽：由用户拖动表头调整，与侧栏同一套做法。
+ *
+ * 单独一份而不是共用侧栏的 colWidths：两张表的列完全不同，
+ * 共用会让拖动侧栏把方块栏的宽度也改掉。
+ */
+const blockColWidths = ref<Record<string, number>>({});
+/** 方块栏表格的 key：复位列宽靠重建（Arco 内部记了宽度，外部改不生效） */
+const blockTableKey = ref(0);
+
+function onBlockColumnResize(dataIndex: string, width: number) {
+  if (!dataIndex || dataIndex === "__block_filler") return;
+  blockColWidths.value = { ...blockColWidths.value, [dataIndex]: width };
+}
+
+/** 实际渲染用的方块栏列：把用户调整过的宽度套回去，并让最后一列可拖 */
+const blockTableColumns = computed<TableColumnData[]>(() =>
+  blockColumns.map((c) => {
+    const key = String(c.dataIndex ?? "");
+    const w = key ? blockColWidths.value[key] : undefined;
+    return w ? { ...c, width: w } : c;
+  }),
+);
+
+function resetBlockColumnWidths() {
+  blockColWidths.value = {};
+  blockTableKey.value += 1;
+}
+
+/** 导出方块统计为文本表格（制表符分隔，可直接粘进 Excel）。
+ *
+ * 用制表符而不是逗号：方块名里含 `:` 与 `[`，但不会有制表符；
+ * 名字里若真有制表符或换行会被替换掉，避免一行数据被拆成两行。
+ */
+function blockTableText(): string {
+  const rows: string[] = [];
+  rows.push(["中文名", "方块ID", "状态", "数量", "堆叠"].join("\t"));
+  for (const b of analysis.value?.blocks ?? []) {
+    const name = (b.zhName || b.enName || "").replace(/[\t\r\n]/g, " ");
+    const state = b.state.replace(/[\t\r\n]/g, " ");
+    rows.push([name, b.name, state, String(b.count), formatStacks(b.count)].join("\t"));
+  }
+  return rows.join("\r\n");
+}
+
+/** 把方块统计导出为 .txt 文件（用户可选保存位置） */
+async function exportBlockTable() {
+  const blocks = analysis.value?.blocks ?? [];
+  if (blocks.length === 0) {
+    Message.warning("当前没有方块统计可导出");
+    return;
+  }
+  const target = await save({
+    defaultPath: `${selected.value?.fileName?.replace(/\.litematic$/i, "") ?? "方块统计"}-方块表.txt`,
+    filters: [{ name: "文本文件", extensions: ["txt"] }],
+  });
+  if (!target) return; // 用户取消
+  try {
+    await writeFile(target, new TextEncoder().encode(blockTableText()));
+    Message.success(`已导出 ${blocks.length} 行到 ${target}`);
+  } catch (e) {
+    Message.error(`导出失败：${e}`);
+  }
+}
+
+/** 复制方块表到剪贴板 */
+async function copyBlockTable() {
+  const blocks = analysis.value?.blocks ?? [];
+  if (blocks.length === 0) {
+    Message.warning("当前没有方块统计可复制");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(blockTableText());
+    Message.success(`已复制 ${blocks.length} 行`);
+  } catch (e) {
+    Message.error(`复制失败：${e}`);
+  }
+}
 
 /** 实体栏列。与方块栏同理：中文名在前，ID 保留。 */
 const entityColumns: TableColumnData[] = [
@@ -2133,7 +2232,11 @@ void followSystemTheme();
             <span v-else-if="sceneInfo" class="preview__info">{{ sceneInfo }}</span>
           </div>
         </div>
-        <a-tabs default-active-key="info" style="padding: 0 8px">
+        <a-tabs
+          class="detail__tabs"
+          default-active-key="info"
+          style="padding: 0 8px"
+        >
           <a-tab-pane key="info" title="信息">
             <!-- 只读明细。可编辑的元数据与最常用的几项已移到预览区右侧，
                  这里保留其余的详细信息，避免两处重复显示同一字段。 -->
@@ -2160,25 +2263,41 @@ void followSystemTheme();
           </a-tab-pane>
 
           <a-tab-pane key="blocks" title="方块">
-            <a-spin :loading="analyzing" style="width: 100%">
+            <a-spin :loading="analyzing" style="width: 100%; height: 100%">
               <template v-if="analysis">
-                <a-space style="margin-bottom: 8px" :size="16">
-                  <span>非空气方块：<b>{{ analysis.nonAirTotal }}</b></span>
-                  <span>空气方块：<b>{{ analysis.airTotal }}</b></span>
-                  <span>方块种类：<b>{{ analysis.distinctBlockTypes }}</b></span>
-                  <span>状态种类：<b>{{ analysis.distinctStates }}</b></span>
-                </a-space>
+                <div class="block-head">
+                  <a-space :size="16">
+                    <span>非空气方块：<b>{{ analysis.nonAirTotal }}</b></span>
+                    <span>空气方块：<b>{{ analysis.airTotal }}</b></span>
+                    <span>方块种类：<b>{{ analysis.distinctBlockTypes }}</b></span>
+                    <span>状态种类：<b>{{ analysis.distinctStates }}</b></span>
+                  </a-space>
+                  <span class="preview__spacer" />
+                  <a-button size="mini" @click="copyBlockTable">复制表格</a-button>
+                  <a-button size="mini" @click="exportBlockTable">导出表格</a-button>
+                  <a-button
+                    size="mini"
+                    title="把各列宽度恢复为默认"
+                    @click="resetBlockColumnWidths"
+                  >
+                    列宽复位
+                  </a-button>
+                </div>
                 <div class="hint-dim" style="margin-bottom: 6px">
-                  点击任意行可以把它设为方块替换的源方块
+                  点击任意行可以把它设为方块替换的源方块；表头可拖动调整列宽
                 </div>
                 <a-table
-                  :columns="blockColumns"
+                  :key="blockTableKey"
+                  class="block-table"
+                  :columns="blockTableColumns"
                   :data="analysis.blocks"
-                  :pagination="{ pageSize: 20 }"
+                  :pagination="{ pageSize: 50 }"
                   row-key="state"
                   size="small"
+                  column-resizable
+                  @column-resize="onBlockColumnResize"
                   @row-click="onBlockRowClick"
-                  :scroll="{ y: 360 }"
+                  :scroll="{ y: '100%' }"
                 >
                   <template #zhName="{ record }">
                     <span v-if="record.zhName">{{ record.zhName }}</span>

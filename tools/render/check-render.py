@@ -406,6 +406,35 @@ SHIM = r"""
       saveOk = ab.height > 0 && ab.bottom <= ib.bottom + 1 && ab.top >= ib.top;
     }
 
+    // ---- 方块栏（用户要求：中文名/列宽调整/明显分割线/自适应到最低位置/导出表格）----
+    // 先切到「方块」页签，否则量的是「信息」页签
+    var blockTab = null;
+    var tabTitles = document.querySelectorAll(".detail__tabs .arco-tabs-header-title");
+    for (var ti = 0; ti < tabTitles.length; ti++) {
+      if ((tabTitles[ti].textContent || "").trim() === "方块") { blockTab = tabTitles[ti]; break; }
+    }
+    if (blockTab) blockTab.click();
+    var bTable = document.querySelector(".block-table");
+    var bPane = bTable ? bTable.closest(".arco-tabs-pane") : null;
+    var bThs = bTable ? bTable.querySelectorAll("thead th") : [];
+    var bBorder = 0;
+    for (var bi = 0; bi < bThs.length; bi++) {
+      if ((parseFloat(getComputedStyle(bThs[bi]).borderRightWidth) || 0) > 0) bBorder++;
+    }
+    var bBox = bTable ? bTable.getBoundingClientRect() : null;
+    var bPaneBox = bPane ? bPane.getBoundingClientRect() : null;
+    // 表格底边距页签底边：0 表示真的撑到底
+    var bGap = (bBox && bPaneBox) ? Math.round(bPaneBox.bottom - bBox.bottom) : -9999;
+    var bHandles = bTable ? bTable.querySelectorAll(".arco-table-column-handle").length : 0;
+    var bExport = false;
+    var bCopy = false;
+    var bBtns = document.querySelectorAll(".block-head button");
+    for (var bj = 0; bj < bBtns.length; bj++) {
+      var bt = (bBtns[bj].textContent || "").trim();
+      if (bt.indexOf("导出表格") >= 0) bExport = true;
+      if (bt.indexOf("复制表格") >= 0) bCopy = true;
+    }
+
     // ---- 新界面要素 ----
     // 1) 选中行是否有高亮类（用户要求点左侧文件时该条目变蓝）
     var selRow = sb.querySelector("tbody tr.row-selected");
@@ -458,6 +487,12 @@ SHIM = r"""
       + ",barOk=" + barOk
       + ",gapBar=" + gapBar
       + ",selOk=" + selOk
+      + ",bTh=" + bThs.length
+      + ",bBorder=" + bBorder
+      + ",bHandles=" + bHandles
+      + ",bGap=" + bGap
+      + ",bExport=" + bExport
+      + ",bCopy=" + bCopy
       + ",saveOk=" + saveOk
       + ",saveGap=" + saveGap
       + ",infoRight=" + infoRight
@@ -1015,6 +1050,22 @@ def main():
             claim("描述框为多行大输入框", desc_h >= 100,
                   f"  textarea 高 {desc_h}px（要求方便多行显示）")
             claim("描述标签标注了（备注）", fields.get("labelOk") == "true")
+            # 方块栏：分割线、拖动手柄、自适应到底、导出按钮
+            b_th = int(fields.get("bTh", "0"))
+            b_border = int(fields.get("bBorder", "0"))
+            # 最后一列是 1px 占位列、不应有边框，因此断言「除了最后一列都有」
+            claim("方块栏表头每列都有竖向分割线",
+                  b_th > 0 and b_border >= b_th - 1,
+                  f"  {b_border}/{b_th} 列有边框（末列为占位列，应为 {b_th - 1}）")
+            claim("方块栏可拖动调整列宽",
+                  int(fields.get("bHandles", "0")) >= 2,
+                  f"  拖动手柄 {fields.get('bHandles')} 个")
+            # 表格底边贴住页签底边：>2px 说明下方留了空白，即「没自适应到最低位置」
+            claim("方块栏表格撑满到页签底部",
+                  abs(int(fields.get("bGap", "9999"))) <= 2,
+                  f"  表格底边距页签底边 {fields.get('bGap')}px")
+            claim("方块栏有导出与复制表格按钮",
+                  fields.get("bExport") == "true" and fields.get("bCopy") == "true")
             claim("保存按钮无需滚动即可点到", fields.get("saveOk") == "true",
                   f"  按钮底边相对面板底边 {fields.get('saveGap')}px（>0 表示被挤出可视范围）")
             claim("预览控制条未被挤压（按钮不竖排）", fields.get("barOk") == "true",

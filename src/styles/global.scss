@@ -215,6 +215,7 @@ body,
     }
   }
 
+
   // 选中行高亮。
   //
   // 用主色的浅色底 + 左侧主色条：只改背景时在浅色主题下对比度偏弱，
@@ -623,4 +624,99 @@ $info-min-w: 300px;
   font-size: 12px;
   color: var(--color-text-2);
   word-break: break-all;
+}
+
+// 方块栏头部：统计信息 + 导出按钮，一行放不下时换行
+.block-head {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+// 方块/实体页签要撑满详情区剩余高度（用户反馈「没有自适应到最低位置」）。
+//
+// Arco 的页签结构是 .arco-tabs → .arco-tabs-content → .arco-tabs-content-list
+// → .arco-tabs-pane，默认都按内容高度；要让表格吃满剩余高度必须逐层把
+// 高度传下去。少传一层，表格就停在内容高度、下方留一大片空白。
+.detail__tabs {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+
+  .arco-tabs-content,
+  .arco-tabs-content-list,
+  .arco-tabs-pane,
+  .arco-spin,
+  .arco-spin-children {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  // 表格本体：占满剩余高度，滚动交给 Arco 的滚动容器
+  .block-table,
+  .block-table > .arco-table-container {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .block-table .arco-table-container > .arco-scrollbar {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+}
+
+.block-table {
+  // Arco 只在 `border: { cell: true }` 时给 th 加 border-right，
+  // 而全边框会把单元格四周都画上线、显得很挤。因此自己给表头补竖线：
+  // 与拖动条的位置一致（见 .arco-table-column-handle 的 right: 0）。
+  .arco-table-th {
+    border-right: 1px solid var(--color-border-2);
+
+    &:last-child {
+      border-right: 0;
+    }
+  }
+
+  // 拖动中的那一列用主题色高亮
+  .arco-table-header .arco-table-th-resizing {
+    border-right-color: rgb(var(--primary-6));
+  }
+
+  // 占位列：只为让最后一列能拖动而存在，不应被看见
+  .block__filler-col {
+    padding: 0 !important;
+    border-right: 0 !important;
+
+    .arco-table-cell {
+      padding: 0 !important;
+    }
+  }
+
+  .arco-table-header .block__filler-col {
+    border-right: 0 !important;
+    border-left: 1px solid var(--color-border-2);
+  }
+
+  .arco-table-column-handle {
+    right: 0;
+
+    &:hover::after {
+      position: absolute;
+      top: 20%;
+      left: 100%;
+      width: 2px;
+      height: 60%;
+      background: rgb(var(--primary-6));
+      content: "";
+      transform: translateX(-100%);
+    }
+  }
 }
