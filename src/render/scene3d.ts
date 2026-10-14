@@ -110,6 +110,99 @@ export function buildSceneGroup(data: SceneData): SceneGroup {
   };
 }
 
+/**
+ * 求「把整个网格装进视口」所需的相机距离。
+ *
+ * 不能用外接球半径：外接球按对角线算直径，对细长结构等于要求把
+ * 「对角线那么长的球」塞进视口高度，而结构在屏幕上的实际投影高度可能只有
+ * 它的几分之一。实测一个 53×9×9 的机器只占画面 44.6%，四周一大片空白。
+ *
+ * 这里按**投影后的包围盒**拟合：把包围盒八个角点投到相机的横/纵轴上，
+ * 分别求两个方向需要的最小距离，取较大者。对某个角点（相对中心偏移 x,y,z，
+ * z 为正表示更远），它到相机的距离是 d+z，要落进视锥就要求
+ * `|y| <= (d+z)·tan(fovY/2)` 与 `|x| <= (d+z)·tan(fovX/2)`，解出 d 的下界。
+ *
+ * `margin` 是留白系数：除以它相当于把可用视锥收窄一点，模型不至于顶到边。
+ */
+export function fitDistance(
+  box: THREE.Box3,
+  dir: THREE.Vector3,
+  fovDeg: number,
+  aspect: number,
+  margin = 1.08,
+): number {
+  const center = box.getCenter(new THREE.Vector3());
+  const forward = dir.clone().normalize();
+  // 视线与世界上方平行时叉乘会退化，换一个不平行的参考方向
+  const upHint =
+    Math.abs(forward.y) > 0.99 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
+  const right = new THREE.Vector3().crossVectors(forward, upHint).normalize();
+  const up = new THREE.Vector3().crossVectors(right, forward).normalize();
+  const tanY = Math.tan((fovDeg * Math.PI) / 360) / margin;
+  const tanX = tanY * Math.max(aspect, 1e-3);
+
+  let dist = 0;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < 8; i++) {
+    v.set(
+      i & 1 ? box.max.x : box.min.x,
+      i & 2 ? box.max.y : box.min.y,
+      i & 4 ? box.max.z : box.min.z,
+    ).sub(center);
+    const x = v.dot(right);
+    const y = v.dot(up);
+    const z = v.dot(forward);
+    dist = Math.max(dist, Math.abs(y) / tanY - z, Math.abs(x) / tanX - z);
+  }
+  // 退化包围盒（单点）时给一个非零距离，避免相机贴在模型上
+  return Math.max(dist, 1e-3);
+}
+
+/**
+ * 默认视角的「相机 → 目标」方向。
+ *
+ * 相机因此落在模型中心的 (-1,-1,-1) 一侧，也就是 **+x +y +z 那一侧**——
+ * 与改造前的取景位置一致。方向写反了相机就会跑到模型的另一侧：正面的三角形
+ * 会被背面剔除，界面上看到的是**一片空白**（实测就是这样把预览画没的）。
+ */
+export function defaultViewDir(): THREE.Vector3 {
+  return new THREE.Vector3(-1, -1, -1).normalize();
+}
+
+/** 由预设角度（偏航、俯角，单位为度）求「相机 → 目标」的方向向量 */
+export function presetDir(name: string): THREE.Vector3 {
+  const angles = VIEW_PRESETS[name] ?? VIEW_PRESETS.front;
+  const [yawDeg, pitchDeg] = angles;
+  const yaw = (yawDeg * Math.PI) / 180;
+  const pitch = (pitchDeg * Math.PI) / 180;
+  return new THREE.Vector3(
+    Math.cos(pitch) * Math.sin(yaw),
+    -Math.sin(pitch),
+    Math.cos(pitch) * Math.cos(yaw),
+  );
+}
+
+/**
+ * 把相机摆到「整个网格装进视口」的位置。
+ *
+ * 保持调用方给的视线方向，因此换视角后再自适应也不会把用户的视角掰回默认。
+ */
+export function frameBox(
+  camera: THREE.PerspectiveCamera,
+  box: THREE.Box3,
+  dir: THREE.Vector3,
+) {
+  const center = box.getCenter(new THREE.Vector3());
+  const dist = fitDistance(box, dir, camera.fov, camera.aspect);
+  camera.position.copy(center).addScaledVector(dir.clone().normalize(), -dist);
+  camera.lookAt(center);
+  // 近裁剪面按距离给，缩放时不会切掉模型；远裁剪面留足余量
+  camera.near = Math.max(dist / 100, 0.02);
+  camera.far = Math.max(dist * 12, 100);
+  camera.updateProjectionMatrix();
+  return { center, dist };
+}
+
 /** 把相机拉到能完整看到整个网格的位置（默认视角） */
 export function fitCamera(camera: THREE.PerspectiveCamera, group: THREE.Group) {
   const box = new THREE.Box3().setFromObject(group);
@@ -122,15 +215,7 @@ export function fitCamera(camera: THREE.PerspectiveCamera, group: THREE.Group) {
     camera.updateProjectionMatrix();
     return;
   }
-  const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
-  const radius = Math.max(size.length() * 0.5, 1);
-  const dist = radius / Math.sin((camera.fov * Math.PI) / 360);
-  camera.position.copy(center).add(new THREE.Vector3(dist, dist, dist));
-  camera.lookAt(center);
-  camera.near = Math.max(dist / 100, 0.05);
-  camera.far = dist * 10;
-  camera.updateProjectionMatrix();
+  frameBox(camera, box, defaultViewDir());
 }
 
 /**
@@ -144,28 +229,49 @@ export function applyPreset(
   group: THREE.Group,
   name: string,
 ) {
-  const angles = VIEW_PRESETS[name] ?? VIEW_PRESETS.front;
   const box = new THREE.Box3().setFromObject(group);
   if (box.isEmpty()) {
     fitCamera(camera, group);
     return;
   }
-  const center = box.getCenter(new THREE.Vector3());
-  const radius = Math.max(box.getSize(new THREE.Vector3()).length() * 0.5, 1);
-  const dist = radius / Math.sin((camera.fov * Math.PI) / 360);
-  const [yawDeg, pitchDeg] = angles;
-  const yaw = (yawDeg * Math.PI) / 180;
-  const pitch = (pitchDeg * Math.PI) / 180;
-  const dir = new THREE.Vector3(
-    Math.cos(pitch) * Math.sin(yaw),
-    -Math.sin(pitch),
-    Math.cos(pitch) * Math.cos(yaw),
-  );
-  camera.position.copy(center).addScaledVector(dir, -dist);
-  camera.lookAt(center);
-  camera.near = Math.max(dist / 100, 0.05);
-  camera.far = dist * 10;
+  frameBox(camera, box, presetDir(name));
+}
+
+/**
+ * 滚轮缩放的距离区间，按自适应后的基准距离定出来。
+ *
+ * 必须跟着模型大小走：一个 3 格高的小机器和一个 50 格长的大机器，
+ * 用同一组绝对距离必然一边贴脸一边成点。
+ */
+export function zoomLimits(fitDist: number): { min: number; max: number } {
+  return {
+    min: Math.max(fitDist * 0.06, 0.05),
+    max: Math.max(fitDist * 6, 1),
+  };
+}
+
+/**
+ * 按当前相机距离更新近/远裁剪面。
+ *
+ * OrbitControls 只管位置，**不管裁剪面**：取景时把 near 设成 dist/100 之后，
+ * 用滚轮一直拉近就会穿进近裁剪面，模型被整片切掉——表现是「缩放几下画面就
+ * 空了」。远裁剪面同理，拉远到头会把模型裁没。因此距离一变就要跟着更新。
+ *
+ * 返回是否真的变了，调用方据此决定要不要重绘。
+ */
+export function syncClipPlanes(
+  camera: THREE.PerspectiveCamera,
+  target: THREE.Vector3,
+): boolean {
+  const dist = camera.position.distanceTo(target);
+  if (!Number.isFinite(dist) || dist <= 0) return false;
+  const near = Math.max(dist / 100, 0.02);
+  const far = Math.max(dist * 12, 100);
+  if (near === camera.near && far === camera.far) return false;
+  camera.near = near;
+  camera.far = far;
   camera.updateProjectionMatrix();
+  return true;
 }
 
 /** 导出允许的边长。与界面的下拉选项一致。 */

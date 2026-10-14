@@ -7,6 +7,8 @@ import {
   applyPreset as applyPresetTo,
   buildSceneGroup,
   fitCamera as fitCameraTo,
+  syncClipPlanes,
+  zoomLimits,
   type SceneGroup,
 } from "../render/scene3d";
 
@@ -72,8 +74,25 @@ function fitCamera() {
   fitCameraTo(camera, built.group);
   const c = modelCenter();
   if (c) controls?.target.copy(c);
+  rememberFit();
   controls?.update();
   renderSoon();
+}
+
+/**
+ * 记下本次自适应的距离，并据此定出滚轮缩放的上下限。
+ *
+ * 上下限交给 OrbitControls 自己夹（它每次 update 都会 clampLength），
+ * 因此不需要另写一套拨轮逻辑——实测它自带的滚轮缩放本身是好用的，
+ * 真正缺的是「距离有界」与「裁剪面跟着距离走」这两件事。
+ */
+function rememberFit() {
+  if (!camera || !controls) return;
+  const dist = camera.position.distanceTo(controls.target);
+  const { min, max } = zoomLimits(dist);
+  controls.minDistance = min;
+  controls.maxDistance = max;
+  syncClipPlanes(camera, controls.target);
 }
 
 function applyPreset(name: string) {
@@ -82,6 +101,7 @@ function applyPreset(name: string) {
   // 换视角同样要把轴心留在模型中心，否则换完视角再拖动就会绕错点
   const c = modelCenter();
   if (c) controls?.target.copy(c);
+  rememberFit();
   controls?.update();
   renderSoon();
 }
@@ -162,12 +182,18 @@ onMounted(() => {
     controls.enableDamping = true;
     controls.dampingFactor = 0.15;
     controls.screenSpacePanning = true;
+    // 滚轮缩放由 OrbitControls 提供（默认就开）。它每次 update 都会把距离
+    // 夹在 min/maxDistance 内，那两个值在 rememberFit 里按模型大小设定。
+    controls.enableZoom = true;
+    controls.zoomSpeed = 0.9;
 
     const loop = () => {
       raf = requestAnimationFrame(loop);
-      const damping = controls?.update() ?? false;
+      let changed = controls?.update() ?? false;
+      // 距离变了就要跟着改裁剪面，否则一直拉近会穿进近裁剪面、模型被切没
+      if (camera && controls && syncClipPlanes(camera, controls.target)) changed = true;
       // 阻尼未停时必须每帧重绘，否则拖动动画会卡住
-      if (needsRender || damping) {
+      if (needsRender || changed) {
         needsRender = false;
         if (renderer.value && camera) {
           renderer.value.render(scene, camera);

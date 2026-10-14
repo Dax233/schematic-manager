@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
   applyPreset,
   buildSceneGroup,
   EXPORT_SIZES,
   fitCamera,
+  fitDistance,
+  frameBox,
+  defaultViewDir,
+  presetDir,
+  syncClipPlanes,
   VIEW_PRESETS,
+  zoomLimits,
 } from "../render/scene3d";
 import type { SceneData } from "../types";
 
@@ -290,8 +297,7 @@ describe("相机取景", () => {
     return cam;
   }
 
-  it("取景后相机朝向结构中心", () => {
-    const group = cubeAt(100, 200, 300);
+  it("取景后相机朝向结构中心", () => {    const group = cubeAt(100, 200, 300);
     const cam = newCamera();
     fitCamera(cam, group);
 
@@ -350,3 +356,300 @@ describe("相机取景", () => {
     expect(Number.isFinite(cam.position.z)).toBe(true);
   });
 });
+
+/**
+ * 取景要把结构的**投影**装进视口，而不是把它的外接球装进视口。
+ *
+ * 这条守的是用户实测反馈「模型只占中间一小块、四周超大空白」：
+ * 细长结构的外接球直径等于对角线，按它取景会让实际投影只占画面一小部分。
+ */
+describe("取景按投影包围盒拟合", () => {
+  function newCamera(aspect = 1): THREE.PerspectiveCamera {
+    const cam = new THREE.PerspectiveCamera(45, aspect, 0.1, 10000);
+    cam.updateMatrixWorld(true);
+    return cam;
+  }
+
+  /**
+   * 求结构投影到屏幕上占视口的比例。
+   *
+   * 判据用「八个角点投影后的横向/纵向跨度 ÷ 视口尺寸」，取较大者——
+   * 这正是「模型在画面里占多大」的定义，与像素无关，因此不依赖渲染。
+   */
+  function fillRatio(cam: THREE.PerspectiveCamera, box: THREE.Box3): number {
+    cam.updateMatrixWorld(true);
+    cam.updateProjectionMatrix();
+    const tanY = Math.tan((cam.fov * Math.PI) / 360);
+    const tanX = tanY * cam.aspect;
+    const center = box.getCenter(new THREE.Vector3());
+    const forward = cam.getWorldDirection(new THREE.Vector3());
+    const right = new THREE.Vector3().crossVectors(forward, cam.up).normalize();
+    const up = new THREE.Vector3().crossVectors(right, forward).normalize();
+    const v = new THREE.Vector3();
+    let maxX = 0;
+    let maxY = 0;
+    for (let i = 0; i < 8; i++) {
+      v.set(
+        i & 1 ? box.max.x : box.min.x,
+        i & 2 ? box.max.y : box.min.y,
+        i & 4 ? box.max.z : box.min.z,
+      );
+      const rel = v.clone().sub(cam.position);
+      const depth = rel.dot(forward);
+      if (depth <= 0) return Number.POSITIVE_INFINITY;
+      maxX = Math.max(maxX, Math.abs(rel.dot(right)) / (depth * tanX));
+      maxY = Math.max(maxY, Math.abs(rel.dot(up)) / (depth * tanY));
+    }
+    return Math.max(maxX, maxY);
+  }
+
+  it("细长结构的投影要占满大部分视口", () => {
+    // 用户那个 53×9×9 的机器就是这种细长形状
+    const box = new THREE.Box3(
+      new THREE.Vector3(-26.5, -4.5, -4.5),
+      new THREE.Vector3(26.5, 4.5, 4.5),
+    );
+    const cam = newCamera();
+    frameBox(cam, box, defaultViewDir());
+    const fill = fillRatio(cam, box);
+    // 曾经按外接球取景时这里只有 0.45 左右
+    expect(fill, `投影只占视口的 ${(fill * 100).toFixed(1)}%，空白过多`).toBeGreaterThan(0.8);
+    expect(fill, "不该顶出视口").toBeLessThanOrEqual(1.0);
+  });
+
+  it("正方体结构也要填满，且不因形状而改变判据", () => {
+    const box = new THREE.Box3(
+      new THREE.Vector3(-8, -8, -8),
+      new THREE.Vector3(8, 8, 8),
+    );
+    const cam = newCamera();
+    frameBox(cam, box, defaultViewDir());
+    const fill = fillRatio(cam, box);
+    expect(fill).toBeGreaterThan(0.8);
+    expect(fill).toBeLessThanOrEqual(1.0);
+  });
+
+  it("四个预设视角都装得下结构", () => {
+    const box = new THREE.Box3(
+      new THREE.Vector3(-26.5, 0, -4.5),
+      new THREE.Vector3(26.5, 9, 4.5),
+    );
+    for (const name of Object.keys(VIEW_PRESETS)) {
+      const cam = newCamera();
+      frameBox(cam, box, presetDir(name));
+      const fill = fillRatio(cam, box);
+      expect(fill, `预设「${name}」把结构画出了视口（${fill.toFixed(2)}）`).toBeLessThanOrEqual(1.0);
+      expect(fill, `预设「${name}」留白过多（${fill.toFixed(2)}）`).toBeGreaterThan(0.7);
+    }
+  });
+
+  it("宽视口下按横向收紧，不会上下撑出画面", () => {
+    const box = new THREE.Box3(
+      new THREE.Vector3(-26.5, -4.5, -4.5),
+      new THREE.Vector3(26.5, 4.5, 4.5),
+    );
+    for (const aspect of [0.6, 1, 2.4]) {
+      const cam = newCamera(aspect);
+      frameBox(cam, box, defaultViewDir());
+      const fill = fillRatio(cam, box);
+      expect(fill, `宽高比 ${aspect} 下越界（${fill.toFixed(2)}）`).toBeLessThanOrEqual(1.0);
+      expect(fill, `宽高比 ${aspect} 下留白过多（${fill.toFixed(2)}）`).toBeGreaterThan(0.7);
+    }
+  });
+
+  it("退化包围盒（单个方块）也会给非零距离", () => {
+    const p = new THREE.Vector3(3, 4, 5);
+    const box = new THREE.Box3(p.clone(), p.clone());
+    expect(fitDistance(box, defaultViewDir(), 45, 1)).toBeGreaterThan(0);
+  });
+
+  /**
+   * 默认取景的相机必须落在模型的 **+x +y +z** 一侧。
+   *
+   * 这一条与构图无关，是「画得出来 / 画不出来」的分界：方向写反时相机绕到
+   * 另一侧，正面的三角形按背面剔除全部丢掉，界面上是一片空白，
+   * 而「投影占屏幕多大」之类的几何断言照样全部通过——
+   * 因为轮廓是同一块。因此只能直接验相机在哪个象限。
+   */
+  it("默认取景时相机在模型的 +x +y +z 一侧", () => {
+    const box = new THREE.Box3(
+      new THREE.Vector3(-1, -1, -1),
+      new THREE.Vector3(1, 1, 1),
+    );
+    const cam = newCamera();
+    frameBox(cam, box, defaultViewDir());
+    expect(cam.position.x, "相机应在 +x 一侧").toBeGreaterThan(1);
+    expect(cam.position.y, "相机应在 +y 一侧").toBeGreaterThan(1);
+    expect(cam.position.z, "相机应在 +z 一侧").toBeGreaterThan(1);
+  });
+
+  /**
+   * 预设视角的相机方位必须与角度表一致。
+   *
+   * 期望值按 VIEW_PRESETS 的角度定义**独立算出**，不调用 presetDir，
+   * 否则就是拿实现验证实现。方向写反时相机绕到另一侧，正面三角形被背面
+   * 剔除，界面一片空白——而「占屏幕多大」这类几何断言照样通过。
+   */
+  it("预设视角的相机方位与角度定义一致", () => {
+    const box = new THREE.Box3(
+      new THREE.Vector3(-1, -1, -1),
+      new THREE.Vector3(1, 1, 1),
+    );
+    /** 由角度表求「相机相对中心」的单位方向 */
+    function offsetDir(yawDeg: number, pitchDeg: number): THREE.Vector3 {
+      const yaw = (yawDeg * Math.PI) / 180;
+      const pitch = (pitchDeg * Math.PI) / 180;
+      return new THREE.Vector3(
+        Math.cos(pitch) * Math.sin(yaw),
+        -Math.sin(pitch),
+        Math.cos(pitch) * Math.cos(yaw),
+      ).normalize().negate();
+    }
+    function offsetOf(name: string): THREE.Vector3 {
+      const cam = newCamera();
+      frameBox(cam, box, presetDir(name));
+      return cam.position.clone().normalize();
+    }
+
+    const [fy, fp] = VIEW_PRESETS.front;
+    expect(offsetOf("front").dot(offsetDir(fy, fp)), "front 方位不符").toBeGreaterThan(0.999);
+    const [by, bp] = VIEW_PRESETS.back;
+    expect(offsetOf("back").dot(offsetDir(by, bp)), "back 方位不符").toBeGreaterThan(0.999);
+    const [ly, lp] = VIEW_PRESETS.left45;
+    expect(offsetOf("left45").dot(offsetDir(ly, lp)), "left45 方位不符").toBeGreaterThan(0.999);
+    const [ry, rp] = VIEW_PRESETS.right45;
+    expect(offsetOf("right45").dot(offsetDir(ry, rp)), "right45 方位不符").toBeGreaterThan(0.999);
+
+    // 再钉一层语义：front 与 back 在 z 上相反，left45 与 right45 在 x 上相反。
+    // 这两条即使角度表的数值被改也仍然成立，能挡住「整体取反」这类错误。
+    expect(offsetOf("front").z).toBeLessThan(0);
+    expect(offsetOf("back").z).toBeGreaterThan(0);
+    expect(offsetOf("left45").x).toBeGreaterThan(0);
+    expect(offsetOf("right45").x).toBeLessThan(0);
+  });
+});
+
+/** 滚轮缩放：用 OrbitControls 自带的那一套，但要能夹在限位内、并有正确的裁剪面。 */
+describe("滚轮缩放", () => {
+  /** OrbitControls 需要一个可量的 DOM 元素来算缩放比例 */
+  function fakeElement(w: number, h: number): HTMLElement {
+    const el = document.createElement("div");
+    Object.defineProperty(el, "clientWidth", { value: w });
+    Object.defineProperty(el, "clientHeight", { value: h });
+    el.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: 0,
+        width: w,
+        height: h,
+        right: w,
+        bottom: h,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    return el;
+  }
+
+  function setup() {
+    const el = fakeElement(600, 600);
+    const cam = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+    cam.position.set(30, 30, 30);
+    const controls = new OrbitControls(cam, el);
+    controls.enableZoom = true;
+    controls.target.set(0, 0, 0);
+    controls.update();
+    return { el, cam, controls };
+  }
+
+  function wheel(el: HTMLElement, deltaY: number) {
+    el.dispatchEvent(
+      new WheelEvent("wheel", { deltaY, deltaMode: 0, bubbles: true, cancelable: true }),
+    );
+  }
+
+  /**
+   * 滚轮缩放本身要用 OrbitControls 的实现，这条钉住它确实生效。
+   *
+   * 之所以要专门测：它依赖内部状态机（`state` 必须为 NONE），一旦哪天
+   * 被改成手写缩放或改了 enableZoom，这里会立刻失败。
+   */
+  it("滚轮事件能改变相机到轴心的距离", () => {
+    const { el, cam, controls } = setup();
+    const before = cam.position.distanceTo(controls.target);
+    wheel(el, -240);
+    controls.update();
+    const closer = cam.position.distanceTo(controls.target);
+    expect(closer, "向上滚应离模型更近").toBeLessThan(before);
+
+    wheel(el, 600);
+    controls.update();
+    expect(cam.position.distanceTo(controls.target)).toBeGreaterThan(closer);
+  });
+
+  it("缩放只改距离、不改视线方向", () => {
+    const { el, cam, controls } = setup();
+    const dirBefore = controls.target.clone().sub(cam.position).normalize();
+    wheel(el, -240);
+    controls.update();
+    const dirAfter = controls.target.clone().sub(cam.position).normalize();
+    expect(dirAfter.dot(dirBefore), "缩放不该把视角转走").toBeGreaterThan(0.9999);
+  });
+
+  it("使劲滚动也夹在限位内，不会穿过模型", () => {
+    const { el, cam, controls } = setup();
+    const limits = zoomLimits(cam.position.distanceTo(controls.target));
+    controls.minDistance = limits.min;
+    controls.maxDistance = limits.max;
+    for (let i = 0; i < 60; i++) {
+      wheel(el, -400);
+      controls.update();
+    }
+    expect(cam.position.distanceTo(controls.target)).toBeCloseTo(limits.min, 4);
+    for (let i = 0; i < 60; i++) {
+      wheel(el, 400);
+      controls.update();
+    }
+    expect(cam.position.distanceTo(controls.target)).toBeCloseTo(limits.max, 4);
+  });
+
+  it("限位随模型大小变，不会大小模型一套值", () => {
+    const small = zoomLimits(10);
+    const big = zoomLimits(200);
+    expect(big.min).toBeGreaterThan(small.min);
+    expect(big.max).toBeGreaterThan(small.max);
+    // 任何情况下下限都必须为正：0 会让相机贴到轴心上
+    expect(zoomLimits(0).min).toBeGreaterThan(0);
+  });
+
+  /**
+   * 裁剪面必须跟着距离走。
+   *
+   * OrbitControls 只管位置、不管 near/far：取景后 near 是 dist/100，
+   * 一直拉近就会穿进近裁剪面、模型被整片切掉（表现为「缩放几下画面就空了」）。
+   */
+  it("拉近后近裁剪面跟着变小，模型不会被切掉", () => {
+    const { cam, controls } = setup();
+    const target = controls.target;
+    syncClipPlanes(cam, target);
+    const nearFarAtFit = cam.near;
+
+    // 把相机挪到离模型很近的位置（相当于滚轮拉到下限）
+    cam.position.copy(target).add(new THREE.Vector3(0.5, 0.5, 0.5));
+    expect(syncClipPlanes(cam, target), "距离变了应报告需要重绘").toBe(true);
+    expect(cam.near, "拉近后近裁剪面必须变小，否则模型会被切掉").toBeLessThan(nearFarAtFit);
+    // 模型的最近点大约在 0.7 格处，近裁剪面必须比它更小
+    expect(cam.near).toBeLessThan(0.5);
+    // 稳定后再调不应反复报告变化（否则每帧都会重绘）
+    expect(syncClipPlanes(cam, target)).toBe(false);
+  });
+
+  it("相机贴在轴心上时不产生 NaN", () => {
+    const cam = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+    const target = new THREE.Vector3(1, 2, 3);
+    cam.position.copy(target);
+    expect(syncClipPlanes(cam, target)).toBe(false);
+    expect(Number.isFinite(cam.near)).toBe(true);
+  });
+});
+

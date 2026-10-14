@@ -47,6 +47,13 @@ DIST = os.path.join(ROOT, "dist")
 SHOT = os.path.join(ROOT, "..", "_temp", "frontend_render.png")
 PAGE_NAME = "__render__.html"
 
+# 窗口尺寸（CSS 像素）。可用 SM_WINDOW 覆盖。
+#
+# 默认沿用原来的 1827x1190。用户的实际窗口是 2052x1190 设备像素 ÷ DPR 1.25
+# ≈ 1641x952 CSS —— 布局问题常常只在其中一档暴露（可用高度差 240px 决定了
+# 页签还剩多少空间），因此两档都要能跑。
+WIN = os.environ.get("SM_WINDOW", "1827,1190")
+
 # 列表条数的两轮取值。
 #   多行：验证表体撑到底后仍能纵向滚动
 #   少行：验证内容少时表体不收缩（Arco 内层不继承父高度，只有少行才暴露）
@@ -80,6 +87,13 @@ BLOCK_ROWS = [
         "zhName": "橡木楼梯",
         "enName": "Oak Stairs",
     },
+]
+
+# 实体页签的替身数据。带中文名，才能同时验证「中文名列有没有真的填上」。
+ENTITY_ROWS = [
+    {"id": "minecraft:item", "count": 12, "zhName": "物品", "enName": "Item"},
+    {"id": "minecraft:minecart", "count": 5, "zhName": "矿车", "enName": "Minecart"},
+    {"id": "minecraft:zombie", "count": 3, "zhName": "僵尸", "enName": "Zombie"},
 ]
 
 
@@ -201,8 +215,11 @@ SHIM = r"""
   // 坏掉的 base64 在浏览器里 naturalWidth 为 0，这样那条断言才有意义。
   var ICON_URL = window.__SM_ICON_URL__;
   var BLOCK_ROWS = window.__SM_BLOCK_ROWS__ || [];
+  // 实体页签也要有数据才测得出「表格是不是一片空白」：给它空数组时
+  // 页面显示的是空状态提示，表格本身根本没渲染。
+  var ENTITY_ROWS = window.__SM_ENTITY_ROWS__ || [];
   var analysis = {
-    blocks: BLOCK_ROWS, entities: [], tileEntities: [],
+    blocks: BLOCK_ROWS, entities: ENTITY_ROWS, tileEntities: [],
     nonAirTotal: 1234, airTotal: 1838,
     distinctBlockTypes: BLOCK_ROWS.length, distinctStates: BLOCK_ROWS.length
   };
@@ -269,7 +286,12 @@ SHIM = r"""
         }
         return Promise.resolve({ items: many, skippedDirs: 0, skippedPaths: [] });
       case "peek_schematic": return Promise.resolve(summary);
-      case "analyze_schematic": return Promise.resolve(analysis);
+      case "analyze_schematic":
+        // SM_ANALYZE 用来单独验证「分析没成功」时页签会显示什么：
+        //   ok（默认）正常返回；fail 分析报错；hang 一直不返回（转圈态）
+        if (window.__SM_ANALYZE__ === "fail") return Promise.reject("模拟的分析失败");
+        if (window.__SM_ANALYZE__ === "hang") return new Promise(function () {});
+        return Promise.resolve(analysis);
       case "render_block_icons":
         // 按状态键逐项回，与后端契约一致；前端据此填缓存
         return Promise.resolve(BLOCK_ROWS.map(function (r) {
@@ -436,23 +458,13 @@ SHIM = r"""
     // 因此直接读画布的像素：不透明像素应占相当比例（实心立方体的轮廓）。
     var pix = { opaque: 0, total: 0, ratio: 0 };
     var cv = sb ? document.querySelector(".scene-viewer canvas") : null;
-    if (cv) {
-      try {
-        var gl = cv.getContext("webgl2") || cv.getContext("webgl");
-        if (gl) {
-          var w = cv.width, h = cv.height;
-          var buf = new Uint8Array(w * h * 4);
-          gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
-          var op = 0;
-          for (var pi = 3; pi < buf.length; pi += 4) {
-            if (buf[pi] > 200) op++;
-          }
-          pix = { opaque: op, total: w * h, ratio: +(op / (w * h)).toFixed(4) };
-        }
-      } catch (e) {
-        pix = { opaque: -1, total: -1, ratio: -1, err: String(e) };
-      }
+    var cvCount = document.querySelectorAll(".scene-viewer canvas").length;
+    // 用刚画好那一帧的结果；取不到才退回当前这一帧
+    var measured = pixEarly || sampleCanvas();
+    if (measured) {
+      pix = measured;
     }
+    pix.err = pixEarly ? "" : "early-unavailable";
 
     // ---- 预览区尺寸与是否越界 ----
     // 要求：靠左、200×200、渲染图形不得超出范围。
@@ -516,6 +528,27 @@ SHIM = r"""
       if (bIcons[bk].naturalWidth > 0) bIconDecoded++;
       bIconW = Math.max(bIconW, Math.round(bIcons[bk].getBoundingClientRect().width));
     }
+    // 高度！只数 th 与 <img> 是不够的：容器被压成 0 高度时它们照样留在 DOM 里，
+    // 界面表现是「整个页签一片空白」。用户实测反馈过这一点。
+    var bTableH = bBox ? Math.round(bBox.height) : -1;
+    var bRowBox = bTable ? bTable.querySelector("tbody tr") : null;
+    var bRowH = bRowBox ? Math.round(bRowBox.getBoundingClientRect().height) : -1;
+    var bHeadBox = document.querySelector(".block-head");
+    var bHeadH = bHeadBox ? Math.round(bHeadBox.getBoundingClientRect().height) : -1;
+    // 页签自身的可见高度：它塌了的话上面几项都会是 0
+    var bPaneH = bPaneBox ? Math.round(bPaneBox.height) : -1;
+    // 纵向空间到底是怎么分的：预览区与页签是否被父容器约束住。
+    // 用户实测「方块/实体页签一片空白（纯白）」，需要知道页签实际拿到多少高。
+    var hOf = function (sel) {
+      var el = document.querySelector(sel);
+      return el ? Math.round(el.getBoundingClientRect().height) : -1;
+    };
+    var detailH = hOf(".detail");
+    var previewH = hOf(".preview");
+    var tabsH = hOf(".detail__tabs");
+    var tabsHeaderH = hOf(".detail__tabs .arco-tabs-header");
+    var tabsContentH = hOf(".detail__tabs .arco-tabs-content");
+    var infoH = hOf(".preview__info");
     var bExport = false;
     var bCopy = false;
     var bBtns = document.querySelectorAll(".block-head button");
@@ -583,6 +616,16 @@ SHIM = r"""
       + ",bIcons=" + bIcons.length
       + ",bIconDecoded=" + bIconDecoded
       + ",bIconW=" + bIconW
+      + ",bTableH=" + bTableH
+      + ",bRowH=" + bRowH
+      + ",bHeadH=" + bHeadH
+      + ",bPaneH=" + bPaneH
+      + ",detailH=" + detailH
+      + ",previewH=" + previewH
+      + ",tabsH=" + tabsH
+      + ",tabsHeaderH=" + tabsHeaderH
+      + ",tabsContentH=" + tabsContentH
+      + ",infoH=" + infoH
       + ",bGap=" + bGap
       + ",bExport=" + bExport
       + ",bCopy=" + bCopy
@@ -600,6 +643,8 @@ SHIM = r"""
       + ",pixTotal=" + pix.total
       + ",pixRatio=" + pix.ratio
       + ",pixErr=" + (pix.err ? String(pix.err).slice(0, 40) : "-")
+      + ",cvAttr=" + (cv ? cv.width + "x" + cv.height : "-")
+      + ",cvCount=" + cvCount
       + ",declSum=" + declSum
       + ",boxW=" + boxW
       + ",fits=" + fits
@@ -728,6 +773,34 @@ SHIM = r"""
       + " SCAN:" + state + " DIALOGS:" + DIALOGS.join(",") + " tries=" + tries
       + " " + (layoutResult || "LAYOUT:pending");
   }
+
+  /**
+   * 读画布的不透明像素比例。
+   *
+   * 用 drawImage 取合成结果，而不是 gl.readPixels：readPixels 读的是
+   * 「当前绘制缓冲」，一旦之后发生过 setSize（浏览器会清空缓冲）而渲染循环
+   * 又没再跑，读到的就是全透明——那是测量时机的问题，不是画面真的空了。
+   */
+  function sampleCanvas() {
+    var cv = document.querySelector(".scene-viewer canvas");
+    if (!cv || !cv.width) return null;
+    var c = document.createElement("canvas");
+    c.width = cv.width;
+    c.height = cv.height;
+    var ctx = c.getContext("2d");
+    ctx.drawImage(cv, 0, 0);
+    var d = ctx.getImageData(0, 0, c.width, c.height).data;
+    var op = 0;
+    for (var i = 3; i < d.length; i += 4) {
+      if (d[i] > 200) op++;
+    }
+    return { opaque: op, total: c.width * c.height, ratio: +(op / (c.width * c.height)).toFixed(4) };
+  }
+
+  // 场景刚画出来时先量一次。这一份是「渲染本身有没有画出东西」的判据；
+  // 后面在交互结束后再量的那一份可能已被 setSize 清空（见 sampleCanvas 注释），
+  // 因此两者都报出来，断言用前者。
+  var pixEarly = null;
   status();
   var timer = setInterval(function () {
     tries++;
@@ -748,6 +821,11 @@ SHIM = r"""
       else if (!row) { state = "no-row"; }
       status();
     } else if (!dialogsDone) {
+      // 对话框开始之前，趁画布还在，先把「有没有画出东西」量下来
+      if (!pixEarly) {
+        var s0 = sampleCanvas();
+        if (s0 && s0.opaque > 0) pixEarly = s0;
+      }
       // 分两步：先点开，**等到下一个 tick** 再核对。
       // Vue 的 DOM 更新是异步的，点完立刻查询时弹层还没插进文档，
       // 会把正常打开的对话框误判成「标题缺失」（实测三个被误判）。
@@ -902,8 +980,31 @@ def main():
         inject = (
             f"<script>window.__SM_FILLER_ROWS__={rows};"
             f"window.__SM_BLOCK_ROWS__={json.dumps(BLOCK_ROWS, ensure_ascii=False)};"
-            f"window.__SM_ICON_URL__={json.dumps(icon_data_url())};</script>"
+            f"window.__SM_ENTITY_ROWS__={json.dumps(ENTITY_ROWS, ensure_ascii=False)};"
+            f"window.__SM_ICON_URL__={json.dumps(icon_data_url())};"
+            f"window.__SM_ANALYZE__={json.dumps(os.environ.get('SM_ANALYZE', 'ok'))};</script>"
         )
+        # SM_FORCE_STAGE：把预览舞台钉到指定边长，用来复现「页签只剩很少高度」
+        # 的真实窗口（用户那边实测页签只有约 106 CSS px，比默认的 249 小得多）。
+        forced = os.environ.get("SM_FORCE_STAGE", "")
+        if forced:
+            inject += (
+                "<style>.preview__stage{width:" + forced + "px !important;"
+                "height:" + forced + "px !important;"
+                "min-width:" + forced + "px !important;"
+                "min-height:" + forced + "px !important;"
+                "max-width:" + forced + "px !important;"
+                "max-height:" + forced + "px !important;}</style>"
+            )
+        # SM_FORCE_TABS：把页签区域钉到指定高度，复现「页签只剩很少高度」时的表现。
+        # 这是判断「页签一矮就整块空白」的关键实验：直接给容器定高，
+        # 不再依赖预览区把空间挤出来。
+        tabs_h = os.environ.get("SM_FORCE_TABS", "")
+        if tabs_h:
+            inject += (
+                "<style>.detail__tabs{height:" + tabs_h + "px !important;"
+                "flex:none !important;}</style>"
+            )
         return html.replace("<head>", "<head>" + inject, 1) if "<head>" in html else inject + html
 
     html = make_page(FILLER_ROWS)
@@ -934,7 +1035,7 @@ def main():
         # 窗口尺寸取用户实际使用的大小（1827x1190）：目录栏需要「撑到底」与
         # 「出现滚动条」这两点都和可视高度直接相关，用偏小的窗口量不出真实表现。
         shot = subprocess.run(
-            common + ["--hide-scrollbars", "--window-size=1827,1190",
+            common + ["--hide-scrollbars", "--window-size=" + WIN,
                       f"--screenshot={SHOT}", url],
             capture_output=True, timeout=180,
         )
@@ -942,7 +1043,7 @@ def main():
 
         # 尺寸必须与截图一致：布局几何是在这一趟里量的，
         # 用默认的 800x600 会让「撑到底」「出现滚动条」都量成错的
-        dump = subprocess.run(common + ["--window-size=1827,1190", "--dump-dom", url],
+        dump = subprocess.run(common + ["--window-size=" + WIN, "--dump-dom", url],
                               capture_output=True, timeout=180)
         dom = dump.stdout.decode("utf-8", "replace")
         dom_path = os.path.join(os.path.dirname(SHOT), "render_dom.html")
@@ -1018,7 +1119,7 @@ def main():
         # 只有几条数据时表体会按内容收缩、底部露出大片空白。
         # 上面那趟用的是 40 行，正好把这个形态掩盖掉，因此必须单独测。
         few_dump = subprocess.run(
-            common + ["--window-size=1827,1190", "--dump-dom",
+            common + ["--window-size=" + WIN, "--dump-dom",
                       f"http://127.0.0.1:{port}/{FEW_PAGE}"],
             capture_output=True, timeout=180)
         few_visible = re.sub(r"(?is)<script\b.*?</script>", " ",
@@ -1053,9 +1154,15 @@ def main():
         dra = re.search(r"DRAG:([^\s<]*)", visible)
         layout_ok = True
 
+        failed_claims: list[str] = []
+
         def claim(label, cond, detail=""):
             nonlocal layout_ok
             layout_ok = layout_ok and cond
+            # 失败项也收进列表：控制台的输出可能是乱码（Windows 控制台编码），
+            # 而这份列表只含 ASCII，用来核对到底哪一条没过。
+            if not cond:
+                failed_claims.append(f"{label} | {detail}")
             print(f"  {label:<34} {'是' if cond else '否'}{detail}")
 
         if not lay or lay.group(1) == "pending" or lay.group(1) == "missing":
@@ -1124,8 +1231,20 @@ def main():
             stage_h = int(fields.get("stageH", "-1"))
             stage_left = int(fields.get("stageLeft", "-1"))
             detail_left = int(fields.get("detailLeft", "-1"))
-            claim("预览区为正方形且不小于 400", abs(stage_w - stage_h) <= 1 and stage_w >= 400,
-                  f"  实际 {stage_w}×{stage_h}")
+            # 预览区必须够大：「太小」正是用户当初提的问题。
+            #
+            # 门槛不能写成一个固定像素：纵向要在预览与页签之间分空间、横向要在
+            # 预览与信息列之间分，小窗口下不可能都拿满。因此判据是
+            # 「预览吃掉信息列下限（300px）之外的全部可用宽度」，并给 450px
+            # 一个「够用」的封顶。窗口小到连 450 都放不下时按实际可用值算，
+            # 这时真正被验的是「没有把空间浪费掉」。
+            win_w = int(WIN.split(",")[0])
+            avail = win_w - detail_left - 8 - 12 - 300 - 20
+            expect_stage = min(450, max(220, avail))
+            claim(f"预览区为正方形且不小于 {expect_stage}",
+                  abs(stage_w - stage_h) <= 1 and stage_w >= expect_stage,
+                  f"  实际 {stage_w}×{stage_h}；窗口宽 {win_w}、详情栏左缘 {detail_left}"
+                  f" → 信息列之外可用 {avail}px")
             # 容许 --preview__main 的 8px 内边距：舞台在详情栏左缘内侧一点，
             # 这是有意的留白，不是「没有靠左」
             claim("预览区靠左（贴住详情栏左缘）", abs(stage_left - detail_left) <= 12,
@@ -1135,9 +1254,15 @@ def main():
                   f"  画布宽 {fields.get('canvasW')}px / 舞台宽 {stage_w}px")
             # 控制条不应被挤压到文字竖排：曾实测单选按钮 47×44（「正面」竖排）
             bar_h = int(fields.get("barBtnH", "-1"))
-            claim("控制条紧贴预览底部（未被信息列推远）",
-                  abs(int(fields.get("gapBar", "9999"))) <= 40,
-                  f"  距舞台底 {fields.get('gapBar')}px")
+            # 控制条要贴着预览底部。这个间距来自「信息列比舞台高」——舞台宽度
+            # 受限时（窄窗口）舞台会明显矮于信息列，间距就压不到 0。
+            # 实测用户窗口为 8px、应用最小窗口为 0px、1200×760 这类窄而高的
+            # 窗口最大 56px；写死 40 会在窄窗口下误报。真正不能出现的是
+            # 上百像素的空档（曾实测 153px，控制条被推到很远）。
+            gap_bar = int(fields.get("gapBar", "9999"))
+            claim("控制条未被信息列推远",
+                  abs(gap_bar) <= 80,
+                  f"  距舞台底 {gap_bar}px（窗口窄时舞台偏矮，会有几十像素的间距）")
             claim("选中的文件行有高亮", fields.get("selOk") == "true",
                   "  命中 .row-selected")
             claim("信息区在预览图右侧", fields.get("infoRight") == "true",
@@ -1174,6 +1299,13 @@ def main():
             claim("渲染图尺寸可见",
                   int(fields.get("bIconW", "0")) >= 16,
                   f"  实测宽 {fields.get('bIconW')}px")
+            # 高度：容器被压成 0 时 th 与 <img> 仍在 DOM 里，只数元素会假绿
+            claim("方块页签有可见高度（不是一片空白）",
+                  int(fields.get("bPaneH", "0")) > 60
+                  and int(fields.get("bTableH", "0")) > 60
+                  and int(fields.get("bRowH", "0")) > 10,
+                  f"  页签高 {fields.get('bPaneH')}px / 表格高 {fields.get('bTableH')}px"
+                  f" / 首行高 {fields.get('bRowH')}px / 统计条高 {fields.get('bHeadH')}px")
             claim("保存按钮无需滚动即可点到", fields.get("saveOk") == "true",
                   f"  按钮底边相对面板底边 {fields.get('saveGap')}px（>0 表示被挤出可视范围）")
             claim("预览控制条未被挤压（按钮不竖排）", fields.get("barOk") == "true",
@@ -1234,6 +1366,10 @@ def main():
         if os.path.exists(few_path):
             os.remove(few_path)
 
+    if failed_claims:
+        print("\nFAILED CLAIMS (ascii):")
+        for fc in failed_claims:
+            print("  - " + "".join(ch if ord(ch) < 128 else "?" for ch in fc))
     print("\n渲染检查：" + ("全部通过" if ok else "存在失败项"))
     return 0 if ok else 1
 
