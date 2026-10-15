@@ -342,3 +342,65 @@ export interface ModsImport {
    */
   skipped: { path: string; reason: string }[];
 }
+
+// ---------------------------------------------------------------- 版本库
+
+/** 基础库里一个已就绪的版本 */
+export interface BaseVersion {
+  name: string;
+  dataVersion: number;
+}
+
+/** 基础库的当前状态，前端据此决定是否弹出「版本库」界面 */
+export interface BaseDbStatus {
+  versions: BaseVersion[];
+  /** 实体贴图库是否已生成 */
+  entityAvailable: boolean;
+  /** 支持补齐的全部版本（后端支持表，前端不另抄一份） */
+  supported: BaseVersion[];
+}
+
+/** 扫描 .minecraft 得到的已装版本 */
+export interface McVersion {
+  id: string;
+  dataVersion: number;
+  jarPath: string;
+}
+
+/** .minecraft 扫描结果 */
+export interface McScan {
+  versions: McVersion[];
+  /** 存在客户端 jar 但读不出版本信息的目录，逐条带原因 */
+  warnings: string[];
+}
+
+/** 版本下载来源 */
+export type SetupSource = "official" | "bmcl";
+
+/** 「版本库」里要准备的一个版本；jarPath 为 null 表示按来源下载 */
+export interface SetupVersion {
+  id: string;
+  dataVersion: number;
+  jarPath: string | null;
+}
+
+/** 单个版本的准备结果 */
+export interface SetupVersionOutcome {
+  id: string;
+  ok: boolean;
+  error: string;
+}
+
+/** 一批版本的准备结果 */
+export interface SetupOutcome {
+  outcomes: SetupVersionOutcome[];
+}
+
+/** 「版本库」进度事件（base-setup-progress）的有效载荷 */
+export interface BaseSetupProgress {
+  id: string;
+  stage: "download" | "build" | "done";
+  received: number;
+  total: number;
+  error: string;
+}

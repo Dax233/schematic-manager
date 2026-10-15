@@ -41,13 +41,14 @@ fn real_dir() -> String {
     std::env::var("SM_REAL_DIR").expect("需设置 SM_REAL_DIR 指向真实投影所在目录")
 }
 
-/// 随包分发的方块库
-fn bundled_db() -> crate::blockdb::BlockDb {
-    crate::blockdb::BlockDb::load(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/resources/blocks.dat.z"),
-        false,
-    )
-    .expect("内置方块库载入失败")
+/// 真实数据用例共用的方块库。
+///
+/// 库文件不再随包分发：用 SM_BLOCK_DB 指向一份（通常是「版本库」在
+/// app 数据目录下生成的单版本包），且版本应覆盖用例数据的 dataVersion。
+fn env_db() -> crate::blockdb::BlockDb {
+    let path = std::env::var("SM_BLOCK_DB")
+        .expect("需设置 SM_BLOCK_DB 指向方块库文件（如「版本库」生成的单版本包）");
+    crate::blockdb::BlockDb::load(&path, false).expect("方块库载入失败")
 }
 
 fn file_name(p: &Path) -> String {
@@ -144,7 +145,7 @@ fn real_project_tinted_blocks_actually_get_colored() {
     use std::collections::BTreeMap;
 
     let files = collect_litematic(&real_dir());
-    let db = bundled_db();
+    let db = env_db();
     // 方块名 -> (四边形数, 第一个染色值)
     let mut seen: BTreeMap<String, (usize, [f32; 3])> = BTreeMap::new();
     let mut total_quads = 0usize;
@@ -273,8 +274,8 @@ fn real_project_tinted_blocks_actually_get_colored() {
 #[test]
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn real_project_piston_culling_respects_geometry() {
-    let db = bundled_db();
-    let vi = db.pick_version(3465).expect("内置库缺少 1.20.1");
+    let db = env_db();
+    let vi = db.pick_version(3465).expect("基础库缺少 1.20.1");
 
     let mut states: Vec<(String, String)> = Vec::new();
     for facing in ["north", "south", "east", "west", "up", "down"] {
@@ -475,7 +476,7 @@ fn real_project_no_block_loses_a_non_cullable_face() {
     use std::collections::BTreeMap;
 
     let files = collect_litematic(&real_dir());
-    let db = bundled_db();
+    let db = env_db();
 
     let mut total_blocks = 0usize;
     let mut total_quads = 0usize;
@@ -591,7 +592,7 @@ fn real_project_no_block_loses_a_non_cullable_face() {
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn real_project_has_no_unresolved_texture_faces() {
     let files = collect_litematic(&real_dir());
-    let db = bundled_db();
+    let db = env_db();
 
     let mut total = 0usize;
     let mut unresolved = 0usize;
@@ -664,7 +665,7 @@ fn real_project_has_no_unresolved_texture_faces() {
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn real_project_textures_do_contain_partial_alpha() {
     let files = collect_litematic(&real_dir());
-    let db = bundled_db();
+    let db = env_db();
 
     let mut used: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
     for f in &files {
@@ -730,8 +731,8 @@ fn real_project_textures_do_contain_partial_alpha() {
 #[test]
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn piston_head_all_property_combinations_resolve() {
-    let db = bundled_db();
-    let vi = db.pick_version(3465).expect("内置库缺少 1.20.1");
+    let db = env_db();
+    let vi = db.pick_version(3465).expect("基础库缺少 1.20.1");
 
     let mut failures: Vec<String> = Vec::new();
     let mut checked = 0usize;
@@ -862,7 +863,7 @@ fn real_project_two_axis_rotation_matches_reference() {
         [x, y, z]
     }
 
-    let db = bundled_db();
+    let db = env_db();
     let mut checked = 0usize;
     let mut both_axis = 0usize;
     let mut examples: Vec<String> = Vec::new();
@@ -934,7 +935,7 @@ fn redstone_wire_brightness_follows_power() {
     use std::collections::BTreeMap;
 
     let files = collect_litematic(&real_dir());
-    let db = bundled_db();
+    let db = env_db();
 
     // power -> 该档在四边形上出现的染色（取红通道最大者）
     let mut by_power: BTreeMap<i32, [f32; 3]> = BTreeMap::new();
@@ -1032,7 +1033,7 @@ fn redstone_wire_brightness_follows_power() {
 #[test]
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn display_names_resolve_chinese_for_blocks_and_entities() {
-    let db = bundled_db();
+    let db = env_db();
 
     // 覆盖三个典型版本：有中文的、原本没中文的、最新的
     for dv in [3465, 4325, 5023] {
@@ -1094,7 +1095,7 @@ fn real_project_piston_states_all_resolve() {
     use std::collections::BTreeMap;
 
     let files = collect_litematic(&real_dir());
-    let db = bundled_db();
+    let db = env_db();
     // (方块名, 属性串) -> 出现次数
     let mut states: BTreeMap<(String, String), usize> = BTreeMap::new();
 
@@ -1133,10 +1134,10 @@ fn real_project_piston_states_all_resolve() {
             })
             .collect();
 
-        // 找一个能查到该方块定义的版本（内置库里 1.20.1 有全部这些方块）
+        // 找一个能查到该方块定义的版本（基础库里 1.20.1 有全部这些方块）
         let vi = db
             .pick_version(3465)
-            .expect("内置库缺少 1.20.1");
+            .expect("基础库缺少 1.20.1");
         if crate::block_model::find_block(&db, &db.versions[vi], name).is_none() {
             broken.push(format!("{name}: 方块库里查不到定义"));
             continue;
@@ -1182,7 +1183,7 @@ fn real_project_piston_states_all_resolve() {
 #[test]
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn every_real_project_builds_a_scene() {    let files = collect_litematic(&real_dir());
-    let db = bundled_db();
+    let db = env_db();
     let mut failed: Vec<String> = Vec::new();
 
     for f in &files {
@@ -1218,7 +1219,7 @@ fn every_real_project_builds_a_scene() {    let files = collect_litematic(&real_
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn every_real_project_survives_a_block_replacement() {
     let files = collect_litematic(&real_dir());
-    let db = bundled_db();
+    let db = env_db();
     let dir = work_dir("replace");
     let mut failed: Vec<String> = Vec::new();
     let mut checked = 0;
@@ -1328,7 +1329,7 @@ fn every_real_project_survives_a_block_replacement() {
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn every_real_project_survives_a_version_conversion() {
     let files = collect_litematic(&real_dir());
-    let db = bundled_db();
+    let db = env_db();
     let dir = work_dir("convert");
     let mut failed: Vec<String> = Vec::new();
     let mut checked = 0;
@@ -1556,7 +1557,7 @@ fn every_real_project_backs_up_and_restores_byte_for_byte() {
 
         // 3) 破坏文件：真的跑一遍替换并写回，模拟用户的正常操作
         if let Ok(mut sc) = crate::litematic::Schematic::load(&target_s) {
-            let db = bundled_db();
+            let db = env_db();
             if let Some(vi) = db.pick_version(sc.summary().data_version) {
                 let info = crate::block_model::DbBlockInfo { db: &db, version: &db.versions[vi] };
                 let before = sc.analyze();
@@ -1657,8 +1658,11 @@ fn diagnose_analyze_one_file() {
         println!("    {v:>6}  {k}");
     }
 
-    let loaded = crate::commands::open_db_for_test().expect("方块库载入失败");
-    let db = &loaded.db;
+    // 库文件不再随包分发：诊断命令用 SM_BLOCK_DB 指向一份方块库
+    // （通常是「版本库」生成的单版本包，或其目录之外的任意 .dat.z）
+    let db_path = std::env::var("SM_BLOCK_DB")
+        .expect("需设置 SM_BLOCK_DB 指向方块库文件（如 app 数据目录 base/blocks/ 下的单版本包）");
+    let db = crate::blockdb::BlockDb::load(&db_path, false).expect("方块库载入失败");
     let vi = db.pick_version(s.data_version);
     println!("  选中版本下标={vi:?} 名称={:?}", vi.map(|i| db.versions[i].name.clone()));
 
@@ -1669,7 +1673,7 @@ fn diagnose_analyze_one_file() {
             .iter()
             .map(|(state, count)| {
                 let name = state.split('[').next().unwrap_or(state).to_string();
-                let (zh, en) = crate::commands::block_display_names(db, vi, &name);
+                let (zh, en) = crate::commands::block_display_names(&db, vi, &name);
                 serde_json::json!({
                     "name": name, "state": state, "count": count,
                     "zhName": zh, "enName": en
@@ -1680,7 +1684,7 @@ fn diagnose_analyze_one_file() {
             .entities_by_id
             .iter()
             .map(|(id, count)| {
-                let (zh, en) = crate::commands::entity_display_names(db, vi, id);
+                let (zh, en) = crate::commands::entity_display_names(&db, vi, id);
                 serde_json::json!({ "id": id, "count": count, "zhName": zh, "enName": en })
             })
             .collect();

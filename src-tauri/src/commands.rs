@@ -7,17 +7,18 @@ use crate::backup;
 use crate::blockdb::BlockDb;
 use crate::error::{AppError, AppResult};
 use crate::dto::{
-    AnalysisResult, BackupEntryDto, BlockCount, BlockHitDto, BlockIconDto, BlockVersionDto,
-    ConvertItemDto, ConvertOutcomeDto, ConvertTargetDto, DuplicateGroupDto, DuplicateScanDto,
-    EntityCount, EntityInstanceDto, EntityTextureDto, EntityTextureStatusDto, FileOpOutcome,
-    ImportOutcomeDto, ModsImportDto, PackEntryDto, PackListDto, PackLoadFailureDto,
-    RenameOutcomeDto,
+    AnalysisResult, BackupEntryDto, BaseDbStatusDto, BaseVersionDto, BlockCount, BlockHitDto,
+    BlockIconDto, BlockVersionDto, ConvertItemDto, ConvertOutcomeDto, ConvertTargetDto,
+    DuplicateGroupDto, DuplicateScanDto, EntityCount, EntityInstanceDto, EntityTextureDto,
+    EntityTextureStatusDto, FileOpOutcome, ImportOutcomeDto, McScanDto, McVersionDto,
+    ModsImportDto, PackEntryDto, PackListDto, PackLoadFailureDto, RenameOutcomeDto,
     ReplaceOutcomeDto, ReplaceRuleDto, SceneDto, SaveOutcome, ScanResult, SchematicSummary,
-    UnreadableFileDto, VersionOptionDto,
+    SetupOutcomeDto, SetupSource, SetupVersionDto, SetupVersionOutcomeDto, UnreadableFileDto,
+    VersionOptionDto,
 };
 use crate::litematic::{self, Summary};
 use std::path::{Path, PathBuf};
-use tauri::{Manager, path::BaseDirectory};
+use tauri::Manager;
 
 /// 程序所在目录。备份目录以它为根，与旧版行为一致。
 fn exe_dir() -> PathBuf {
@@ -253,7 +254,7 @@ pub(crate) fn tile_display_names(db: &BlockDb, version_idx: Option<usize>, id: &
 /// 完整分析：解码全部方块并统计。
 #[tauri::command]
 pub fn analyze_schematic(app: tauri::AppHandle, path: String) -> Result<AnalysisResult, String> {
-    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
     let sc = litematic::Schematic::load(&path).map_err(|e| e.to_string())?;
     let a = sc.analyze();
@@ -350,7 +351,7 @@ pub fn render_block_icons(
     if states.is_empty() {
         return Ok(Vec::new());
     }
-    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
     // 用投影自己的 dataVersion 选版本，语言表与贴图才与投影内容对得上
     let vi = db
@@ -368,54 +369,57 @@ pub fn render_block_icons(
         .collect())
 }
 
-/// 内置实体贴图库压缩包的位置。
-///
-/// 与方块库同样的三级回退：随包资源目录、可执行文件同级的 res/、开发时的源码树。
-/// 实体贴图是后加的功能，旧安装里可能没有这个文件，因此找不到时不能直接报错——
-/// 那样会让整个程序起不来。调用方按「可选资源」处理。
-fn entity_archive(app: Option<&tauri::AppHandle>) -> Option<PathBuf> {
-    if let Some(a) = app {
-        if let Ok(p) = a.path().resolve("resources/entities.dat.z", BaseDirectory::Resource) {
-            if p.is_file() {
-                return Some(p);
-            }
-        }
-    }
-    let beside = exe_dir().join("res").join("entities.dat.z");
-    if beside.is_file() {
-        return Some(beside);
-    }
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("resources")
-        .join("entities.dat.z");
-    if dev.is_file() {
-        return Some(dev);
-    }
-    None
-}
-
 /// 已载入的实体贴图库。
 ///
-/// 与方块库一样做进程内缓存：解析一次 1 MB 的包并解压像素池是有成本的，
-/// 而导出/预览会反复查询。
-static ENTITY_DB: std::sync::OnceLock<Option<std::sync::Arc<crate::entitydb::EntityDb>>> =
-    std::sync::OnceLock::new();
+/// 解析并解压像素池是有成本的，而导出/预览会反复查询，因此做进程内缓存。
+/// 用 `RwLock<Option<..>>` 而不是 `OnceLock`：用户在「版本库」里补充版本后，
+/// 实体贴图库的内容必须随之变化，`OnceLock` 一旦写入就改不了。
+static ENTITY_DB: std::sync::OnceLock<
+    std::sync::RwLock<Option<std::sync::Arc<crate::entitydb::EntityDb>>>,
+> = std::sync::OnceLock::new();
 
-fn open_entity_db(app: Option<&tauri::AppHandle>) -> Option<std::sync::Arc<crate::entitydb::EntityDb>> {
-    ENTITY_DB
-        .get_or_init(|| {
-            let p = entity_archive(app)?;
-            match crate::entitydb::EntityDb::load(&p) {
-                Ok(db) => Some(std::sync::Arc::new(db)),
-                Err(e) => {
-                    // 不静默：贴图库损坏会让实体渲染全部没有贴图，
-                    // 必须留下线索，否则用户只会看到一堆白模
-                    eprintln!("载入实体贴图库失败 {}：{e}", p.display());
-                    None
-                }
-            }
-        })
-        .clone()
+fn entity_db_cache(
+) -> &'static std::sync::RwLock<Option<std::sync::Arc<crate::entitydb::EntityDb>>> {
+    ENTITY_DB.get_or_init(|| std::sync::RwLock::new(None))
+}
+
+/// 让实体贴图库缓存失效。补充或替换版本后必须调用，否则改动要等下次启动才生效。
+pub(crate) fn invalidate_entity_db() {
+    // 锁中毒说明此前有线程在持锁时 panic；缓存只是可重建的派生数据，
+    // 取回内部值继续用即可，不必让整个程序跟着崩
+    let mut g = entity_db_cache().write().unwrap_or_else(|e| e.into_inner());
+    *g = None;
+}
+
+/// 取实体贴图库：app 数据目录下的基础库文件。
+///
+/// 库文件不存在（还没添加任何版本）返回 None 而不是错误——
+/// 首次运行就是这个状态，由前端引导用户去「版本库」里补。
+fn open_entity_db(app: &tauri::AppHandle) -> Option<std::sync::Arc<crate::entitydb::EntityDb>> {
+    {
+        let g = entity_db_cache().read().unwrap_or_else(|e| e.into_inner());
+        if let Some(db) = g.as_ref() {
+            return Some(std::sync::Arc::clone(db));
+        }
+    }
+    let path = crate::base_db::base_entities_path(app).ok()?;
+    if !path.is_file() {
+        return None;
+    }
+    let db = match crate::entitydb::EntityDb::load(&path) {
+        Ok(db) => std::sync::Arc::new(db),
+        Err(e) => {
+            // 不静默：贴图库损坏会让实体渲染全部没有贴图，
+            // 必须留下线索，否则用户只会看到一堆白模
+            eprintln!("载入实体贴图库失败 {}：{e}", path.display());
+            return None;
+        }
+    };
+    let mut g = entity_db_cache().write().unwrap_or_else(|e| e.into_inner());
+    if g.is_none() {
+        *g = Some(std::sync::Arc::clone(&db));
+    }
+    g.as_ref().map(std::sync::Arc::clone)
 }
 
 /// 实体贴图库的可用情况。
@@ -423,7 +427,7 @@ fn open_entity_db(app: Option<&tauri::AppHandle>) -> Option<std::sync::Arc<crate
 /// 前端据此判断实体预览能否显示贴图，而不是拿到一张空白图去猜原因。
 #[tauri::command]
 pub fn entity_texture_status(app: tauri::AppHandle) -> EntityTextureStatusDto {
-    match open_entity_db(Some(&app)) {
+    match open_entity_db(&app) {
         Some(db) => EntityTextureStatusDto {
             available: true,
             versions: db.versions.len(),
@@ -436,7 +440,7 @@ pub fn entity_texture_status(app: tauri::AppHandle) -> EntityTextureStatusDto {
             versions: 0,
             textures: 0,
             paths: 0,
-            error: "未找到实体贴图库 entities.dat.z".into(),
+            error: "尚未添加任何版本的实体贴图，可在「版本库」里补充".into(),
         },
     }
 }
@@ -451,7 +455,7 @@ pub fn entity_texture_pixels(
     data_version: i32,
     path: String,
 ) -> Result<EntityTextureDto, String> {
-    let db = open_entity_db(Some(&app)).ok_or_else(|| "实体贴图库不可用".to_string())?;
+    let db = open_entity_db(&app).ok_or_else(|| "实体贴图库不可用".to_string())?;
     let ver = db
         .version_for(data_version)
         .ok_or_else(|| format!("实体贴图库里没有 dataVersion {data_version}"))?;
@@ -467,42 +471,6 @@ pub fn entity_texture_pixels(
     })
 }
 
-/// 内置方块库压缩包的位置。///
-/// 依次尝试：可执行文件同级的 res/（旧版布局）、随包分发的资源目录、
-/// 以及开发时的源码树。三者都不存在时给出明确错误，而不是让载入在
-/// 更深处报出难以理解的解析失败。
-fn db_archive(app: Option<&tauri::AppHandle>) -> AppResult<PathBuf> {
-    let mut tried: Vec<PathBuf> = Vec::new();
-    if let Some(a) = app {
-        if let Ok(p) = a.path().resolve("resources/blocks.dat.z", BaseDirectory::Resource) {
-            if p.is_file() {
-                return Ok(p);
-            }
-            tried.push(p);
-        }
-    }
-    let beside = exe_dir().join("res").join("blocks.dat.z");
-    if beside.is_file() {
-        return Ok(beside);
-    }
-    tried.push(beside);
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("resources")
-        .join("blocks.dat.z");
-    if dev.is_file() {
-        return Ok(dev);
-    }
-    tried.push(dev);
-    Err(AppError::Parse(format!(
-        "找不到方块库 blocks.dat.z，已尝试：{}",
-        tried
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join("、")
-    )))
-}
-
 /// 已载入的方块库，附带资源包加载过程中的失败说明。
 ///
 /// 失败原因不放在 `BlockDb` 里：它描述的是「载入过程」而不是方块库内容，
@@ -515,9 +483,9 @@ pub struct LoadedDb {
 
 /// 进程内缓存的方块库。
 ///
-/// 方块库解压后约 5.6 MB、含 4 万余条方块定义，而方块检索是随输入逐键
-/// 触发的；每次重新读取与解析会让输入明显卡顿。方块库是随包分发的
-/// 静态资源，载入一次即可长期复用。
+/// 方块库解压后有数 MB、含数万条方块定义，而方块检索是随输入逐键
+/// 触发的；每次重新读取与解析会让输入明显卡顿。基础库在 app 数据目录下
+/// 按版本合成，载入一次即可长期复用，直到用户改动基础库或资源包。
 ///
 /// 用 `RwLock<Option<..>>` 而不是 `OnceLock`：用户导入、启用或删除资源包后，
 /// 方块库的内容必须随之变化。`OnceLock` 一旦写入就再也改不了，会让
@@ -547,7 +515,7 @@ fn invalidate_db() {
 /// 内存构造的包直接验证合并结果。
 ///
 /// 单个包载入失败不能中断整库：用户可能手工删过文件、或包本身损坏，
-/// 此时其余包与内置库仍应可用。失败原因逐项返回供界面显示，
+/// 此时其余包与基础库仍应可用。失败原因逐项返回供界面显示，
 /// **不静默跳过**——界面上显示为启用却不生效是最难排查的状态。
 ///
 /// `resolve` 给出包文件的完整路径，便于测试注入临时目录。
@@ -575,20 +543,16 @@ where
     failures
 }
 
-/// 取方块库：内置基础库 + 清单里已启用的资源包。
+/// 取方块库：app 数据目录下按版本合成的基础库 + 清单里已启用的资源包。
 ///
-/// 必须传入 AppHandle：打包后方块库位于 Tauri 的资源目录，
-/// 只查 exe_dir()/res/ 或编译期的 CARGO_MANIFEST_DIR 在用户机器上都不存在，
-/// 忽略资源目录会让方块检索与替换在发布版整块失效。
+/// 基础库为空并不是错误：首次运行还没添加任何版本时就是这个状态，
+/// 由前端引导用户去「版本库」里补。基础库里损坏的单版本文件只记入
+/// failures，不中断整库——资源包失败的处理也是同样原则。
 ///
-/// 测试里可以传 None：此时会退到编译期的 CARGO_MANIFEST_DIR，而那个路径在
-/// 开发机上确实存在，因此诊断用例能在命令行里直接跑真实文件。
-#[cfg(test)]
-pub(crate) fn open_db_for_test() -> AppResult<std::sync::Arc<LoadedDb>> {
-    open_db(None)
-}
-
-fn open_db(app: Option<&tauri::AppHandle>) -> AppResult<std::sync::Arc<LoadedDb>> {
+/// 结果会写进进程内缓存，因此必须始终带着基础库构建：允许传 None
+/// 「只要资源包」的口子会把一份没有基础库的库缓存下来，之后所有
+/// 查询都命中它，表现为打开过资源包界面后方块就查不到了。
+fn open_db(app: &tauri::AppHandle) -> AppResult<std::sync::Arc<LoadedDb>> {
     {
         let g = db_cache().read().unwrap_or_else(|e| e.into_inner());
         if let Some(db) = g.as_ref() {
@@ -596,11 +560,11 @@ fn open_db(app: Option<&tauri::AppHandle>) -> AppResult<std::sync::Arc<LoadedDb>
         }
     }
 
-    // 内置方块库是基础版本（legacy-cpp 的 kind=0），不是叠加包
-    let mut db = crate::blockdb::BlockDb::load(&db_archive(app)?.to_string_lossy(), false)?;
+    let (mut db, mut failures) =
+        crate::base_db::load_base_block_db(&crate::base_db::base_blocks_dir(app)?)?;
 
     let (entries, _) = read_manifest()?;
-    let failures = merge_enabled_packs(&mut db, &entries, |f| packs_dir().join(f));
+    failures.extend(merge_enabled_packs(&mut db, &entries, |f| packs_dir().join(f)));
 
     let loaded = std::sync::Arc::new(LoadedDb { db: std::sync::Arc::new(db), failures });
     let mut g = db_cache().write().unwrap_or_else(|e| e.into_inner());
@@ -621,7 +585,7 @@ pub fn search_blocks(
     query: String,
     limit: Option<usize>,
 ) -> Result<Vec<BlockHitDto>, String> {
-    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
     Ok(crate::block_search::search(db, &query, limit.unwrap_or(200))
         .into_iter()
@@ -641,7 +605,7 @@ pub fn search_blocks(
 /// 列出方块库中的全部版本
 #[tauri::command]
 pub fn list_block_versions(app: tauri::AppHandle) -> Result<Vec<VersionOptionDto>, String> {
-    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
     Ok(crate::block_search::version_options(db)
         .into_iter()
@@ -662,7 +626,7 @@ pub fn preview_replace(
     schematic_path: String,
     rule: ReplaceRuleDto,
 ) -> Result<ReplaceOutcomeDto, String> {
-    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
     let sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
     let summary = sc.summary();
@@ -684,7 +648,7 @@ pub fn apply_replace(
     schematic_path: String,
     rule: ReplaceRuleDto,
 ) -> Result<ReplaceOutcomeDto, String> {
-    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
     let mut sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
     let summary = sc.summary();
@@ -721,7 +685,7 @@ pub fn apply_replace(
 /// 列出可作为转换目标的版本
 #[tauri::command]
 pub fn convert_targets(app: tauri::AppHandle, schematic_path: String) -> Result<Vec<ConvertTargetDto>, String> {
-    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
     let sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
     let dv = sc.summary().data_version;
@@ -738,7 +702,7 @@ pub fn analyze_conversion(
     schematic_path: String,
     target_index: usize,
 ) -> Result<Vec<ConvertItemDto>, String> {
-    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
     let sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
     Ok(crate::convert::analyze(&sc, db, target_index)
@@ -760,7 +724,7 @@ pub fn apply_conversion(
     target_index: usize,
     items: Vec<ConvertItemDto>,
 ) -> Result<ConvertOutcomeDto, String> {
-    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
     let mut sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
 
@@ -935,7 +899,7 @@ pub fn read_operation_log(max_lines: Option<usize>) -> Vec<String> {
 /// 前端不必知道它在哪个目录，也不必关心各平台的资源布局差异。
 #[tauri::command]
 pub fn build_scene(app: tauri::AppHandle, schematic_path: String) -> Result<SceneDto, String> {
-    let loaded = open_db(Some(&app)).map_err(|e| e.to_string())?;
+    let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
     crate::scene::build_with_db(&schematic_path, db)
         .map(SceneDto::from)
@@ -1043,78 +1007,6 @@ mod tests {
         ));
         std::fs::create_dir_all(&d).expect("建临时目录失败");
         d
-    }
-
-    /// 开发环境下必须能找到实体贴图库。
-    ///
-    /// 三级回退里只有第三级（源码树）在测试进程里可用——没有 AppHandle，
-    /// 也没有 exe 同级的 res/。这条同时守住两件事：回退链本身没写错，
-    /// 以及 `resources/entities.dat.z` 确实随仓库分发（漏提交时这里会失败）。
-    #[test]
-    fn entity_archive_is_found_from_the_source_tree() {
-        let p = entity_archive(None).expect(
-            "源码树里应能找到 resources/entities.dat.z；\
-             缺这个文件说明实体贴图库没有随仓库分发",
-        );
-        assert!(p.is_file(), "{} 不是文件", p.display());
-        assert_eq!(
-            p.file_name().unwrap().to_string_lossy(),
-            "entities.dat.z",
-            "回退链应指向实体贴图库，而不是别的文件"
-        );
-
-        // 载入一次，确认这个文件真的能被解析（而不只是存在）
-        let db = crate::entitydb::EntityDb::load(&p).expect("随仓库分发的包应能解析");
-        assert!(!db.textures.is_empty(), "包里的贴图不应为空");
-        assert!(!db.versions.is_empty(), "包里应含版本表");
-    }
-
-    /// 实体贴图库里必须能查到实体渲染要用的那几类贴图。
-    ///
-    /// 覆盖本阶段真正会用到的方块实体：箱子、潜影盒、床、旗帜、告示牌、
-    /// 装饰陶罐、钟、 conduit、头颅。缺其中任何一类，对应方块在预览里就会没贴图。
-    ///
-    /// 注意旗帜：1.20.1 里**没有**按颜色分的旗帜贴图，只有一张灰度的
-    /// `entity/banner/base`，颜色靠染色（tint）得到。断言按真实存在的路径写，
-    /// 写成 `entity/banner/white` 会失败——而那条路径并不该存在。
-    #[test]
-    fn entity_archive_covers_the_block_entities_we_render() {
-        let p = entity_archive(None).expect("应能找到实体贴图库");
-        let db = crate::entitydb::EntityDb::load(&p).expect("解析失败");
-        // 用 1.20.1（dataVersion 3465），这是最常用的版本
-        let ver = db
-            .version_for(3465)
-            .expect("实体贴图库应含 dataVersion 3465");
-
-        for path in [
-            "entity/chest/normal",
-            "entity/chest/ender",
-            "entity/chest/trapped",
-            "entity/chest/christmas",
-            "entity/shulker/shulker",
-            "entity/shulker/shulker_white",
-            "entity/bed/white",
-            "entity/bed/red",
-            "entity/banner/base",
-            "entity/banner_base",
-            "entity/signs/oak",
-            "entity/signs/bamboo",
-            "entity/decorated_pot/decorated_pot_base",
-            "entity/decorated_pot/decorated_pot_side",
-            "entity/bell/bell_body",
-            "entity/conduit/base",
-        ] {
-            let got = db.pixels_of(ver, path);
-            assert!(
-                got.is_some(),
-                "1.20.1 应含 {path}（方块实体渲染要用）"
-            );
-        }
-
-        // 反向确认：不存在的路径必须查不到，避免上面的断言被「任何路径都返回
-        // 一张图」这种错误实现蒙混过去
-        assert!(db.pixels_of(ver, "entity/banner/white").is_none());
-        assert!(db.pixels_of(ver, "entity/not_a_real_thing").is_none());
     }
 
     #[test]
@@ -1534,8 +1426,8 @@ mod tests {
         }
     }
 
-    /// 这是本轮的核心验证：导入的包必须真正参与方块解析。
-    /// 此前 open_db 只加载内置库，导入功能对渲染与检索毫无影响。
+    /// 这是本轮的核心验证：导入的包必须真正参与方块解析，
+    /// 而不是只写进了清单。
     #[test]
     fn enabled_pack_is_merged_and_its_block_becomes_findable() {
         let dir = tmp("merge_enabled");
@@ -1860,7 +1752,7 @@ fn write_manifest(entries: &[crate::pack_registry::PackEntry]) -> AppResult<()> 
 
 /// 列出已导入的资源包
 #[tauri::command]
-pub fn list_packs() -> Result<PackListDto, String> {
+pub fn list_packs(app: tauri::AppHandle) -> Result<PackListDto, String> {
     let (entries, skipped) = read_manifest().map_err(|e| e.to_string())?;
     let dir = packs_dir();
     let packs = entries
@@ -1886,10 +1778,10 @@ pub fn list_packs() -> Result<PackListDto, String> {
             }
         })
         .collect();
-    // 取一次方块库：载入失败的原因由它记录。若因内置库缺失而整体失败，
-    // 那不属「资源包载入失败」，不应混进这个列表——list_packs 本身
+    // 取一次方块库：载入失败的原因由它记录。若库整体不可用（如清单
+    // 损坏），那不属「资源包载入失败」，不应混进这个列表——list_packs 本身
     // 仍应能列出清单，否则用户连自己导入过什么都看不到。
-    let load_failures = match open_db(None) {
+    let load_failures = match open_db(&app) {
         Ok(loaded) => loaded
             .failures
             .iter()
@@ -1924,7 +1816,7 @@ pub fn import_jar(
     let kind = crate::pack_registry::PackKind::from_i32(kind)
         .ok_or_else(|| format!("不支持的类型 {kind}（只接受 1=MC 版本包、2=模组包）"))?;
     if kind == crate::pack_registry::PackKind::Builtin {
-        return Err("内置基础库随程序分发，不能通过导入生成".into());
+        return Err("基础库在「版本库」里构建，不能通过导入生成".into());
     }
     let src = Path::new(&jar_path);
     if !src.is_file() {
@@ -2343,19 +2235,24 @@ fn write_ui_state_file(path: &Path, json: &str) -> Result<(), String> {
         .map_err(|e| format!("替换 {} 失败：{e}", path.display()))
 }
 
-/// 界面状态的存放路径。
+/// 应用配置目录。
 ///
 /// 放在系统的应用配置目录（`%APPDATA%\<bundle-id>` 等）而不是程序目录：
 /// 程序可能装在 Program Files 这类只读位置，而「记住界面」失败不该影响使用。
 /// 用 Tauri 核心的 PathResolver 取，不需要额外插件。
-fn ui_state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+fn config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_config_dir()
         .map_err(|e| format!("无法定位配置目录：{e}"))?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("无法创建配置目录 {}：{e}", dir.display()))?;
-    Ok(dir.join(UI_STATE_FILE))
+    Ok(dir)
+}
+
+/// 界面状态的存放路径。
+fn ui_state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(config_dir(app)?.join(UI_STATE_FILE))
 }
 
 /// 读取上次保存的界面状态；从未保存过时返回 None（不是错误）。
@@ -2368,5 +2265,284 @@ pub fn load_ui_state(app: tauri::AppHandle) -> Result<Option<String>, String> {
 #[tauri::command]
 pub fn save_ui_state(app: tauri::AppHandle, json: String) -> Result<(), String> {
     write_ui_state_file(&ui_state_path(&app)?, &json)
+}
+
+// ---------------------------------------------------------------- 版本库（基础库补全）
+
+/// 「版本库」界面状态文件名。内容是前端自己解释的 JSON
+/// （记住上次的目录与下载来源），与界面形态状态分文件存放。
+const SETUP_STATE_FILE: &str = "setup-state.json";
+
+/// 进度事件名，前端 `listen` 用。
+const BASE_SETUP_PROGRESS_EVENT: &str = "base-setup-progress";
+
+/// 「版本库」进度事件的有效载荷。
+///
+/// 阶段切换（下载→构建）本身也是信息：下载有字节数可画进度条，
+/// 构建没有总量可报，只能靠阶段名让前端切换成不定进度形态。
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BaseSetupProgress {
+    id: String,
+    /// download / build / done
+    stage: &'static str,
+    received: u64,
+    total: u64,
+    /// 该版本失败时的原因；正常进展时为空串
+    error: String,
+}
+
+fn emit_setup_progress(app: &tauri::AppHandle, p: BaseSetupProgress) {
+    use tauri::Emitter;
+    // 发送失败只说明窗口已关闭或前端还没监听，本身不该中断补版本流程
+    if let Err(e) = app.emit(BASE_SETUP_PROGRESS_EVENT, p) {
+        eprintln!("发送版本库进度事件失败：{e}");
+    }
+}
+
+/// 基础库的当前状态：已就绪的版本清单与实体贴图库是否可用。
+///
+/// 前端据此决定要不要自动弹出「版本库」界面——库里一个版本都没有时
+/// 方块检索和 3D 预览都没有数据可显示，必须先引导用户补版本。
+#[tauri::command]
+pub fn base_db_status(app: tauri::AppHandle) -> Result<BaseDbStatusDto, String> {
+    let dir = crate::base_db::base_blocks_dir(&app).map_err(|e| e.to_string())?;
+    let (base, _failures) = crate::base_db::load_base_block_db(&dir).map_err(|e| e.to_string())?;
+    // 单个包损坏不在这里上报：打开投影时 open_db 会把载入失败逐个带到
+    // 资源包界面；状态查询只回答「哪些版本就绪」，避免一个坏文件把整个
+    // 版本列表都拖成错误。
+    let versions = base
+        .versions
+        .iter()
+        .map(|v| BaseVersionDto {
+            name: v.name.clone(),
+            data_version: v.data_version,
+        })
+        .collect();
+    let entity_available = open_entity_db(&app).is_some();
+    Ok(BaseDbStatusDto {
+        versions,
+        entity_available,
+        supported: crate::base_db::SUPPORTED_RELEASES
+            .iter()
+            .map(|(dv, id)| BaseVersionDto {
+                name: id.to_string(),
+                data_version: *dv,
+            })
+            .collect(),
+    })
+}
+
+/// 官方启动器的默认 .minecraft 路径；目录不存在时返回 None。
+///
+/// 只认真实存在的目录：给前端预填一个不存在的路径，用户一点「扫描」
+/// 就是错误，不如让输入框空着等手选。
+#[tauri::command]
+pub fn default_minecraft_dir() -> Option<String> {
+    crate::base_db::default_minecraft_dir()
+        .filter(|p| p.is_dir())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// 扫描 .minecraft 目录里已安装的版本（只读）。
+///
+/// 结果按数据版本升序；读不出版本信息的 jar 逐条带原因返回，
+/// 由前端决定怎么展示。
+#[tauri::command]
+pub fn scan_minecraft(dir: String) -> Result<McScanDto, String> {
+    let scan = crate::base_db::scan_minecraft(Path::new(&dir)).map_err(|e| e.to_string())?;
+    Ok(McScanDto {
+        versions: scan
+            .versions
+            .into_iter()
+            .map(|v| McVersionDto {
+                id: v.id,
+                data_version: v.data_version,
+                jar_path: v.jar_path.to_string_lossy().into_owned(),
+            })
+            .collect(),
+        warnings: scan.warnings,
+    })
+}
+
+/// 准备基础库版本：有本地 jar 的直接用，没有的按来源下载，
+/// 然后构建方块库单版本包、把实体贴图并入贴图库。
+///
+/// 下载与构建都是耗时的 IO/CPU 操作，放进阻塞线程池，
+/// 不占用异步运行时；进度经 `base-setup-progress` 事件逐版本汇报。
+#[tauri::command]
+pub async fn setup_add_versions(
+    app: tauri::AppHandle,
+    source: SetupSource,
+    versions: Vec<SetupVersionDto>,
+) -> Result<SetupOutcomeDto, String> {
+    tauri::async_runtime::spawn_blocking(move || SetupOutcomeDto {
+        outcomes: run_setup(&app, source, versions),
+    })
+    .await
+    .map_err(|e| format!("版本库任务执行失败：{e}"))
+}
+
+/// 逐版本执行补库，一个版本失败不影响其它版本。
+///
+/// 下载失败往往只影响单个版本（网络抖动、该版本在清单里不存在），
+/// 整批中止会让已完成的版本也显得「没动静」，因此逐版本记结果。
+fn run_setup(
+    app: &tauri::AppHandle,
+    source: SetupSource,
+    versions: Vec<SetupVersionDto>,
+) -> Vec<SetupVersionOutcomeDto> {
+    // 全局前提失败（数据目录不可写等）对每个版本都是一样的，
+    // 逐版本如实上报比只弹一个笼统错误更能说明影响面
+    let dirs = (|| {
+        AppResult::Ok((
+            crate::base_db::base_blocks_dir(app)?,
+            crate::base_db::base_jars_dir(app)?,
+            crate::base_db::base_entities_path(app)?,
+        ))
+    })();
+    let (blocks_dir, jars_dir, entities_path) = match dirs {
+        Ok(d) => d,
+        Err(e) => {
+            let msg = e.to_string();
+            return versions
+                .iter()
+                .map(|v| SetupVersionOutcomeDto {
+                    id: v.id.clone(),
+                    ok: false,
+                    error: msg.clone(),
+                })
+                .collect();
+        }
+    };
+
+    // 官方接口的清单只拉一次：同批版本共用，避免每版本重复下载几 MB 清单。
+    // 清单拉不到时，需要下载的版本逐个报同一个错，有本地 jar 的照常处理。
+    let need_download = versions.iter().any(|v| v.jar_path.is_none());
+    let manifest: Result<Option<String>, String> =
+        if need_download && matches!(source, SetupSource::Official) {
+            crate::mc_download::fetch_manifest()
+                .map(Some)
+                .map_err(|e| e.to_string())
+        } else {
+            Ok(None)
+        };
+
+    let mut outcomes = Vec::with_capacity(versions.len());
+    for v in &versions {
+        let r = match &manifest {
+            Ok(m) => setup_one(
+                app,
+                v,
+                m.as_deref(),
+                &blocks_dir,
+                &jars_dir,
+                &entities_path,
+            ),
+            Err(e) if v.jar_path.is_none() => Err(AppError::Parse(e.clone())),
+            // 有本地 jar 的版本不受清单失败影响
+            Err(_) => setup_one(app, v, None, &blocks_dir, &jars_dir, &entities_path),
+        };
+        outcomes.push(match r {
+            Ok(()) => SetupVersionOutcomeDto {
+                id: v.id.clone(),
+                ok: true,
+                error: String::new(),
+            },
+            Err(e) => SetupVersionOutcomeDto {
+                id: v.id.clone(),
+                ok: false,
+                error: e.to_string(),
+            },
+        });
+    }
+    // 库内容变了，清掉缓存让下一次打开投影按新库重建
+    invalidate_db();
+    invalidate_entity_db();
+    outcomes
+}
+
+/// 准备单个版本：取 jar（本地或下载）→ 构建方块包 → 并入实体贴图。
+fn setup_one(
+    app: &tauri::AppHandle,
+    v: &SetupVersionDto,
+    manifest: Option<&str>,
+    blocks_dir: &Path,
+    jars_dir: &Path,
+    entities_path: &Path,
+) -> AppResult<()> {
+    let jar_path = match &v.jar_path {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let dest = jars_dir.join(format!("{}.jar", v.id));
+            // 改名落盘的 jar 一定完整，已存在就直接复用
+            if !dest.is_file() {
+                let url = match manifest {
+                    Some(m) => crate::mc_download::official_client_url(m, &v.id)?,
+                    None => crate::mc_download::bmcl_client_url(&v.id),
+                };
+                let id = v.id.clone();
+                crate::mc_download::download_to(&url, &dest, &mut |received, total| {
+                    emit_setup_progress(
+                        app,
+                        BaseSetupProgress {
+                            id: id.clone(),
+                            stage: "download",
+                            received,
+                            total,
+                            error: String::new(),
+                        },
+                    );
+                })?;
+            }
+            dest
+        }
+    };
+
+    emit_setup_progress(
+        app,
+        BaseSetupProgress {
+            id: v.id.clone(),
+            stage: "build",
+            received: 0,
+            total: 0,
+            error: String::new(),
+        },
+    );
+    let out = blocks_dir.join(format!("{}-{}.dat.z", v.data_version, v.id));
+    crate::jar_file::build_pack_to(
+        &jar_path.to_string_lossy(),
+        &out.to_string_lossy(),
+        &v.id,
+        v.data_version,
+        false,
+    )?;
+
+    let jar = crate::jar_file::JarFile::open(&jar_path.to_string_lossy())?;
+    crate::entitydb_write::add_version(entities_path, &jar, v.data_version, &v.id)?;
+
+    emit_setup_progress(
+        app,
+        BaseSetupProgress {
+            id: v.id.clone(),
+            stage: "done",
+            received: 0,
+            total: 0,
+            error: String::new(),
+        },
+    );
+    Ok(())
+}
+
+/// 读取「版本库」界面状态；从未保存过时返回 None（不是错误）。
+#[tauri::command]
+pub fn load_setup_state(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    read_ui_state_file(&config_dir(&app)?.join(SETUP_STATE_FILE))
+}
+
+/// 保存「版本库」界面状态。
+#[tauri::command]
+pub fn save_setup_state(app: tauri::AppHandle, json: String) -> Result<(), String> {
+    write_ui_state_file(&config_dir(&app)?.join(SETUP_STATE_FILE), &json)
 }
 

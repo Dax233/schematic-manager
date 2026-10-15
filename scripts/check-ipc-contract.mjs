@@ -41,8 +41,9 @@ function toLowerCamel(snake) {
 /** 从 commands.rs 提取：命令名 -> { params: [{name, optional, injected}] } */
 function parseRustCommands(src) {
   const out = new Map();
-  // 匹配 `pub fn name(` 到配对的 `)` 之前的内容（参数表可能跨多行）
-  const re = /pub fn\s+([a-z0-9_]+)\s*\(([\s\S]*?)\)\s*->/g;
+  // 匹配 `pub fn name(`（含 `pub async fn`）到配对的 `)` 之前的内容
+  //（参数表可能跨多行）
+  const re = /pub (?:async )?fn\s+([a-z0-9_]+)\s*\(([\s\S]*?)\)\s*->/g;
   let m;
   while ((m = re.exec(src)) !== null) {
     const [, name, rawParams] = m;

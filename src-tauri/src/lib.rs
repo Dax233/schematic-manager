@@ -1,4 +1,5 @@
 mod backup;
+mod base_db;
 mod block_icon;
 mod block_model;
 mod block_search;
@@ -11,12 +12,14 @@ mod convert;
 mod dto;
 mod duplicate;
 mod entitydb;
+mod entitydb_write;
 mod error;
 mod file_ops;
 mod geometry;
 mod jar_file;
 mod jar_index;
 mod litematic;
+mod mc_download;
 mod mcver;
 mod mesh;
 mod model_pack;
@@ -87,6 +90,12 @@ pub fn run() {
             commands::entity_texture_pixels,
             commands::load_ui_state,
             commands::save_ui_state,
+            commands::base_db_status,
+            commands::default_minecraft_dir,
+            commands::scan_minecraft,
+            commands::setup_add_versions,
+            commands::load_setup_state,
+            commands::save_setup_state,
         ])
         .run(tauri::generate_context!());
 

@@ -15,7 +15,8 @@ use crate::error::{AppError, AppResult};
 /// 资源包类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackKind {
-    /// 内置基础库（随程序分发，清单里不出现）
+    /// 内置基础库。基础库不经过这份清单管理（见 base_db 模块），
+    /// 清单里不应出现此值；保留它只为解析时不产生歧义
     Builtin = 0,
     /// Minecraft 版本包：由客户端 jar 导入，dataVersion 取自 jar 内
     Version = 1,

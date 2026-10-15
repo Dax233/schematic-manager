@@ -496,6 +496,83 @@ pub struct PackListDto {
     pub skipped: Vec<String>,
 }
 
+/// 基础库里一个已就绪的版本（方块库 + 该版本是否带实体贴图由整体开关看）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaseVersionDto {
+    pub name: String,
+    pub data_version: i32,
+}
+
+/// 基础库的当前状态，前端据此决定是否弹出「版本库」界面
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaseDbStatusDto {
+    /// 已就绪的版本，按数据版本升序
+    pub versions: Vec<BaseVersionDto>,
+    /// 实体贴图库是否已生成（还没有任何版本时就是没有）
+    pub entity_available: bool,
+    /// 支持的全部版本。「支持哪些」只有后端这张表说了算，前端拿它
+    /// 对照就绪/已装来列缺失项，不在前端另抄一份
+    pub supported: Vec<BaseVersionDto>,
+}
+
+/// 扫描 .minecraft 得到的已装版本
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McVersionDto {
+    pub id: String,
+    pub data_version: i32,
+    pub jar_path: String,
+}
+
+/// .minecraft 扫描结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McScanDto {
+    pub versions: Vec<McVersionDto>,
+    /// 存在客户端 jar 但读不出版本信息的目录；必须逐条带回原因，
+    /// 否则「明明装了却不显示」无从解释
+    pub warnings: Vec<String>,
+}
+
+/// 版本下载来源。官方 API 在国内常不通，BMCL 是镜像，因此两个都要留。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SetupSource {
+    Official,
+    Bmcl,
+}
+
+/// 「版本库」里要准备的一个版本。
+///
+/// `jar_path` 为空表示需要按 source 下载；有值表示直接用这个本地 jar。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupVersionDto {
+    pub id: String,
+    pub data_version: i32,
+    pub jar_path: Option<String>,
+}
+
+/// 单个版本的准备结果。逐版本回报而不是整批成败：
+/// 一个版本下载失败不该让其它版本白跑一遍。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupVersionOutcomeDto {
+    pub id: String,
+    pub ok: bool,
+    /// 失败原因；成功时为空串
+    pub error: String,
+}
+
+/// 一批版本的准备结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupOutcomeDto {
+    pub outcomes: Vec<SetupVersionOutcomeDto>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

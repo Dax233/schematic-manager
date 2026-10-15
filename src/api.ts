@@ -1,10 +1,14 @@
 // Rust 命令的类型化封装，避免各组件直接拼命令名与参数。
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type {
   AnalysisResult,
   BackupEntry,
+  BaseDbStatus,
+  BaseSetupProgress,
   BlockHit,
   BlockIcon,
+  McScan,
   SaveOutcome,
   ScanResult,
   ConvertItem,
@@ -22,6 +26,9 @@ import type {
   RenameOutcome,
   SceneData,
   SchematicSummary,
+  SetupOutcome,
+  SetupSource,
+  SetupVersion,
   VersionOption,
 } from "./types";
 
@@ -53,7 +60,7 @@ export function saveMetadata(
 
 /**
  * 组装前端渲染所需的场景。
- * 内置方块库的路径由后端解析，前端只提供投影文件路径。
+ * 基础库由后端按「版本库」准备的内容解析，前端只提供投影文件路径。
  */
 export function buildScene(schematicPath: string): Promise<SceneData> {
   return invoke<SceneData>("build_scene", { schematicPath });
@@ -262,4 +269,49 @@ export function loadUiState(): Promise<string | null> {
 /** 保存界面状态（一段前端解释的 JSON） */
 export function saveUiState(json: string): Promise<void> {
   return invoke<void>("save_ui_state", { json });
+}
+
+// ---------------------------------------------------------------- 版本库
+
+/** 基础库的当前状态（已就绪版本、实体贴图库是否可用） */
+export function baseDbStatus(): Promise<BaseDbStatus> {
+  return invoke<BaseDbStatus>("base_db_status");
+}
+
+/** 官方启动器的默认 .minecraft 路径；没有安装过官方启动器时为 null */
+export function defaultMinecraftDir(): Promise<string | null> {
+  return invoke<string | null>("default_minecraft_dir");
+}
+
+/** 扫描 .minecraft 目录里已安装的版本（只读） */
+export function scanMinecraft(dir: string): Promise<McScan> {
+  return invoke<McScan>("scan_minecraft", { dir });
+}
+
+/**
+ * 准备基础库版本：有本地 jar 的直接用，没有的按来源下载后构建。
+ * 单个版本失败不影响其它版本，逐版本结果在返回值里。
+ */
+export function setupAddVersions(
+  source: SetupSource,
+  versions: SetupVersion[],
+): Promise<SetupOutcome> {
+  return invoke<SetupOutcome>("setup_add_versions", { source, versions });
+}
+
+/** 读取「版本库」界面状态；从未保存过时为 null */
+export function loadSetupState(): Promise<string | null> {
+  return invoke<string | null>("load_setup_state");
+}
+
+/** 保存「版本库」界面状态（目录与下载来源，一段前端解释的 JSON） */
+export function saveSetupState(json: string): Promise<void> {
+  return invoke<void>("save_setup_state", { json });
+}
+
+/** 订阅「版本库」进度事件；返回取消订阅函数 */
+export function onBaseSetupProgress(
+  handler: (p: BaseSetupProgress) => void,
+): Promise<() => void> {
+  return listen<BaseSetupProgress>("base-setup-progress", (e) => handler(e.payload));
 }

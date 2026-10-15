@@ -90,7 +90,8 @@
 
 - `src/` —— Vue 前端
 - `src-tauri/` —— Rust 后端
-  - `src-tauri/resources/blocks.dat.z` —— 内置方块库（zlib 压缩，约 1.6 MB）
+  - 方块库与实体贴图库不随包分发：首次运行时由「版本库」界面引导定位本机
+    `.minecraft` 或经官方/BMCL API 下载客户端 jar，在 app 数据目录生成基础库
   - `src-tauri/tests/data/` —— 测试用的真实 `.litematic` 样本
 - `legacy-cpp/` —— 原有的 Windows 专用 C++ 实现，**仅作参考**。
   其中的 `.litematic` 解析、NBT 位打包、ZIP/PNG 解码、多版本方块库烘焙等

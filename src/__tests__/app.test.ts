@@ -28,6 +28,9 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   save: vi.fn().mockResolvedValue(null),
 }));
 vi.mock("@tauri-apps/plugin-fs", () => ({ writeFile: vi.fn() }));
+// 版本库补库时订阅进度事件；jsdom 里没有 Tauri 事件系统，
+// 给个「订阅成功、永不推送」的替身
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 
 // SceneViewer 依赖 WebGL，jsdom 没有。挂载测试关心的是外壳界面，
 // 因此用空组件替代，避免把 WebGL 缺失误判成界面故障。
@@ -153,6 +156,24 @@ function stubInvoke(overrides: Record<string, unknown> = {}) {
         };
       case "list_block_versions":
         return [];
+      case "base_db_status":
+        // 库里为空会触发版本库弹窗自动打开，污染所有不相关用例；
+        // 默认给「已有版本」，需要测空库引导的用例自己覆盖
+        return {
+          versions: [{ name: "1.20.1", dataVersion: 3465 }],
+          entityAvailable: true,
+          supported: [{ name: "1.20.1", dataVersion: 3465 }],
+        };
+      case "load_setup_state":
+        return null;
+      case "save_setup_state":
+        return undefined;
+      case "default_minecraft_dir":
+        return null;
+      case "scan_minecraft":
+        return { versions: [], warnings: [] };
+      case "setup_add_versions":
+        return { outcomes: [] };
       case "list_packs":
         // 返回 PackListDto（后端类型），不是数组：App.vue 打开资源包面板时
         // 立刻读 r.packs / r.skipped / r.loadFailures，给数组会在
@@ -2237,5 +2258,101 @@ describe("资源包管理", () => {
     expect(call, "应调用 open_directory").toBeTruthy();
     expect(call![1]).toEqual({ path: "C:/app/packs" });
     w.unmount();
+  });
+});
+
+/** 版本库：空库时的启动引导、扫描后勾选、补库时把本地 jar 一起交上去 */
+describe("版本库", () => {
+  /** 后端支持两个版本，其中 1.20.1 已就绪 */
+  const supported = [
+    { name: "1.20.1", dataVersion: 3465 },
+    { name: "1.21", dataVersion: 3953 },
+  ];
+
+  /** 在弹窗里按文字找按钮 */
+  function bodyButton(label: string): HTMLElement | undefined {
+    return [...document.querySelectorAll("button")].find((b) =>
+      (b.textContent ?? "").includes(label),
+    ) as HTMLElement | undefined;
+  }
+
+  it("基础库为空时启动就弹出「版本库」", async () => {
+    stubInvoke({
+      base_db_status: { versions: [], entityAvailable: false, supported },
+      default_minecraft_dir: "C:/Users/x/AppData/Roaming/.minecraft",
+      scan_minecraft: { versions: [], warnings: [] },
+    });
+    const w = mountApp();
+    await flushPromises();
+
+    // 断言弹窗里独有的控件，而不是「版本库」这四个字——工具栏上那个
+    // 按钮本身就叫「版本库」，拿它当中文断言会让用例永远通过
+    const start = bodyButton("准备勾选的版本");
+    expect(start, "应自动弹出引导界面").toBeTruthy();
+    const text = document.body.textContent ?? "";
+    expect(text, "应列出缺失的版本").toContain("1.21");
+    expect(text, "应标出这些版本需要下载").toContain("需下载");
+    w.unmount();
+  });
+
+  it("基础库就绪时启动不打扰用户", async () => {
+    stubInvoke({
+      base_db_status: { versions: supported, entityAvailable: true, supported },
+    });
+    const w = mountApp();
+    await flushPromises();
+
+    const opened = [...document.querySelectorAll("button")].some(
+      (b) => (b.textContent ?? "").includes("准备勾选的版本"),
+    );
+    expect(opened, "库已就绪时不该弹出补库界面").toBe(false);
+    w.unmount();
+  });
+
+  it("默认只勾本机已装的版本，联网下载的交给用户选", async () => {
+    stubInvoke({
+      base_db_status: { versions: [], entityAvailable: false, supported },
+      default_minecraft_dir: "C:/mc",
+      scan_minecraft: {
+        versions: [{ id: "1.20.1", dataVersion: 3465, jarPath: "C:/mc/1.20.1/1.20.1.jar" }],
+        warnings: [],
+      },
+      setup_add_versions: { outcomes: [{ id: "1.20.1", ok: true, error: "" }] },
+    });
+    const w = mountApp();
+    await flushPromises();
+
+    const text = document.body.textContent ?? "";
+    expect(text, "本机已装的版本应标出来").toContain("本机已装");
+
+    // 1.21 本机没有，默认不勾：勾上就是几十 MB 下载，得用户自己点头
+    let btn = bodyButton("准备勾选的版本");
+    expect(btn!.textContent, "默认只勾本机已装的那一个").toContain("（1）");
+    w.unmount();
+
+    stubInvoke({
+      base_db_status: { versions: [], entityAvailable: false, supported },
+      default_minecraft_dir: "C:/mc",
+      scan_minecraft: {
+        versions: [{ id: "1.20.1", dataVersion: 3465, jarPath: "C:/mc/1.20.1/1.20.1.jar" }],
+        warnings: [],
+      },
+      setup_add_versions: { outcomes: [{ id: "1.20.1", ok: true, error: "" }] },
+    });
+    const w2 = mountApp();
+    await flushPromises();
+
+    btn = bodyButton("准备勾选的版本");
+    btn!.click();
+    await flushPromises();
+
+    const call = mockInvoke.mock.calls.find((c) => c[0] === "setup_add_versions");
+    expect(call, "应调用 setup_add_versions").toBeTruthy();
+    const args = call![1] as { source: string; versions: unknown[] };
+    expect(args.source, "默认用官方接口").toBe("official");
+    expect(args.versions, "只把本机已装的版本交上去，不替用户决定下载").toEqual([
+      { id: "1.20.1", dataVersion: 3465, jarPath: "C:/mc/1.20.1/1.20.1.jar" },
+    ]);
+    w2.unmount();
   });
 });

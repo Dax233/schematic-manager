@@ -820,18 +820,20 @@ mod tests {
     ///
     /// 状态取自投影调色板而不是手写列表：手写的状态串多半在该版本里
     /// 根本不是合法变体，那样测到的是自己的错，而不是真实数据。
+    ///
+    /// 方块库不再随包分发，用 SM_ICON_DB 指向一份（通常是「版本库」生成的
+    /// 单版本包），并与投影的 dataVersion 对应。
     #[test]
-    #[ignore = "需设置 SM_ICON_SRC 指向真实投影、SM_ICON_OUT 指定输出目录"]
+    #[ignore = "需设置 SM_ICON_SRC 指向真实投影、SM_ICON_OUT 指定输出目录、SM_ICON_DB 指定方块库"]
     fn dump_real_block_icons_for_visual_check() {
         use crate::litematic::Schematic;
 
         let src = std::env::var("SM_ICON_SRC").expect("需设置 SM_ICON_SRC 指向真实投影文件");
         let out = std::env::var("SM_ICON_OUT").expect("需设置 SM_ICON_OUT 指向输出目录");
-        let db = crate::blockdb::BlockDb::load(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/resources/blocks.dat.z"),
-            false,
-        )
-        .expect("内置方块库载入失败");
+        let db_path = std::env::var("SM_ICON_DB").expect(
+            "需设置 SM_ICON_DB 指向方块库文件（如 app 数据目录 base/blocks/ 下的单版本包）",
+        );
+        let db = crate::blockdb::BlockDb::load(&db_path, false).expect("方块库载入失败");
 
         let sc = Schematic::load(&src).expect("真实投影载入失败");
         let summary = sc.summary();

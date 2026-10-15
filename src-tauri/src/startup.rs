@@ -231,12 +231,12 @@ mod tests {
 
     #[test]
     fn unrelated_error_has_no_webview_hint() {
-        let b = build_body("找不到方块库 blocks.dat.z", "a.exe", None);
+        let b = build_body("磁盘写入失败：拒绝访问", "a.exe", None);
         assert!(
             !b.contains("WebView2"),
             "与界面无关的错误不应误导用户去删数据目录"
         );
-        assert!(b.contains("找不到方块库"), "应保留原始错误信息");
+        assert!(b.contains("磁盘写入失败"), "应保留原始错误信息");
     }
 
     #[test]

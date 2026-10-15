@@ -40,8 +40,8 @@ const {
     unmount-on-close
   >
     <div class="hint-dim" style="margin-bottom: 12px">
-      内置基础库已含 1.13.2 ~ 26.3 的贴图，通常无需手动导入。
-      只有在使用模组、或需要更新的正式版贴图时，才需要导入 jar。
+      基础库（在「版本库」里准备的版本）已含各正式版的贴图，通常无需
+      手动导入。只有在使用模组时，才需要导入 jar。
     </div>
 
     <a-space style="margin-bottom: 12px" wrap>

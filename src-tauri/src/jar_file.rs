@@ -136,7 +136,7 @@ pub fn build_pack_to(
     if let Some(parent) = Path::new(out_path).parent() {
         std::fs::create_dir_all(parent)?;
     }
-    // 资源包文件按 zlib 压缩（与内置 blocks.dat.z 一致），
+    // 资源包文件按 zlib 压缩（与基础库的单版本包一致），
     // 读取端 BlockDb::load 按魔数分派，两种容器都可读
     let packed = compress_zlib(&built.data)?;
     std::fs::write(out_path, &packed)?;
@@ -151,12 +151,17 @@ fn compress_zlib(data: &[u8]) -> AppResult<Vec<u8>> {
     Ok(e.finish()?)
 }
 
+// 造 zip / PNG 的辅助不只本文件的测试用：基础库扫描、实体贴图打包等
+// 测试同样需要造假 jar 与假贴图，经由此处对其它测试模块开放。
+#[cfg(test)]
+pub(crate) use tests::{make_png, make_zip};
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// 造一个最小 zip（stored，无需压缩）
-    fn make_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+    pub(crate) fn make_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut out: Vec<u8> = Vec::new();
         let mut central: Vec<u8> = Vec::new();
         let mut count = 0u16;
@@ -211,7 +216,7 @@ mod tests {
         out
     }
 
-    fn make_png(w: u32, h: u32, alpha: u8) -> Vec<u8> {
+    pub(crate) fn make_png(w: u32, h: u32, alpha: u8) -> Vec<u8> {
         fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], body: &[u8]) {
             out.extend_from_slice(&(body.len() as u32).to_be_bytes());
             out.extend_from_slice(kind);
@@ -488,8 +493,8 @@ mod tests {
     }
 
     #[test]
-    fn packed_output_is_zlib_like_builtin_db() {
-        // 产物与内置 blocks.dat.z 用同一种容器，读取端才能按同一路径读
+    fn packed_output_is_zlib() {
+        // 产物与基础库单版本包用同一种容器，读取端才能按同一路径读
         let png = make_png(1, 1, 255);
         let zip = make_zip(&[
             (

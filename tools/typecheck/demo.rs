@@ -76,7 +76,15 @@ fn main() {
 
     let repo = args.get(2).cloned().unwrap_or_else(|| ".".to_string());
     let sample = format!("{repo}/src-tauri/tests/data/28速单区块简单熔炉.litematic");
-    let dbz = format!("{repo}/src-tauri/resources/blocks.dat.z");
+    // 方块库不再随包分发：演示用 SM_DEMO_DB 指向一份，
+    // 通常是「版本库」在 app 数据目录下生成的单版本包
+    let dbz = match std::env::var("SM_DEMO_DB") {
+        Ok(v) => v,
+        Err(_) => {
+            out!("未设置 SM_DEMO_DB：请指向一份方块库 .dat.z（如「版本库」生成的单版本包）");
+            return;
+        }
+    };
 
     // 用 Cell 计数：check 会被多处借用为可变闭包，而后面还要读计数
     let pass = std::cell::Cell::new(0usize);
@@ -95,7 +103,7 @@ fn main() {
     out!("║  投影文件管理器 · Rust 核心进展演示                          ║");
     out!("╚══════════════════════════════════════════════════════════════╝");
     out!("");
-    out!("说明：以下全部使用真实数据（真实 .litematic 样本、真实 1.7MB 方块库），");
+    out!("说明：以下全部使用真实数据（真实 .litematic 样本、SM_DEMO_DB 指定的方块库），");
     out!("     只读取不修改。本程序与产品代码共用同一批源文件。");
     out!("");
 
@@ -147,7 +155,7 @@ fn main() {
     out!("");
 
     // ---- 2. 方块库加载 ----
-    out!("【2】真实方块库 blocks.dat 的加载");
+    out!("【2】方块库的加载（SM_DEMO_DB 指定）");
     let db_bytes = match std::fs::read(&dbz) {
         Ok(b) => b,
         Err(e) => {

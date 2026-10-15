@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn stained_glass_like_pixels_are_translucent() {
         // 16x16 里 191 个 alpha=163、其余 65 个 alpha=255，
-        // 与内置库 block/white_stained_glass 的实测分布一致
+        // 与基础库 block/white_stained_glass 的实测分布一致
         let mut px = Vec::with_capacity(16 * 16 * 4);
         for i in 0..16 * 16 {
             let a = if i < 191 { 163u8 } else { 255u8 };

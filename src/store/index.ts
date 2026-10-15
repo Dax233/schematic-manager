@@ -21,6 +21,7 @@ import { createBlockReplaceSlice } from "./blockReplace";
 import { createVersionConvertSlice } from "./versionConvert";
 import { createPacksSlice } from "./packs";
 import { createBackupsSlice } from "./backups";
+import { createSetupSlice } from "./setup";
 import { createUiStateSlice } from "./uiState";
 
 export interface AppStore
@@ -31,6 +32,7 @@ export interface AppStore
     ReturnType<typeof createVersionConvertSlice>,
     ReturnType<typeof createPacksSlice>,
     ReturnType<typeof createBackupsSlice>,
+    ReturnType<typeof createSetupSlice>,
     ReturnType<typeof createUiStateSlice> {}
 
 /**
@@ -50,6 +52,7 @@ export function createAppStore(): AppStore {
   Object.assign(s, createVersionConvertSlice(s));
   Object.assign(s, createPacksSlice());
   Object.assign(s, createBackupsSlice(s));
+  Object.assign(s, createSetupSlice());
   Object.assign(s, createUiStateSlice(s));
   return s;
 }

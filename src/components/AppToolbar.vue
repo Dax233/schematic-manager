@@ -25,6 +25,8 @@ const {
   openBackups,
   packOnOpen,
   openPacksPanel,
+  setupOnOpen,
+  openSetup,
 } = useAppStore();
 </script>
 
@@ -82,6 +84,7 @@ const {
     <a-button size="small" :loading="packOnOpen" @click="openPacksPanel">
       资源包管理
     </a-button>
+    <a-button size="small" :loading="setupOnOpen" @click="openSetup">版本库</a-button>
     <span class="preview__spacer" />
     <span class="hint-dim">
       共 {{ files.length }} 个投影<span v-if="searchText">，匹配 {{ filteredFiles.length }} 个</span>

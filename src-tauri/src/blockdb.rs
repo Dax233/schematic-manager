@@ -286,6 +286,21 @@ pub struct BlockDb {
 }
 
 impl BlockDb {
+    /// 不含任何版本的空库。
+    ///
+    /// 基础库按需构建：还没补任何版本时程序照常运行，只有具体到某个
+    /// 数据版本的查询才会报「不在方块库中」。
+    pub fn empty() -> Self {
+        BlockDb {
+            strings: Vec::new(),
+            langs: Vec::new(),
+            textures: Vec::new(),
+            models: Vec::new(),
+            versions: Vec::new(),
+            pixels: Vec::new(),
+        }
+    }
+
     /// 从已解压的字节解析。
     ///
     /// `is_overlay` 必须由调用方给出，不能从数据推测：叠加包与基础版本的
@@ -512,9 +527,9 @@ impl BlockDb {
 
     /// 从 pack 文件载入。
     ///
-    /// 随包分发的 blocks.dat.z 用 **zlib** 容器压缩（与 legacy-cpp 的
+    /// 库文件（.dat.z）用 **zlib** 容器压缩（与 legacy-cpp 的
     /// `uncompress` 一致），而 `.litematic` 用的是 gzip。两者容器不同，
-    /// 只按一种解压会让内置方块库在发布版整块不可用。
+    /// 只按一种解压会读不出库文件。
     /// 因此这里按魔数分派：gzip 用 gunzip、zlib 用 inflate_zlib，
     /// 都不是时按未压缩处理。
     ///
@@ -1045,73 +1060,6 @@ mod tests {
         assert!(e.contains("超出像素池"), "应报贴图范围越界：{e}");
     }
 
-    /// 随程序分发的内置方块库必须能正常载入。
-    ///
-    /// 这是全应用最关键的资源：它一旦损坏、容器不对或与读取端格式不兼容，
-    /// 所有投影都会显示不出方块与贴图，而且是在用户那里才暴露。
-    /// 此前没有任何测试读这份真实文件——测试都用手工构造的小样本，
-    /// 因此「构造出来的能读」并不等于「实际发布的那份能读」。
-    ///
-    /// 这里同时是校验规则的回归防线：读取端新增了「版本引用的语言表下标
-    /// 必须落在语言表池内」，若该规则对真实数据误报，这条测试会立刻失败。
-    #[test]
-    fn bundled_block_database_loads() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("resources")
-            .join("blocks.dat.z");
-        let db = BlockDb::load(path.to_str().unwrap(), false)
-            .unwrap_or_else(|e| panic!("内置方块库 {} 无法载入：{e}", path.display()));
-
-        assert!(!db.versions.is_empty(), "应含版本");
-        assert!(!db.textures.is_empty(), "应含贴图");
-        assert!(!db.models.is_empty(), "应含模型");
-        assert!(!db.pixels.is_empty(), "像素池不应为空");
-        assert!(!db.langs.is_empty(), "应含语言表池");
-
-        // 每个版本引用的语言表下标都必须落在池内。
-        //
-        // 注意不能断言「每个版本的 langs 都非空」：语言表可以是**空表**
-        // （打包时确实没有该版本的译名），那时下标合法但解析出来就是空的。
-        // 运行期新建的包正是这种情况（pack_build 会放一张空表）。
-        for (i, v) in db.versions.iter().enumerate() {
-            assert!(
-                (v.lang_idx as usize) < db.langs.len(),
-                "版本 {i}（{}）的语言表下标 {} 超出语言表数量 {}",
-                v.name,
-                v.lang_idx,
-                db.langs.len()
-            );
-        }
-
-        // 内置库必须真的带译名，否则界面全是英文标识符。
-        // 用行为断言而不是「条目数大于某个数」：直接看 display_name 是否
-        // 能把方块名翻成别的东西，这才是用户能感知的结果。
-        let translated = db.versions.iter().any(|v| {
-            v.blocks.iter().any(|b| {
-                let shown = v.display_name(&b.name);
-                !shown.is_empty() && shown != b.name
-            })
-        });
-        assert!(
-            translated,
-            "内置方块库应至少能把一个方块显示成译名，否则贴图与方块清单都会显示英文标识符"
-        );
-
-        // 方块与贴图的引用必须自洽：这是「能载入」之外的第二层保障
-        for (i, v) in db.versions.iter().enumerate() {
-            for b in &v.blocks {
-                for var in b.variants.iter().chain(b.multipart.iter()) {
-                    assert!(
-                        (var.model_idx as usize) < db.models.len(),
-                        "版本 {i} 的方块 {} 引用了不存在的模型 {}",
-                        b.name,
-                        var.model_idx
-                    );
-                }
-            }
-        }
-    }
-
     /// 负的 dataVersion 不等于「叠加包」。
     ///
     /// 打包脚本会把缺少 data_version 的**普通版本**记为 -1
@@ -1139,8 +1087,8 @@ mod tests {
 
     // ---- 容器格式分派 ----
 
-    /// 内置方块库用 zlib 容器（与 legacy-cpp 的 uncompress 一致），
-    /// 而 .litematic 用 gzip。两者容器不同，只按一种解压会让内置方块库
+    /// 方块库文件用 zlib 容器（与 legacy-cpp 的 uncompress 一致），
+    /// 而 .litematic 用 gzip。两者容器不同，只按一种解压会让方块库
     /// 在发布版整块不可用——这条测试正是为此存在。
     #[test]
     fn decompress_accepts_zlib_container() {
