@@ -66,3 +66,5 @@ _temp/
 __pycache__/
 *.pyc
 
+.ref/
+.dsh/
