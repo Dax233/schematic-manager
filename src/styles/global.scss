@@ -97,7 +97,7 @@ body,
 
 // 左侧目录栏：高度撑满 workbench，底部不留空白。
 //
-// 宽度由 App.vue 内联给出（sidebarWidth），因为用户可以拖动调整。
+// 宽度由 DirSidebar.vue 内联给出（sidebarWidth），因为用户可以拖动调整。
 // 这里只给收缩下限，避免窄窗口下把右侧挤没。
 .sidebar {
   flex: 0 0 auto;

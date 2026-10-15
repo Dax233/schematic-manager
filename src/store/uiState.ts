@@ -1,0 +1,236 @@
+/**
+ * 界面状态记忆域：把用户调过的界面形态（侧栏宽度、目录、列宽、
+ * 视角、亮度、导出尺寸、搜索词）持久化，下次启动时恢复。
+ *
+ * 这个域横跨几乎所有其他域（读它们的状态来收集、写它们的状态来恢复），
+ * 因此它最后被创建：注册顺序决定 onMounted 执行顺序，恢复必须发生在
+ * 菜单监听等挂载逻辑之后（见 store/index.ts 的装配顺序）。
+ * 依赖只声明本域用到的成员，避免类型上的循环引用（见 store/fileList.ts）。
+ */
+import { onBeforeUnmount, onMounted, watch } from "vue";
+import type { ComputedRef, Ref } from "vue";
+import { Message } from "@arco-design/web-vue";
+import { loadUiState, saveUiState, scanLitematics } from "../api";
+import { EXPORT_SIZES, VIEW_PRESETS } from "../render/scene3d";
+import type { SchematicSummary } from "../types";
+
+/** 会被记住的界面状态。
+ *
+ * 只记「用户调过的界面形态」，不记业务数据（备份、资源包等有自己的文件）。
+ * 版本号用于日后改结构时丢弃旧数据，而不是把不认识的字段硬套上去。
+ */
+interface UiState {
+  version: 1;
+  sidebarWidth: number;
+  /** 已添加的目录（顺序保持），下次启动自动重新扫描 */
+  dirs: string[];
+  /** 已勾选显示的目录；缺失时视为全部显示 */
+  enabledDirs?: string[];
+  /** 用户拖动表头调整过的列宽（dataIndex -> 像素宽度） */
+  columnWidths?: Record<string, number>;
+  activeView: string;
+  brightness: number;
+  exportSize: number;
+  searchText: string;
+}
+
+const UI_STATE_VERSION = 1;
+
+/** 界面状态域用到的其他域成员（循环引用回避见 fileList.ts）。
+ *
+ * 这个域的依赖面最宽——它要收集和恢复各域的界面形态。
+ */
+export interface UiStateDeps {
+  /** 侧栏宽度（composables/useSidebarResize） */
+  sidebarWidth: Ref<number>;
+  /** 侧栏宽度钳制（composables/useSidebarResize） */
+  clampSidebar: (w: number) => number;
+  /** 各目录的文件清单（fileList） */
+  dirItems: Ref<Record<string, SchematicSummary[]>>;
+  /** 已加载目录列表（fileList） */
+  loadedDirs: ComputedRef<string[]>;
+  /** 勾选显示的目录集合（fileList） */
+  enabledDirs: Ref<Set<string>>;
+  /** 文件表列宽（fileList） */
+  colWidths: Ref<Record<string, number>>;
+  /** 预览视角（scenePreview） */
+  activeView: Ref<string>;
+  /** 预览亮度（scenePreview） */
+  brightness: Ref<number>;
+  /** 预览导出尺寸（scenePreview） */
+  exportSize: Ref<number>;
+  /** 文件搜索词（fileList） */
+  searchText: Ref<string>;
+  /** 状态栏文本（fileList）；恢复完成后汇报目录数 */
+  status: Ref<string>;
+}
+
+export function createUiStateSlice(s: UiStateDeps) {
+  /** 把当前界面形态收集成可保存的对象 */
+  function collectUiState(): UiState {
+    return {
+      version: UI_STATE_VERSION,
+      sidebarWidth: s.sidebarWidth.value,
+      dirs: s.loadedDirs.value,
+      enabledDirs: Array.from(s.enabledDirs.value),
+      columnWidths: { ...s.colWidths.value },
+      activeView: s.activeView.value,
+      brightness: s.brightness.value,
+      exportSize: s.exportSize.value,
+      searchText: s.searchText.value,
+    };
+  }
+
+  let saveStateTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** 立即写出当前界面状态。
+   *
+   * 失败不是致命问题，但要留下线索：静默失败会让用户以为「记住了」，
+   * 下次启动发现设置全丢却无从判断。
+   */
+  async function writeUiState() {
+    try {
+      await saveUiState(JSON.stringify(collectUiState()));
+    } catch (e) {
+      console.warn("保存界面状态失败：", e);
+    }
+  }
+
+  /** 保存界面状态（合并短时间内的多次改动）。
+   *
+   * 用防抖：拖动分隔条会连续改动侧栏宽度，逐次写盘既无必要也拖慢拖动。
+   */
+  function persistUiState() {
+    if (saveStateTimer !== null) clearTimeout(saveStateTimer);
+    saveStateTimer = setTimeout(() => {
+      saveStateTimer = null;
+      void writeUiState();
+    }, 400);
+  }
+
+  /** 卸载时把防抖中的改动立刻写出。
+   *
+   * 只清定时器不写，用户在关窗前 <400ms 的调整会白做；
+   * 只留定时器不清，这个已销毁实例的写盘会发生在之后任意时刻——
+   * 读到的是它自己那份早已过期的状态（实测会污染后续的界面状态记录）。
+   * 两者都不可接受，因此在这里收口成「马上写一次」。
+   */
+  function flushUiState() {
+    if (saveStateTimer === null) return;
+    clearTimeout(saveStateTimer);
+    saveStateTimer = null;
+    void writeUiState();
+  }
+
+  /** 恢复界面状态并重新扫描上次的目录 */
+  async function restoreUiState() {
+    let raw: string | null = null;
+    try {
+      raw = await loadUiState();
+    } catch (e) {
+      console.warn("读取界面状态失败，使用默认界面：", e);
+      return;
+    }
+    if (!raw) return;
+
+    let st: Partial<UiState>;
+    try {
+      st = JSON.parse(raw) as Partial<UiState>;
+    } catch (e) {
+      // 内容损坏时不应让程序起不来，也不该静默：明确告知并按默认界面继续
+      console.warn("界面状态内容无法解析，已忽略：", e);
+      Message.warning("上次的界面设置无法读取，已恢复默认界面");
+      return;
+    }
+    // 版本不匹配时丢弃：旧结构硬套会得到难以解释的界面
+    if (st.version !== UI_STATE_VERSION) {
+      console.warn(`界面状态版本为 ${String(st.version)}，当前为 ${UI_STATE_VERSION}，已忽略`);
+      return;
+    }
+
+    if (typeof st.sidebarWidth === "number") {
+      s.sidebarWidth.value = s.clampSidebar(st.sidebarWidth);
+    }
+    if (typeof st.activeView === "string" && st.activeView in VIEW_PRESETS) {
+      s.activeView.value = st.activeView;
+    }
+    if (typeof st.brightness === "number") {
+      s.brightness.value = Math.min(2, Math.max(0.5, st.brightness));
+    }
+    if (typeof st.exportSize === "number" && EXPORT_SIZES.includes(st.exportSize as never)) {
+      s.exportSize.value = st.exportSize;
+    }
+    if (typeof st.searchText === "string") {
+      s.searchText.value = st.searchText;
+    }
+    // 恢复列宽。只接受正数：0 或负数会让列不可见，损坏的值不该让界面变形
+    if (st.columnWidths && typeof st.columnWidths === "object") {
+      const clean: Record<string, number> = {};
+      for (const [k, v] of Object.entries(st.columnWidths)) {
+        if (typeof v === "number" && Number.isFinite(v) && v > 0) clean[k] = v;
+      }
+      s.colWidths.value = clean;
+    }
+
+    // 重新扫描上次的目录。逐个独立处理：某个目录已被删除或暂时不可读时，
+    // 其余目录仍应恢复，并如实说明少了哪个。
+    const dirs = Array.isArray(st.dirs) ? st.dirs.filter((d) => typeof d === "string") : [];
+    if (dirs.length === 0) return;
+
+    const next: Record<string, SchematicSummary[]> = {};
+    const missing: string[] = [];
+    for (const dir of dirs) {
+      try {
+        const r = await scanLitematics(dir);
+        next[dir] = r.items;
+      } catch {
+        // 目录不存在或不可读：这是常见情况（用户移动/删除了目录），
+        // 不必报错刷屏，但要把它从记忆里去掉，否则每次启动都会重试
+        missing.push(dir);
+      }
+    }
+    s.dirItems.value = next;
+    // 勾选状态跟随恢复；记录里没有的目录（新增的）默认勾选
+    const keep = new Set(
+      Array.isArray(st.enabledDirs) ? st.enabledDirs.filter((d) => typeof d === "string") : [],
+    );
+    s.enabledDirs.value = new Set(
+      Object.keys(next).filter((d) => !Array.isArray(st.enabledDirs) || keep.has(d)),
+    );
+    if (missing.length > 0) {
+      Message.warning(`以下目录已无法读取，未恢复：\n${missing.join("\n")}`);
+      // 把失效目录从记忆里清掉
+      persistUiState();
+    }
+    s.status.value = `已恢复 ${Object.keys(next).length} 个目录`;
+  }
+
+  // 记住界面改动。逐个监听而不是 watch 一个大对象：后者要么深比较整棵状态树，
+  // 要么在 restoreUiState 写入时也触发一次无谓回写。
+  watch(s.sidebarWidth, persistUiState);
+  watch(s.activeView, persistUiState);
+  watch(s.brightness, persistUiState);
+  watch(s.exportSize, persistUiState);
+  watch(s.searchText, persistUiState);
+  // 目录集合变化（添加/移除/勾选）同样要记住
+  watch(s.dirItems, persistUiState, { deep: false });
+  watch(s.enabledDirs, persistUiState, { deep: false });
+
+  onMounted(() => {
+    // 恢复上次的界面状态与已添加目录。放在最后：先把界面建起来，
+    // 恢复只改状态，不必等它完成就能显示
+    void restoreUiState();
+  });
+
+  onBeforeUnmount(() => {
+    flushUiState();
+  });
+
+  return {
+    persistUiState,
+    flushUiState,
+    restoreUiState,
+  };
+}
+
+export type UiStateSlice = ReturnType<typeof createUiStateSlice>;
