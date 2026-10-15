@@ -311,7 +311,10 @@ SHIM = r"""
         { index: 0, name: "1.20.1", dataVersion: 3465 },
         { index: 1, name: "1.19.4", dataVersion: 3337 },
       ]);
-      case "scan_duplicates": return Promise.resolve({ groups: [], unreadable: [] });
+      // 重复筛查：契约里 scanned/skippedDirs 是必填，缺了会让汇总条显示出
+      // 「undefined」。这里给空结果，界面应显示「没有发现内容相同的重复」。
+      // scanned 用真实的列表条数，好让「没有可筛查的文件」那条分支不被误命中。
+      case "scan_duplicates": return Promise.resolve({ scanned: FILLER_ROWS + 1, groups: [], unreadable: [], skippedDirs: 0 });
       // 界面状态：契约是 string | null。默认「从未保存过」，
       // 回数组会让 App 走进 JSON 解析失败分支并弹出警告（替身类型给错）。
       case "load_ui_state": return Promise.resolve(null);

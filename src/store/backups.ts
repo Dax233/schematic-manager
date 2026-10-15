@@ -1,8 +1,10 @@
 /**
- * 备份与操作日志域：备份抽屉的清单、日志、还原与删除。
+ * 备份与操作日志域：备份抽屉的清单、还原与删除，以及全局操作日志。
  *
- * 备份只跟「当前选中的投影」有关，日志是全局的；两者都只在抽屉
- * 打开时才需要，放成一个域是因为它们共享同一个抽屉与同一组刷新动作。
+ * 备份只跟「当前选中的投影」有关，日志是全局的。两者放成一个域，
+ * 一是共用同一组刷新动作，二是日志同时供备份抽屉的页签和独立的
+ * 「日志管理」窗口使用（见 components/LogModal.vue），两边共用同一份
+ * logs 状态就不会出现一个清空了、另一个还显示旧内容。
  *
  * 与其他域的协作：还原成功后经 BackupsDeps 让文件列表域重扫、让 3D
  * 预览域重建场景，保证界面显示的是还原后的真实内容。
@@ -12,8 +14,10 @@ import { ref } from "vue";
 import type { ComputedRef, Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import {
+  clearOperationLog,
   deleteBackup,
   listBackups,
+  openOperationLogDir,
   readOperationLog,
   restoreBackup,
 } from "../api";
@@ -33,6 +37,12 @@ export interface BackupsDeps {
   loadScene: (record: SchematicSummary) => void;
 }
 
+/** 一次读取的日志条数上限。
+ *
+ * 「日志管理」窗口里的说明文案引用它，避免同一个数字在界面与这里各写一遍。
+ */
+const LOG_MAX_LINES = 300;
+
 export function createBackupsSlice(s: BackupsDeps) {
   // 备份与日志
   const backupOpen = ref(false);
@@ -40,6 +50,9 @@ export function createBackupsSlice(s: BackupsDeps) {
   const backupLoading = ref(false);
   const logs = ref<string[]>([]);
   const logLoading = ref(false);
+  /** 独立的「日志管理」窗口。与备份抽屉里的日志页签看的是同一份内容，
+   *  只是多一个不用先打开备份管理的入口（资源包管理右侧的「日志」）。 */
+  const logOpen = ref(false);
 
   function formatTime(ns: string): string {
     if (!ns) return "—";
@@ -66,7 +79,7 @@ export function createBackupsSlice(s: BackupsDeps) {
   async function refreshLogs() {
     logLoading.value = true;
     try {
-      logs.value = await readOperationLog(300);
+      logs.value = await readOperationLog(LOG_MAX_LINES);
     } catch (e) {
       Message.error(`读取日志失败：${e}`);
     } finally {
@@ -111,18 +124,50 @@ export function createBackupsSlice(s: BackupsDeps) {
     await Promise.all([refreshBackups(), refreshLogs()]);
   }
 
+  /** 打开「日志管理」窗口。打开即刷新：日志随时可能被其它操作写入，
+   *  显示上一次打开时的旧内容会误导用户。 */
+  async function openLogs() {
+    logOpen.value = true;
+    await refreshLogs();
+  }
+
+  /** 清空操作日志。清空是有破坏性的，二次确认由界面负责。 */
+  async function clearLogs() {
+    try {
+      await clearOperationLog();
+      Message.success("已清空操作日志");
+      await refreshLogs();
+    } catch (e) {
+      Message.error(`清空日志失败：${e}`);
+    }
+  }
+
+  /** 在系统文件管理器里打开日志所在目录 */
+  async function openLogDir() {
+    try {
+      await openOperationLogDir();
+    } catch (e) {
+      Message.error(`打开日志目录失败：${e}`);
+    }
+  }
+
   return {
     backupOpen,
     backups,
     backupLoading,
     logs,
     logLoading,
+    logOpen,
+    logMaxLines: LOG_MAX_LINES,
     formatTime,
     refreshBackups,
     refreshLogs,
     onRestore,
     onDelete,
     openBackups,
+    openLogs,
+    clearLogs,
+    openLogDir,
   };
 }
 

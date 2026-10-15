@@ -17,8 +17,15 @@ use crate::dto::{
     VersionOptionDto,
 };
 use crate::litematic::{self, Summary};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tauri::Manager;
+
+/// 递归收集投影文件的默认层数上限。
+///
+/// 文件列表与重复筛查共用这一个值：两处一旦不同，筛查就会与用户看到的
+/// 列表脱节（列表里有、筛查里没有），而那正是「查不出重复」的来源。
+const SCAN_MAX_DEPTH: u32 = 6;
 
 /// 程序所在目录。备份目录以它为根，与旧版行为一致。
 fn exe_dir() -> PathBuf {
@@ -75,7 +82,7 @@ pub fn peek_schematic(path: String) -> SchematicSummary {
 /// 而不是静默给出一个看起来完整、实则缺项的结果。
 #[tauri::command]
 pub fn scan_litematics(dir: String, max_depth: Option<u32>) -> ScanResult {
-    let depth = max_depth.unwrap_or(6).min(16);
+    let depth = max_depth.unwrap_or(SCAN_MAX_DEPTH).min(16);
     let mut found: Vec<PathBuf> = Vec::new();
     let mut skipped = SkipReport::default();
     collect_litematics(Path::new(&dir), depth, &mut found, &mut skipped);
@@ -677,9 +684,40 @@ pub fn apply_replace(
         .unwrap_or_default();
     let _ = backup::append_log(
         &backup::backup_root(&exe_dir()),
-        &format!("替换 {name}：{} -> {}，共 {} 个", rule.from_name, rule.to_name, out.replaced),
+        &replace_log_line(db, Some(vi), &name, &rule.from_name, &rule.to_name, out.replaced),
     );
     Ok(out.into())
+}
+
+/// 日志里怎么称呼一个方块：有中文名时写成「中文名（方块ID）」，没有就只写 ID。
+///
+/// 日志是事后翻的：只写 ID 得对着方块库才看得懂替换了什么，只写中文名又对不上
+/// 文件里的内容，两个都给才既读得懂又查得准。查不到名字时不能留下空括号。
+fn log_block_name(db: &BlockDb, version_idx: Option<usize>, name: &str) -> String {
+    let (zh, _) = block_display_names(db, version_idx, name);
+    if zh.is_empty() {
+        name.to_string()
+    } else {
+        format!("{zh}（{name}）")
+    }
+}
+
+/// 方块替换写入操作日志的那一行。
+///
+/// 单独成函数是为了能直接测格式：真正的命令要 AppHandle 才能取方块库。
+fn replace_log_line(
+    db: &BlockDb,
+    version_idx: Option<usize>,
+    file_name: &str,
+    from_name: &str,
+    to_name: &str,
+    replaced: u64,
+) -> String {
+    format!(
+        "替换 {file_name}：{} -> {}，共 {replaced} 个",
+        log_block_name(db, version_idx, from_name),
+        log_block_name(db, version_idx, to_name),
+    )
 }
 
 /// 列出可作为转换目标的版本
@@ -705,15 +743,71 @@ pub fn analyze_conversion(
     let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
     let sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
-    Ok(crate::convert::analyze(&sc, db, target_index)
+
+    // 源方块的中文名要按**投影自己的版本**查：这些方块在目标版本里已经
+    // 没有了，只有原版本的语言表里才有它们的名字。
+    //
+    // pick_version 取的是「最接近投影版本的基础版本」，库里只要有一个基础
+    // 版本就不会落空；真要落到 unwrap_or 上（库里没有任何基础版本），
+    // 那时用户也选不出目标版本，这段回退实际上走不到——留着只是为了不 panic。
+    // target_index 来自前端、可能越界，但 lang_index 取不到版本时返回空表。
+    let source_idx = db.pick_version(sc.summary().data_version).unwrap_or(target_index);
+
+    Ok(convert_items_with_zh(
+        crate::convert::analyze(&sc, db, target_index),
+        &crate::block_search::lang_index(db, source_idx),
+        &crate::block_search::lang_index(db, target_index),
+    ))
+}
+
+/// 给转换条目补上中英文名。
+///
+/// 单独成函数是为了能直接测：真正的命令要 AppHandle 才能取方块库，
+/// 而这里只依赖两张语言表，用构造出来的表就能覆盖各级回退。
+fn convert_items_with_zh(
+    items: Vec<crate::convert::ConvertItem>,
+    source_langs: &std::collections::HashMap<String, (String, String)>,
+    target_langs: &std::collections::HashMap<String, (String, String)>,
+) -> Vec<ConvertItemDto> {
+    items
         .into_iter()
         .map(|i| ConvertItemDto {
+            // 源方块先查原版本的表，再退到目标版本的表：它在原版本里一定存在，
+            // 但投影用的版本号不一定能在库里对上，那时只能靠目标版本的表
+            name_zh: zh_from_tables(&i.name, &[source_langs, target_langs]),
+            // 替代品是目标版本里的方块，只查目标版本的表
+            suggested_zh: zh_from_tables(&i.suggested, &[target_langs]),
             name: i.name,
             count: i.count,
             suggested: i.suggested,
             chosen: i.chosen,
         })
-        .collect())
+        .collect()
+}
+
+/// 按给定顺序在各语言表里查中文名，全都没查到时退回不带命名空间的方块名。
+///
+/// 顺序表而不是单个表：源方块在两个版本的语言表里可能只有一边有条目。
+/// 最后那次回退不能省——查不到时返回空串会让界面上的中文名一栏莫名留白，
+/// 用户分不清是「这个方块没有中文名」还是「界面坏了」。
+fn zh_from_tables(
+    name: &str,
+    tables: &[&std::collections::HashMap<String, (String, String)>],
+) -> String {
+    if name.is_empty() {
+        return String::new();
+    }
+    for t in tables {
+        if let Some((zh, en)) = t.get(name) {
+            if !zh.is_empty() {
+                return zh.clone();
+            }
+            if !en.is_empty() {
+                return en.clone();
+            }
+        }
+    }
+    name.split_once(':').map(|(_, n)| n.to_string()).unwrap_or_else(|| name.to_string())
 }
 
 /// 执行转换，结果另存为新文件，原文件不动。
@@ -785,32 +879,69 @@ pub fn apply_conversion(
     })
 }
 
-/// 在一个目录下筛查内容重复的投影文件。
+/// 在一个或多个目录下筛查内容重复的投影文件。
 ///
-/// 只探测该目录本身，不递归子目录：重复筛查的目的通常是整理一个
-/// 导出目录，递归会把不同用途目录下的同名文件也卷进来。
+/// 递归遍历子目录，用的是文件列表那套收集逻辑与同一个层数上限，因此
+/// 用户在列表里看到的文件都会参与筛查。原先只读目录第一层：投影按分类
+/// 放进子目录时，名单里明明有成对的副本，筛查却永远报「没有发现重复文件」。
+///
+/// 多个目录一次收齐再统一分组，所以跨目录的副本也在同一组里——原先逐目录
+/// 筛查再拼接，跨目录的同一份内容会被拆开、只含单个成员的那一组还会被丢掉。
+///
+/// 声明为 async 是有意的：Tauri 里同步命令跑在主线程上，把目录下所有候选
+/// 文件逐字节读一遍会把窗口连同界面一起冻住；交给阻塞线程池后，筛查期间
+/// 界面照常响应，按钮上的加载态也转得起来。
 #[tauri::command]
-pub fn scan_duplicates(dir: String) -> Result<DuplicateScanDto, String> {
-    let mut candidates = Vec::new();
-    let entries = std::fs::read_dir(&dir).map_err(|e| format!("无法读取目录 {dir}：{e}"))?;
-    for e in entries.flatten() {
-        let path = e.path();
-        if !path.is_file() {
-            continue;
+pub async fn scan_duplicates(dirs: Vec<String>) -> Result<DuplicateScanDto, String> {
+    // 只可能因为阻塞任务本身没能跑完（线程池关闭、任务 panic）而失败；
+    // 文件级、目录级的失败都在结果里逐条上报。
+    tauri::async_runtime::spawn_blocking(move || scan_duplicates_in(&dirs))
+        .await
+        .map_err(|e| format!("筛查任务未能完成：{e}"))
+}
+
+/// 筛查的同步实现。单独成函数是为了能在测试里直接调用，
+/// 不必为了一条用例把整个异步运行时拉起来。
+///
+/// 不返回 Result：所有失败都按文件折进 unreadable、按目录折进 skipped_dirs，
+/// 一次筛查本身没有「整体失败」这种结局。
+fn scan_duplicates_in(dirs: &[String]) -> DuplicateScanDto {
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut candidates: Vec<crate::duplicate::Candidate> = Vec::new();
+    let mut unreadable: Vec<(PathBuf, String)> = Vec::new();
+    let mut skipped = SkipReport::default();
+    let mut scanned = 0usize;
+
+    for dir in dirs {
+        let mut found: Vec<PathBuf> = Vec::new();
+        collect_litematics(Path::new(dir), SCAN_MAX_DEPTH, &mut found, &mut skipped);
+        for path in found {
+            // 目录可以叠加加载（父目录与它的子目录同时选中），同一个文件
+            // 只能算一份候选：重复计入会让组里出现同一个路径、
+            // 「多余的副本」也会被多算一份。
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            match std::fs::metadata(&path) {
+                Ok(m) => {
+                    // 只有真的进入比对的文件才算「已筛查」：拿不到大小的文件
+                    // 没有参与判定，算进去会让界面上的数字与实际情况不符。
+                    scanned += 1;
+                    candidates.push(crate::duplicate::Candidate { path, size: m.len() });
+                }
+                // 拿不到大小就无法参与「先按大小分组」。如实上报，而不是
+                // 当成 0 字节：按 0 分组会让读不出来的文件与真正的空文件混作一堆。
+                Err(e) => unreadable.push((path, e.to_string())),
+            }
         }
-        let is_litematic = path
-            .extension()
-            .map(|x| x.eq_ignore_ascii_case("litematic"))
-            .unwrap_or(false);
-        if !is_litematic {
-            continue;
-        }
-        let size = e.metadata().map(|m| m.len()).unwrap_or(0);
-        candidates.push(crate::duplicate::Candidate { path, size });
     }
 
     let r = crate::duplicate::find(&candidates);
-    Ok(DuplicateScanDto {
+    unreadable.extend(r.unreadable);
+    unreadable.sort();
+
+    DuplicateScanDto {
+        scanned,
         groups: r
             .groups
             .into_iter()
@@ -819,15 +950,15 @@ pub fn scan_duplicates(dir: String) -> Result<DuplicateScanDto, String> {
                 paths: g.paths.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
             })
             .collect(),
-        unreadable: r
-            .unreadable
+        unreadable: unreadable
             .into_iter()
             .map(|(p, reason)| UnreadableFileDto {
                 path: p.to_string_lossy().into_owned(),
                 reason,
             })
             .collect(),
-    })
+        skipped_dirs: skipped.count,
+    }
 }
 
 /// 列出备份。stem 非空时只返回该文件的备份。
@@ -891,6 +1022,34 @@ pub fn delete_backup(backup_path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn read_operation_log(max_lines: Option<usize>) -> Vec<String> {
     backup::read_log(&backup::backup_root(&exe_dir()), max_lines.unwrap_or(200).min(5000))
+}
+
+/// 清空操作日志。
+///
+/// 只清空内容、不删文件（理由见 `backup::clear_log`）。这是用户显式要求的
+/// 动作，失败必须报出来——不像写日志那样可以悄悄放过。
+#[tauri::command]
+pub fn clear_operation_log() -> Result<(), String> {
+    backup::clear_log(&backup::backup_root(&exe_dir())).map_err(|e| e.to_string())
+}
+
+/// 在文件管理器里打开操作日志所在的目录。
+///
+/// 路径在后端算：日志位置是后端的约定（`backup::log_path`），
+/// 前端再拼一遍就成了两处规则，改一处必然对不上。
+#[tauri::command]
+pub fn open_operation_log_dir() -> Result<(), String> {
+    let root = backup::backup_root(&exe_dir());
+    let log = backup::log_path(&root);
+    // 日志存在就定位到它：资源管理器会打开所在目录并选中该文件。
+    // 从没写过日志时它还不存在，那就先建出备份目录再打开目录本身——
+    // 用户此刻想知道的正是「日志放在哪」。
+    if log.exists() {
+        return crate::file_ops::reveal_in_file_manager(&log).map_err(|e| e.to_string());
+    }
+    std::fs::create_dir_all(&root)
+        .map_err(|e| format!("创建目录 {} 失败：{e}", root.display()))?;
+    crate::file_ops::open_directory(&root).map_err(|e| e.to_string())
 }
 
 /// 组装前端 Three.js 渲染所需的场景。
@@ -1007,6 +1166,223 @@ mod tests {
         ));
         std::fs::create_dir_all(&d).expect("建临时目录失败");
         d
+    }
+
+    /// 重复筛查必须走进子目录。
+    ///
+    /// 原先只读目录第一层：投影按分类放进子目录时，列表里明明有成对的副本，
+    /// 筛查却一律报「没有发现重复文件」。用户的投影正是按版本分类放在
+    /// 子目录里的，这条守住那个场景。
+    #[test]
+    fn duplicate_scan_recurses_into_subdirectories() {
+        let root = temp_state_dir("dup-recurse");
+        let sub = root.join("1.21.1");
+        std::fs::create_dir_all(&sub).expect("建子目录失败");
+        std::fs::write(sub.join("a.litematic"), b"same bytes").unwrap();
+        std::fs::write(sub.join("b.litematic"), b"same bytes").unwrap();
+        std::fs::write(root.join("c.litematic"), b"different!!").unwrap();
+
+        let r = scan_duplicates_in(&[root.to_string_lossy().into_owned()]);
+
+        assert_eq!(r.scanned, 3, "子目录里的文件也要计入筛查范围");
+        assert_eq!(r.groups.len(), 1, "子目录里的一对副本应被识别");
+        assert_eq!(r.groups[0].paths.len(), 2);
+        assert!(r.unreadable.is_empty(), "不应有读取失败：{:?}", r.unreadable);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 跨目录的同一份内容必须归到同一组。
+    ///
+    /// 原先按目录分别筛查再拼接：跨目录的副本各自只有一个成员，
+    /// 而只有一个成员的组会被丢掉，于是「同一份投影复制到两个目录」
+    /// 这种最常见的重复反而查不出来。
+    #[test]
+    fn duplicate_scan_groups_copies_across_directories() {
+        let a = temp_state_dir("dup-cross-a");
+        let b = temp_state_dir("dup-cross-b");
+        std::fs::write(a.join("x.litematic"), b"copy of one").unwrap();
+        std::fs::write(b.join("y.litematic"), b"copy of one").unwrap();
+        std::fs::write(b.join("z.litematic"), b"something else").unwrap();
+
+        let dirs = vec![
+            a.to_string_lossy().into_owned(),
+            b.to_string_lossy().into_owned(),
+        ];
+        let r = scan_duplicates_in(&dirs);
+
+        assert_eq!(r.scanned, 3);
+        assert_eq!(r.groups.len(), 1, "两个目录里的同一份内容应合成一组");
+        assert_eq!(r.groups[0].paths.len(), 2, "组内应含两个目录各一份");
+
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
+    }
+
+    /// 父子目录同时被加载时，同一个文件只能算一份候选。
+    ///
+    /// 否则组里会出现同一个路径两次，「多余的副本」会被多算，
+    /// 默认勾选也就跟着出错。
+    #[test]
+    fn duplicate_scan_counts_each_file_once() {
+        let root = temp_state_dir("dup-overlap");
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).expect("建子目录失败");
+        std::fs::write(sub.join("a.litematic"), b"only one").unwrap();
+
+        let dirs = vec![
+            root.to_string_lossy().into_owned(),
+            sub.to_string_lossy().into_owned(),
+        ];
+        let r = scan_duplicates_in(&dirs);
+
+        assert_eq!(r.scanned, 1, "父子目录叠加不应把同一个文件算两次");
+        assert!(r.groups.is_empty(), "只有一份的文件不该成组");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 异步命令外壳本身也要能真的出结果。
+    ///
+    /// 上面几条直接调同步实现，覆盖不到命令外壳：`spawn_blocking` 要 await
+    /// 才拿得到值、错误要经 JoinHandle 再映射一次，写成 `?` 而不是 `.await?`
+    /// 这类问题只有真跑一遍才暴露。
+    #[test]
+    fn duplicate_scan_command_runs_on_the_async_runtime() {
+        let root = temp_state_dir("dup-cmd");
+        std::fs::write(root.join("a.litematic"), b"same").unwrap();
+        std::fs::write(root.join("b.litematic"), b"same").unwrap();
+
+        let dirs = vec![root.to_string_lossy().into_owned()];
+        let r = tauri::async_runtime::block_on(scan_duplicates(dirs)).expect("命令应返回结果");
+
+        assert_eq!(r.scanned, 2);
+        assert_eq!(r.groups.len(), 1, "命令外壳拿到的结果应与同步实现一致");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 转换条目必须带上中文名，各级回退都要对。
+    ///
+    /// 界面上凡是出现方块 ID 的地方都要同时显示中文名，因此这条盯的是
+    /// 「名字从哪来」：源方块查原版本的表（它在目标版本里已经不存在），
+    /// 替代品只查目标版本的表，都查不到时退回不带命名空间的方块名，
+    /// 而不是留一个空串让界面空白。
+    #[test]
+    fn convert_items_carry_chinese_names_with_fallbacks() {
+        let mut source = std::collections::HashMap::new();
+        source.insert(
+            "minecraft:oak_stairs".to_string(),
+            ("橡木楼梯".to_string(), "Oak Stairs".to_string()),
+        );
+        // 只有英文名：缺中文名时不能留白
+        source.insert(
+            "minecraft:old_block".to_string(),
+            (String::new(), "Old Block".to_string()),
+        );
+
+        let mut target = std::collections::HashMap::new();
+        target.insert(
+            "minecraft:pale_oak_stairs".to_string(),
+            ("苍白橡木楼梯".to_string(), "Pale Oak Stairs".to_string()),
+        );
+
+        let items = vec![
+            crate::convert::ConvertItem {
+                name: "minecraft:oak_stairs".into(),
+                count: 12,
+                suggested: "minecraft:pale_oak_stairs".into(),
+                chosen: String::new(),
+            },
+            // 没有推荐：中文名也必须是空，不能凭空编一个
+            crate::convert::ConvertItem {
+                name: "minecraft:old_block".into(),
+                count: 3,
+                suggested: String::new(),
+                chosen: String::new(),
+            },
+            // 两张表都没有：退回方块名本身
+            crate::convert::ConvertItem {
+                name: "mymod:unknown_thing".into(),
+                count: 1,
+                suggested: String::new(),
+                chosen: String::new(),
+            },
+            // 推荐品只存在于原版本的表里：替代品不该借用源表的名字
+            crate::convert::ConvertItem {
+                name: "minecraft:old_block".into(),
+                count: 1,
+                suggested: "minecraft:oak_stairs".into(),
+                chosen: String::new(),
+            },
+            // 源方块在源表里没有、只在目标表里有：必须退到第二张表去找
+            crate::convert::ConvertItem {
+                name: "minecraft:pale_oak_stairs".into(),
+                count: 2,
+                suggested: String::new(),
+                chosen: String::new(),
+            },
+            // 空名字：两个字段都应是空串，不能拼出去命名空间的分支
+            crate::convert::ConvertItem {
+                name: String::new(),
+                count: 0,
+                suggested: String::new(),
+                chosen: String::new(),
+            },
+        ];
+
+        let out = convert_items_with_zh(items, &source, &target);
+
+        assert_eq!(out[0].name_zh, "橡木楼梯");
+        assert_eq!(out[0].suggested_zh, "苍白橡木楼梯");
+        assert_eq!(out[1].name_zh, "Old Block", "缺中文名应退回英文名");
+        assert_eq!(out[1].suggested_zh, "", "没有推荐时中文名必须为空");
+        assert_eq!(out[2].name_zh, "unknown_thing", "查不到应退回方块名而不是空串");
+        assert_eq!(
+            out[3].suggested_zh, "oak_stairs",
+            "替代品只能在目标版本的表里查，不能借用源版本的名字"
+        );
+        assert_eq!(
+            out[4].name_zh, "苍白橡木楼梯",
+            "源表里没有时应退到目标表去找"
+        );
+        assert_eq!(out[5].name_zh, "", "空方块名不该拼出一个名字");
+        assert_eq!(out[5].suggested_zh, "");
+        assert_eq!(out[0].name, "minecraft:oak_stairs", "原字段不应被改动");
+        assert_eq!(out[0].count, 12);
+    }
+
+    /// 替换日志要带上方块中文名。
+    ///
+    /// 日志是事后翻的：只写 `minecraft:stone` 得对着方块库才看得懂替换了什么，
+    /// 只写中文名又对不上文件里的内容。查不到名字时必须只写 ID，
+    /// 不能留下空括号。
+    #[test]
+    fn replace_log_line_carries_chinese_names() {
+        let mut db = sample_db("pack", 100, "minecraft:stone", "tex", 0);
+        db.langs = vec![vec![
+            LangEntry {
+                block_name: "minecraft:stone".into(),
+                en: "Stone".into(),
+                zh: "石头".into(),
+            },
+            LangEntry {
+                block_name: "minecraft:dirt".into(),
+                en: "Dirt".into(),
+                zh: "泥土".into(),
+            },
+        ]];
+
+        let line = replace_log_line(&db, Some(0), "demo.litematic", "minecraft:stone", "minecraft:dirt", 12);
+        assert!(line.starts_with("替换 demo.litematic："), "应保留原有结构：{line}");
+        assert!(line.contains("石头（minecraft:stone）"), "源方块应带中文名：{line}");
+        assert!(line.contains("泥土（minecraft:dirt）"), "目标方块应带中文名：{line}");
+        assert!(line.ends_with("共 12 个"), "应保留数量：{line}");
+
+        // 方块库里查不到名字（模组方块）：只写 ID，不留空括号
+        let unknown = replace_log_line(&db, Some(0), "demo.litematic", "mod:unknown", "minecraft:dirt", 1);
+        assert!(unknown.contains("mod:unknown ->"), "查不到名字时应只写 ID：{unknown}");
+        assert!(!unknown.contains("（）"), "不该出现空括号：{unknown}");
     }
 
     #[test]

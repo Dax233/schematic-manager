@@ -47,6 +47,25 @@ export interface BlockCount {
   enName: string;
 }
 
+/** 方块统计表的一行。
+ *
+ * 与 BlockCount 的区别在统计口径：BlockCount 是「某个方块状态用了多少个」，
+ * 而这里按**物品**合计——忽略方块状态（朝向、强度、是否含水），也合并同一个
+ * 物品的不同方块形态（火把与墙上的火把、炼药锅的内容物、铁砧的破损程度），
+ * 因为用户想知道的是「这种物品一共要备多少个」。
+ *
+ * `name` 是代表形态的方块名：该行里出现了基础形态（例如同时有火把与墙上的
+ * 火把）时取基础形态的，否则取数量最多的那一个。`state` 与它同属一行，
+ * 供渲染图使用。注意替换是按方块名精确匹配的，而这一行可能跨多个方块名，
+ * 因此 `forms` 必须保留下来（见 blockReplace.ts 的 onBlockRowClick）。
+ */
+export interface BlockRow extends BlockCount {
+  /** 这一行合计进来的方块状态条目数；1 表示只有一条 */
+  stateCount: number;
+  /** 这一行跨了哪几个方块名（火把与墙上的火把是两个），按首次出现顺序 */
+  forms: string[];
+}
+
 export interface EntityCount {
   id: string;
   count: number;
@@ -161,8 +180,12 @@ export interface VersionOption {
 /** 转换中需要处理的一项 */
 export interface ConvertItem {
   name: string;
+  /** 源方块的中文名。界面上出现方块 ID 的地方都要一并显示它 */
+  nameZh: string;
   count: number;
   suggested: string;
+  /** 推荐替代品的中文名；没有推荐时为空 */
+  suggestedZh: string;
   chosen: string;
 }
 
@@ -195,9 +218,13 @@ export interface UnreadableFile {
 
 /** 重复文件筛查结果 */
 export interface DuplicateScan {
+  /** 本次实际参与筛查的文件数（已按路径去重） */
+  scanned: number;
   groups: DuplicateGroup[];
   /** 读取失败、未能参与判定的文件 */
   unreadable: UnreadableFile[];
+  /** 递归过程中读不进去的子目录个数 */
+  skippedDirs: number;
 }
 
 /** 一条备份记录 */

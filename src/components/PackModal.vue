@@ -28,6 +28,7 @@ const {
   runImportModsFolder,
   togglePack,
   removePack,
+  openLogs,
 } = useAppStore();
 </script>
 
@@ -44,42 +45,50 @@ const {
       手动导入。只有在使用模组时，才需要导入 jar。
     </div>
 
-    <a-space style="margin-bottom: 12px" wrap>
-      <a-radio-group v-model="importKind" type="button" size="small">
-        <a-radio :value="1">MC 版本包</a-radio>
-        <a-radio :value="2">模组包</a-radio>
-      </a-radio-group>
-      <a-select
-        v-if="importKind === 2"
-        v-model="importDataVersion"
-        size="small"
-        style="width: 190px"
-        placeholder="叠加到哪个版本"
-      >
-        <a-option
-          v-for="v in overlayVersions"
-          :key="v.index"
-          :value="v.dataVersion"
+    <!-- 工具条：左侧是导入相关的操作，右侧留一个「日志」入口。
+         日志与资源包本身无关，放最右是为了不跟导入操作抢位置，
+         也避免用户以为它属于导入流程。 -->
+    <div class="pack-bar">
+      <a-space wrap>
+        <a-radio-group v-model="importKind" type="button" size="small">
+          <a-radio :value="1">MC 版本包</a-radio>
+          <a-radio :value="2">模组包</a-radio>
+        </a-radio-group>
+        <a-select
+          v-if="importKind === 2"
+          v-model="importDataVersion"
+          size="small"
+          style="width: 190px"
+          placeholder="叠加到哪个版本"
         >
-          {{ v.name }}
-        </a-option>
-      </a-select>
-      <a-button size="small" type="primary" :loading="importBusy" @click="runImportJar">
-        导入 jar…
+          <a-option
+            v-for="v in overlayVersions"
+            :key="v.index"
+            :value="v.dataVersion"
+          >
+            {{ v.name }}
+          </a-option>
+        </a-select>
+        <a-button size="small" type="primary" :loading="importBusy" @click="runImportJar">
+          导入 jar…
+        </a-button>
+        <!-- 整目录导入：装了上百个模组时逐个选 jar 不可行 -->
+        <a-button size="small" :loading="modsBusy" @click="runImportModsFolder">
+          导入 mods 文件夹…
+        </a-button>
+        <a-button
+          size="small"
+          title="在文件管理器里打开资源包存放目录"
+          @click="openPacksDir"
+        >
+          打开资源包目录
+        </a-button>
+        <a-button size="small" :loading="packBusy" @click="refreshPacks">刷新</a-button>
+      </a-space>
+      <a-button size="small" title="查看、清空操作日志" @click="openLogs">
+        日志
       </a-button>
-      <!-- 整目录导入：装了上百个模组时逐个选 jar 不可行 -->
-      <a-button size="small" :loading="modsBusy" @click="runImportModsFolder">
-        导入 mods 文件夹…
-      </a-button>
-      <a-button
-        size="small"
-        title="在文件管理器里打开资源包存放目录"
-        @click="openPacksDir"
-      >
-        打开资源包目录
-      </a-button>
-      <a-button size="small" :loading="packBusy" @click="refreshPacks">刷新</a-button>
-    </a-space>
+    </div>
 
     <div class="hint-dim" style="margin-bottom: 10px">
       <template v-if="importKind === 2">

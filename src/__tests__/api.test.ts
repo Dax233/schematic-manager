@@ -159,7 +159,7 @@ describe("替换与转换", () => {
 
   it("applyConversion 传 targetIndex 与 items", async () => {
     const items = [
-      { name: "a", count: 1, suggested: "b", chosen: "b" },
+      { name: "a", nameZh: "甲", count: 1, suggested: "b", suggestedZh: "乙", chosen: "b" },
     ];
     await expectCall(
       () => api.applyConversion("/a.litematic", 1, items),
@@ -170,8 +170,10 @@ describe("替换与转换", () => {
 });
 
 describe("重复筛查与备份", () => {
-  it("scanDuplicates 传 dir", async () => {
-    await expectCall(() => api.scanDuplicates("/dir"), "scan_duplicates", { dir: "/dir" });
+  it("scanDuplicates 传 dirs（一次交全部目录）", async () => {
+    await expectCall(() => api.scanDuplicates(["/dir", "/dir2"]), "scan_duplicates", {
+      dirs: ["/dir", "/dir2"],
+    });
   });
 
   it("listBackups 不传 stem 时发 null", async () => {
@@ -200,6 +202,14 @@ describe("重复筛查与备份", () => {
     await expectCall(() => api.readOperationLog(10), "read_operation_log", {
       maxLines: 10,
     });
+  });
+
+  it("clearOperationLog 不带参数", async () => {
+    await expectCall(() => api.clearOperationLog(), "clear_operation_log");
+  });
+
+  it("openOperationLogDir 不带参数", async () => {
+    await expectCall(() => api.openOperationLogDir(), "open_operation_log_dir");
   });
 });
 
@@ -258,11 +268,13 @@ describe("契约整体性", () => {
       () => api.convertTargets("a"),
       () => api.analyzeConversion("a", 0),
       () => api.applyConversion("a", 0, []),
-      () => api.scanDuplicates("d"),
+      () => api.scanDuplicates(["d"]),
       () => api.listBackups(),
       () => api.restoreBackup("b", "t"),
       () => api.deleteBackup("b"),
       () => api.readOperationLog(),
+      () => api.clearOperationLog(),
+      () => api.openOperationLogDir(),
       () => api.mcVersionName(1),
       () => api.listPacks(),
       () => api.importJar("j", 1, 0),

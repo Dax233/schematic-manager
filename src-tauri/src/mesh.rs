@@ -301,7 +301,7 @@ mod tests {
                     let [mut x, mut y, mut z] = [d[0], d[1], d[2]];
                     match rx % 4 {
                         1 => {
-                            let (ny, nz) = (-z, y);
+                            let (ny, nz) = (z, -y);
                             y = ny;
                             z = nz;
                         }
@@ -310,7 +310,7 @@ mod tests {
                             z = -z;
                         }
                         3 => {
-                            let (ny, nz) = (z, -y);
+                            let (ny, nz) = (-z, y);
                             y = ny;
                             z = nz;
                         }

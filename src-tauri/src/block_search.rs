@@ -64,8 +64,9 @@ pub fn version_options(db: &BlockDb) -> Vec<VersionOption> {
 /// 为某个版本建立 方块名 -> (中文名, 英文名) 的索引。
 ///
 /// VersionDef::display_name 是线性查找，逐方块调用会退化成平方复杂度，
-/// 因此这里先建索引。
-fn lang_index(db: &BlockDb, version_idx: usize) -> HashMap<String, (String, String)> {
+/// 因此这里先建索引。`pub(crate)`：版本转换也要按同一套索引取中文名，
+/// 两处各建一份就会出现同一方块在检索与转换里显示不同名字。
+pub(crate) fn lang_index(db: &BlockDb, version_idx: usize) -> HashMap<String, (String, String)> {
     let mut map = HashMap::new();
     if let Some(v) = db.versions.get(version_idx) {
         for e in &v.langs {

@@ -108,9 +108,12 @@ export function applyConversion(
   return invoke<ConvertOutcome>("apply_conversion", { schematicPath, targetIndex, items });
 }
 
-/** 在一个目录下筛查内容重复的投影文件（只探测该目录，不递归） */
-export function scanDuplicates(dir: string): Promise<DuplicateScan> {
-  return invoke<DuplicateScan>("scan_duplicates", { dir });
+/** 在给定的若干目录下递归筛查内容重复的投影文件。
+ *
+ * 多个目录一次交过去，跨目录的副本才能归到同一组；递归层数与
+ * 文件列表一致，因此列表里看到的文件都会参与筛查。 */
+export function scanDuplicates(dirs: string[]): Promise<DuplicateScan> {
+  return invoke<DuplicateScan>("scan_duplicates", { dirs });
 }
 
 /** 列出备份；传 stem 时只返回该文件的备份 */
@@ -131,6 +134,16 @@ export function deleteBackup(backupPath: string): Promise<void> {
 /** 读取操作日志，由新到旧 */
 export function readOperationLog(maxLines = 200): Promise<string[]> {
   return invoke<string[]>("read_operation_log", { maxLines });
+}
+
+/** 清空操作日志（只清内容，日志文件保留） */
+export function clearOperationLog(): Promise<void> {
+  return invoke<void>("clear_operation_log");
+}
+
+/** 在系统文件管理器里打开操作日志所在的目录 */
+export function openOperationLogDir(): Promise<void> {
+  return invoke<void>("open_operation_log_dir");
 }
 
 /** dataVersion 对应的游戏版本名 */

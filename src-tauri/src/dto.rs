@@ -191,8 +191,16 @@ pub struct VersionOptionDto {
 #[serde(rename_all = "camelCase")]
 pub struct ConvertItemDto {
     pub name: String,
+    /// 源方块的中文名。界面上凡是出现方块 ID 的地方都要一并给出中文名，
+    /// 只给 ID 时用户无法确认自己要替换的到底是哪一个方块。
+    ///
+    /// 由后端给出而不是前端逐个回查：方块库就在手里，一次会话里几十条
+    /// 逐个走 IPC 查询既慢又没必要。
+    pub name_zh: String,
     pub count: u64,
     pub suggested: String,
+    /// 推荐替代品的中文名；没有推荐时为空
+    pub suggested_zh: String,
     pub chosen: String,
 }
 
@@ -229,9 +237,20 @@ pub struct DuplicateGroupDto {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DuplicateScanDto {
+    /// 本次实际参与判定的文件数（已按路径去重）。
+    ///
+    /// 必须给出：结果是「筛查了 108 个文件，没有重复」还是「一个文件都没扫到」
+    /// 对用户含义完全不同，只报 groups 为空时两者在界面上无法区分。
+    /// 读取失败、没能参与判定的文件不计入这里，它们在 unreadable 里单独上报。
+    pub scanned: usize,
     pub groups: Vec<DuplicateGroupDto>,
     /// 读取失败、未能参与判定的文件及原因
     pub unreadable: Vec<UnreadableFileDto>,
+    /// 递归过程中读不进去的子目录个数。
+    ///
+    /// 必须上报：这些目录里的文件没有参与筛查，据结果删副本就可能漏掉
+    /// 真正的重复项。只给个数，路径在目录加载时已经逐条列给用户了。
+    pub skipped_dirs: u32,
 }
 
 /// 未能读取的文件

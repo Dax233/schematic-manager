@@ -30,7 +30,13 @@ const {
   doOpenFolder,
   resetColumnWidths,
   dupResult,
+  dupSuspects,
   dupFileCount,
+  suspectFileCount,
+  dupNoOf,
+  dupColorNo,
+  isDup,
+  isSuspect,
   clearDuplicateScan,
   checkAll,
   invertChecks,
@@ -69,26 +75,36 @@ const {
     </div>
 
     <!-- 重复筛查结果条：就地显示在列表上方，不再单开弹窗。
-         重复行本身已按组上色（见 rowClass），这里只给汇总与清除入口。 -->
+         重复行已排到列表最前并按组上色（见 rowClass 与 #fileName 的组号），
+         这里只给汇总与清除入口。 -->
     <div v-if="dupResult" class="sidebar__dups">
-      <template v-if="dupResult.groups.length > 0">
-        <span class="sidebar__dups-text">
-          发现 <b>{{ dupResult.groups.length }}</b> 组重复、
-          <b>{{ dupFileCount }}</b> 个文件；已默认勾选多余的副本
-        </span>
-        <a-button size="mini" @click="clearDuplicateScan">清除标记</a-button>
-      </template>
-      <template v-else>
-        <span class="sidebar__dups-text">没有发现内容相同的文件</span>
-        <a-button size="mini" @click="clearDuplicateScan">知道了</a-button>
-      </template>
+      <span class="sidebar__dups-text">
+        <template v-if="dupResult.groups.length > 0">
+          发现 <b>{{ dupResult.groups.length }}</b> 组内容相同的重复、共
+          <b>{{ dupFileCount }}</b> 个文件（已排到最前，多余的副本已勾选）
+        </template>
+        <template v-else>没有发现内容相同的重复</template>
+        <template v-if="dupSuspects.length > 0">
+          ；另有 <b>{{ dupSuspects.length }}</b> 组疑似重复（名称/尺寸/方块数相同、
+          共 {{ suspectFileCount }} 个文件），内容并不相同，未勾选
+        </template>
+      </span>
+      <a-button size="mini" @click="clearDuplicateScan">
+        {{ dupResult.groups.length > 0 ? "清除标记" : "知道了" }}
+      </a-button>
     </div>
     <a-alert
-      v-if="dupResult && dupResult.unreadable.length > 0"
+      v-if="dupResult && (dupResult.unreadable.length > 0 || dupResult.skippedDirs > 0)"
       type="warning"
       style="margin: 0 0 4px; flex: 0 0 auto"
     >
-      有 {{ dupResult.unreadable.length }} 个文件无法读取，未参与判定
+      <template v-if="dupResult.unreadable.length > 0">
+        有 {{ dupResult.unreadable.length }} 个文件无法读取，未参与判定
+      </template>
+      <template v-if="dupResult.unreadable.length > 0 && dupResult.skippedDirs > 0">；</template>
+      <template v-if="dupResult.skippedDirs > 0">
+        有 {{ dupResult.skippedDirs }} 个子目录无法读取，其中的文件未参与判定
+      </template>
     </a-alert>
 
     <a-table
@@ -109,6 +125,26 @@ const {
       @row-click="onRowClick"
       @row-contextmenu="onRowContextMenu"
     >
+      <template #fileName="{ record }">
+        <span class="dup-name">
+          <!-- 组号色块与行底色同色：颜色负责「哪几份是一组」，
+               数字负责在颜色循环复用时仍能分辨，两者互为佐证。 -->
+          <span
+            v-if="isDup(record.path)"
+            class="dup-chip"
+            :class="`dup-chip-${dupColorNo(record.path)}`"
+            :title="'重复组 ' + dupNoOf(record.path) + '：与同组文件内容完全相同'"
+          >{{ dupNoOf(record.path) }}</span>
+          <span
+            v-else-if="isSuspect(record.path)"
+            class="dup-chip dup-chip--suspect"
+            title="疑似重复：名称、尺寸、方块总数相同，但内容不同，请自行核对"
+          >疑似</span>
+          <!-- 名称列关掉了 Arco 的 tooltip（它量不准插槽内容），
+               完整文件名只能在这里自己给出来 -->
+          <span class="dup-name__text" :title="record.fileName">{{ record.fileName }}</span>
+        </span>
+      </template>
       <template #dims="{ record }">{{ formatDims(record.enclosing) }}</template>
       <template #empty>
         <a-empty description="点击「添加目录」选择投影所在文件夹" />

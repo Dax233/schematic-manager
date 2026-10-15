@@ -462,6 +462,25 @@ pub fn read_log(root: &Path, max_lines: usize) -> Vec<String> {
     lines
 }
 
+/// 清空操作日志。
+///
+/// 清掉内容而不是删掉文件：日志位置是外部约定
+/// （`<程序目录>/backups/operations.log`），用户很可能正开着那个目录在看，
+/// 让文件凭空消失比留下一个空文件更让人困惑；「打开日志目录」也因此
+/// 仍能定位到它。
+///
+/// 文件本来就不存在时视为已清空：用户要的结果（没有日志）已经成立，
+/// 报错只会让人以为清空失败。
+/// 清空是用户显式要求的动作，因此失败要如实上报，不能像写日志那样忽略。
+pub fn clear_log(root: &Path) -> AppResult<()> {
+    let path = log_path(root);
+    if !path.exists() {
+        return Ok(());
+    }
+    std::fs::write(&path, b"")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -935,6 +954,34 @@ mod tests {
 
         // 目录不存在时返回空而不是 panic
         assert!(read_log(&base.join("nope"), 10).is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 清空日志：内容清掉、文件留下，且没有日志时不算失败。
+    #[test]
+    fn clear_log_empties_the_file_but_keeps_it() {
+        let base = temp_dir("clearlog");
+        let root = backup_root(&base);
+        append_log(&root, "要清掉的一行").unwrap();
+        let path = log_path(&root);
+        assert!(!read_log(&root, 10).is_empty(), "先得有内容可清");
+
+        clear_log(&root).unwrap();
+
+        assert!(read_log(&root, 10).is_empty(), "清空后读不到任何日志");
+        // 直接看文件字节数：read_log 会过滤空行，只写一个换行也能骗过上面的断言
+        assert_eq!(
+            std::fs::read(&path).unwrap().len(),
+            0,
+            "清空后文件内容应当是空的"
+        );
+        // 文件必须留着：用户很可能正开着那个目录看，
+        // 而且清空后「打开日志目录」还要能定位到它
+        assert!(path.exists(), "清空不应把日志文件删掉");
+
+        // 再清一次、以及从未有过日志时，都应成功而不是报错
+        clear_log(&root).unwrap();
+        clear_log(&base.join("never")).expect("没有日志时清空也应当成功");
         let _ = std::fs::remove_dir_all(&base);
     }
 

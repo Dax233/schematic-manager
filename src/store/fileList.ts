@@ -10,7 +10,7 @@
  * 图标缓存；列宽复位经 FileListDeps 通知界面状态域回写。依赖只声明
  * 本域用到的成员，而不是整棵 store，避免类型上的循环引用。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import type { TableColumnData, TableData } from "@arco-design/web-vue";
@@ -29,7 +29,6 @@ import {
 import { NAME_COL_W } from "../composables/useSidebarResize";
 import type {
   AnalysisResult,
-  DuplicateGroup,
   DuplicateScan,
   SchematicSummary,
   SceneData,
@@ -53,6 +52,29 @@ export interface FileListDeps {
   /** 3D 预览域的场景加载；选中变化时调用 */
   loadScene: (record: SchematicSummary) => void;
 }
+
+/** 疑似重复组：名称、尺寸、方块总数都相同，但内容并不相同。
+ *
+ * 与「重复」分开成两种结论，是因为两者的可信度根本不同：重复组里的文件
+ * 逐字节一致，删掉多余的副本没有风险；疑似组只说明属性撞上了，可能只是
+ * 同一投影被重新保存过，也可能压根是两个不同的投影。
+ */
+export interface SuspectGroup {
+  /** 投影名称，同时是分组键的一部分，也是界面上供用户核对的信息 */
+  name: string;
+  /** 尺寸（X×Y×Z），与方块总数一起构成属性键 */
+  enclosing: [number, number, number];
+  totalBlocks: number;
+  /** 组内文件路径，按路径排序 */
+  paths: string[];
+}
+
+/** 重复组配色的种类数，与 global.scss 里生成的色相数量一致。
+ *
+ * 两组共用一种颜色会让人误以为它们是同一组，因此这个数一旦调整，
+ * 样式表里的循环次数必须跟着改。
+ */
+const DUP_COLOR_COUNT = 12;
 
 export function createFileListSlice(s: FileListDeps) {
   /** 每个已加载目录 → 该目录的扫描结果。
@@ -114,18 +136,18 @@ export function createFileListSlice(s: FileListDeps) {
   const dirty = ref(false);
   const searchText = ref("");
 
-  /** 执行内联筛查：扫描当前已勾选的目录。
-   *
-   * 逐目录调用后端再合并，而不是把一批路径传下去：
-   * `scan_duplicates` 的契约就是「扫描一个目录」，改成批量会牵动命令层与
-   * 现成的用例；而目录数量通常只有个位数，逐次调用的开销可以忽略。
-   */
-  // 重复文件筛查
+  // ---------------------------------------------------------------- 重复文件筛查
   //
-  // 按用户要求改为**内联在主界面**：不再单独开弹窗，直接筛查地址栏里
-  // 已勾选的那些目录，并在列表里把重复文件标成同色、默认勾选。
+  // 就地筛查地址栏里已勾选的目录，不另开页面：结果直接标在列表上。
+  //
+  // 「重复」与「疑似重复」必须分开对待：
+  //   - 重复：后端逐字节确认内容完全相同，多出来的副本默认勾上，可以直接删；
+  //   - 疑似：名称、尺寸、方块总数都一样而内容不同（同一份投影被重新保存过，
+  //     也可能只是属性恰好撞上），只提示、不默认勾选。
+  //   把疑似也默认勾上等于替用户认定「可以删」，那正是要避免的误识别。
   const dupBusy = ref(false);
   const dupResult = ref<DuplicateScan | null>(null);
+  const dupSuspects = ref<SuspectGroup[]>([]);
 
   /** 每个重复文件的路径 -> 组序号（从 1 起）。
    *
@@ -140,9 +162,28 @@ export function createFileListSlice(s: FileListDeps) {
     return m;
   });
 
+  /** 每个疑似重复文件的路径 -> 疑似组序号（从 1 起） */
+  const suspectGroupNo = computed(() => {
+    const m = new Map<string, number>();
+    dupSuspects.value.forEach((g, i) => {
+      for (const p of g.paths) m.set(p, i + 1);
+    });
+    return m;
+  });
+
   /** 重复文件总数（同一份内容重复计数） */
   const dupFileCount = computed(() => dupGroupNo.value.size);
 
+  /** 疑似重复文件总数 */
+  const suspectFileCount = computed(() => suspectGroupNo.value.size);
+
+  /** 筛查已勾选的目录。
+   *
+   * 一次把全部目录交给后端，而不是逐目录调用再拼接：跨目录的同一份内容
+   * 只有放在一起比才能归到同一组——逐个目录筛时它两边各只有一个成员，
+   * 而只有一个成员的组根本不会返回，于是「同一份投影被复制到两个目录」
+   * 这种最常见的重复反而查不出来。
+   */
   async function scanDuplicatesInline() {
     const dirs = loadedDirs.value.filter((d) => enabledDirs.value.has(d));
     if (dirs.length === 0) {
@@ -150,71 +191,112 @@ export function createFileListSlice(s: FileListDeps) {
       return;
     }
     dupBusy.value = true;
+    // 记下发起时的世代：结果回来时若列表已经变过，这份结论对应的就不是
+    // 用户眼前的文件集合了（期间仍可添加目录、勾选或移除目录）
+    const epoch = dupEpoch;
     try {
-      const merged: DuplicateScan = { groups: [], unreadable: [] };
-      for (const d of dirs) {
-        const r = await scanDuplicates(d);
-        merged.groups.push(...r.groups);
-        merged.unreadable.push(...r.unreadable);
+      const r = await scanDuplicates(dirs);
+      if (epoch !== dupEpoch) {
+        Message.info("筛查期间目录有变化，结果已作废，请重新筛查");
+        return;
       }
-      // 跨目录也可能重复（同一份投影被复制到两个目录），因此按大小重新归并：
-      // 直接拼接会把「跨目录的同一份内容」拆成两组，用户就看不到它们其实相同。
-      merged.groups = mergeDuplicateGroups(merged.groups);
-      dupResult.value = merged;
-
-      // 默认勾选「多于重复文件」——用户原话「默认勾选多于重复文件」，
-      // 即每组保留第一份、其余勾上，便于直接删除多余的副本。
+      dupResult.value = r;
+      dupSuspects.value = findSuspects(r);
+      // 默认勾选「多于重复文件」：每组保留第一份，其余勾上待删
       applyDefaultDupChecks();
-      const n = merged.groups.length;
-      Message.success(
-        n > 0 ? `发现 ${n} 组重复文件，已默认勾选多余的副本` : "没有发现重复文件",
-      );
+      reportDupScan(r);
     } catch (e) {
       Message.error(`筛查失败：${e}`);
-      dupResult.value = null;
+      clearDuplicateScan();
     } finally {
       dupBusy.value = false;
     }
   }
 
-  /** 把按目录分别得到的组按内容归并。
+  /** 筛查结果提示。
    *
-   * 归并依据是**大小 + 逐字节相同**：先按大小分桶，再用组内已有的路径
-   * 两两比对确认，避免把「大小相同但内容不同」误并成一组。
-   * 后端已经保证每组内部一致，因此只需在组之间比对。
+   * 必须说出筛查了多少个文件：一个都没扫到，与「扫过了、确实没有重复」
+   * 在界面上完全是两回事。只报「没有发现重复文件」会让用户以为功能坏了
+   * ——它以前的毛病正是如此。
    */
-  function mergeDuplicateGroups(groups: DuplicateGroup[]): DuplicateGroup[] {
-    const bySize = new Map<number, DuplicateGroup[]>();
-    for (const g of groups) {
-      const list = bySize.get(g.size);
-      if (list) list.push(g);
-      else bySize.set(g.size, [g]);
+  function reportDupScan(r: DuplicateScan) {
+    if (r.scanned === 0) {
+      Message.warning("所选目录下没有可筛查的投影文件");
+      return;
     }
-    const out: DuplicateGroup[] = [];
-    for (const [, list] of bySize) {
-      const merged: DuplicateGroup[] = [];
-      for (const g of list) {
-        // 与已归并的组比对：路径集合完全相同才算同一组
-        const hit = merged.find((m) => m.paths.some((p) => g.paths.includes(p)));
-        if (hit) {
-          for (const p of g.paths) if (!hit.paths.includes(p)) hit.paths.push(p);
-          hit.paths.sort();
-        } else {
-          merged.push({ size: g.size, paths: [...g.paths] });
-        }
-      }
-      out.push(...merged);
+    const parts = [`已筛查 ${r.scanned} 个投影文件`];
+    if (r.groups.length > 0) {
+      parts.push(`发现 ${r.groups.length} 组内容相同的重复，多余的副本已勾上`);
+    } else {
+      parts.push("没有内容相同的重复");
     }
-    out.sort((a, b) => a.paths[0].localeCompare(b.paths[0]));
-    return out;
+    if (dupSuspects.value.length > 0) {
+      parts.push(`另有 ${dupSuspects.value.length} 组疑似重复待确认`);
+    }
+    const text = parts.join("，");
+    if (r.groups.length > 0) Message.success(text);
+    else Message.info(text);
   }
 
-  /** 默认勾选每组除第一份外的其余副本 */
+  /** 找出「疑似重复」：名称、尺寸、方块总数都相同，但内容并不相同。
+   *
+   * 用列表里已有的摘要算，不再读一遍文件：这些字段在目录扫描时就解析好了，
+   * 再解析一次纯属白花时间。
+   *
+   * 要求名称非空：只靠尺寸与方块总数会把大量互不相干的投影凑成一组。
+   */
+  function findSuspects(r: DuplicateScan): SuspectGroup[] {
+    const confirmed = new Set<string>();
+    for (const g of r.groups) for (const p of g.paths) confirmed.add(p);
+
+    const byKey = new Map<string, SuspectGroup>();
+    const seen = new Set<string>();
+    for (const f of files.value) {
+      // 父目录与它自己的子目录同时被加载时，同一个文件在列表里出现两次。
+      // 不去重的话它会自己和自己配对，凑出一组只有一个文件的「疑似重复」。
+      if (seen.has(f.path)) continue;
+      seen.add(f.path);
+      if (f.error || !f.name) continue;
+      // 用 \0 分隔：名称里带分隔符时也不会拼出相同的键
+      const key = `${f.name}\u0000${f.enclosing.join(",")}\u0000${f.totalBlocks}`;
+      const hit = byKey.get(key);
+      if (hit) {
+        hit.paths.push(f.path);
+      } else {
+        byKey.set(key, {
+          name: f.name,
+          enclosing: f.enclosing,
+          totalBlocks: f.totalBlocks,
+          paths: [f.path],
+        });
+      }
+    }
+
+    // 属性键覆盖全部文件，到输出时才剔掉已确认重复的那些。
+    //
+    // 反过来（建键时就排除）会漏报：a、b 逐字节相同、c 与它们属性相同而
+    // 内容不同时，c 会孤零零地落单，被下面「至少两个成员」的条件滤掉，
+    // 而 c 恰恰是用户最需要看一眼的那一份。
+    return [...byKey.values()]
+      .filter((g) => g.paths.length > 1)
+      .map((g) => ({ ...g, paths: g.paths.filter((p) => !confirmed.has(p)).sort() }))
+      .filter((g) => g.paths.length > 0)
+      .sort((a, b) => a.paths[0].localeCompare(b.paths[0]));
+  }
+
+  /** 默认勾选「多于重复文件」：每组保留第一份，其余勾上待处理。
+   *
+   * 第一份显式取消勾选，而不是「不去动它」：它可能本来就是勾着的，
+   * 那样「保留第一份」就名不副实，用户一按删除会把最后一份也删掉。
+   * 疑似重复组不参与：它们内容并不相同，该不该删要用户看过再定。
+   */
   function applyDefaultDupChecks() {
     const next = new Set(checkedPaths.value);
     for (const g of dupResult.value?.groups ?? []) {
-      // 第一份视为「保留的」，其余默认勾上待删
-      for (const p of g.paths.slice(1)) next.add(p);
+      g.paths.forEach((p, i) => {
+        if (i === 0) next.delete(p);
+        else next.add(p);
+      });
     }
     checkedPaths.value = next;
   }
@@ -224,17 +306,74 @@ export function createFileListSlice(s: FileListDeps) {
     return dupGroupNo.value.get(path) ?? 0;
   }
 
+  /** 这一行的疑似重复组序号；不属于任何疑似组时为 0 */
+  function suspectNoOf(path: string): number {
+    return suspectGroupNo.value.get(path) ?? 0;
+  }
+
+  /** 重复组的配色序号（从 1 起，0 表示不上色）。
+   *
+   * 配色只有限几种，超出后循环使用，相邻组因此始终不同色；
+   * 行底色与行首色块用的是同一张表（见 global.scss 的「重复文件标记」）。
+   */
+  function dupColorNo(path: string): number {
+    const no = dupNoOf(path);
+    return no > 0 ? ((no - 1) % DUP_COLOR_COUNT) + 1 : 0;
+  }
+
   /** 清除重复标记：恢复普通行样式；用户已有的勾选保持不变 */
   function clearDuplicateScan() {
     dupResult.value = null;
+    dupSuspects.value = [];
   }
+
+  // 列表一变，上一次的筛查结论就作废：增删目录、重新扫描、删除文件都会改变
+  // 参与筛查的文件集合，而结论是按那个集合下的。留着旧标记最直接的后果是
+  // 汇总条继续报「发现 3 组重复」，而副本其实已经被删掉了。
+  //
+  // 放在这里统一作废，而不是在增删目录的每个入口各写一遍——那些入口有四五个，
+  // 漏掉任何一个都会留下同样的假结论。dupEpoch 同时让正在跑的筛查知道
+  // 「你出发时的列表已经不是现在这个了」，从而丢弃过期结果。
+  let dupEpoch = 0;
+  watch(files, () => {
+    dupEpoch++;
+    clearDuplicateScan();
+  });
+
+  /** 列表显示顺序：重复文件排在最前（同组相邻），其次是疑似重复组，
+   *  其余仍按路径排序。
+   *
+   * 「靠前」是为了让用户一眼看到筛查结果，不必在几百行里自己找；
+   * 同组相邻才谈得上顺着颜色一份份核对。没做过筛查时顺序与原来完全一致。
+   */
+  const orderedFiles = computed<SchematicSummary[]>(() => {
+    if (!dupResult.value && dupSuspects.value.length === 0) return files.value;
+    // 值里的两个数依次是「层级」与「组序号」：先按层级（重复在前、疑似在后），
+    // 同层再按组序，同组内部仍按路径排
+    const rank = new Map<string, [number, number]>();
+    (dupResult.value?.groups ?? []).forEach((g, i) => {
+      for (const p of g.paths) rank.set(p, [0, i]);
+    });
+    dupSuspects.value.forEach((g, i) => {
+      for (const p of g.paths) rank.set(p, [1, i]);
+    });
+    if (rank.size === 0) return files.value;
+    return [...files.value].sort((a, b) => {
+      const ra = rank.get(a.path);
+      const rb = rank.get(b.path);
+      if (ra && rb) return ra[0] - rb[0] || ra[1] - rb[1] || a.path.localeCompare(b.path);
+      if (ra) return -1;
+      if (rb) return 1;
+      return a.path.localeCompare(b.path);
+    });
+  });
 
   /// 按名称、作者、文件名、路径过滤；同时匹配中英文输入不做转换，
   /// 保持与输入一致即可——投影命名本身就是混合的。
   const filteredFiles = computed(() => {
     const q = searchText.value.trim().toLowerCase();
-    if (!q) return files.value;
-    return files.value.filter((f) => {
+    if (!q) return orderedFiles.value;
+    return orderedFiles.value.filter((f) => {
       const hay = [f.fileName, f.path, f.name ?? "", f.author ?? ""]
         .join("\n")
         .toLowerCase();
@@ -253,7 +392,21 @@ export function createFileListSlice(s: FileListDeps) {
    * 只是让该列也能拖动。
    */
   const columns = computed<TableColumnData[]>(() => [
-    { title: "名称", dataIndex: "fileName", width: NAME_COL_W, ellipsis: true, tooltip: true },
+    // 名称列走插槽：重复文件要在文件名前带上组号色块，
+    // 直接渲染 dataIndex 没法插入这个标记（见 DirSidebar 的 #fileName）。
+    //
+    // 这里关掉 Arco 自带的 tooltip：它把插槽内容整段的 textContent 当提示文本
+    // （会变成「1文件名」），而且判断「是否溢出」时量的是自己的行内包裹层，
+    // 盒级 flex 子项的宽度永远不超过它，于是长文件名反而不弹提示。
+    // 提示改由插槽自己给出（见 .dup-name__text 的 title）。
+    {
+      title: "名称",
+      dataIndex: "fileName",
+      slotName: "fileName",
+      width: NAME_COL_W,
+      ellipsis: true,
+      tooltip: false,
+    },
     { title: "制作版本", dataIndex: "mcVersionName", width: 90 },
     // 110 是实测值：`16 × 12 × 16` 在 100px 下会折成两行
     { title: "尺寸", dataIndex: "dims", slotName: "dims", width: 110 },
@@ -741,19 +894,9 @@ export function createFileListSlice(s: FileListDeps) {
       next.add(newPath);
       checkedPaths.value = next;
     }
-    // 重复筛查结果按路径记组：不迁则这个文件的行高亮与分组号凭空消失。
-    // 改名不改内容，分组本身仍然成立，因此只换路径、不重扫。
-    if (dupResult.value) {
-      const rename = (p: string) => (p === cur.path ? newPath : p);
-      dupResult.value = {
-        ...dupResult.value,
-        groups: dupResult.value.groups.map((g) => ({ ...g, paths: g.paths.map(rename) })),
-        unreadable: dupResult.value.unreadable.map((u) => ({
-          ...u,
-          path: rename(u.path),
-        })),
-      };
-    }
+    // 改名会改动 dirItems，下面的 watcher 随即作废上一次的筛查结论，
+    // 因此这里不需要（也不该）把组里的旧路径改成新路径：
+    // 旁路维护一份随时会被清掉的镜像，只会让人以为它还有用。
   }
 
   async function rescanAll(): Promise<void> {
@@ -876,27 +1019,36 @@ export function createFileListSlice(s: FileListDeps) {
     }
   }
 
-  /** 列表行的样式类：当前选中项高亮，重复文件按组上色。
+  /** 列表行的样式类：当前选中项高亮，重复文件按组上色，疑似重复另行标出。
    *
    * 用 a-table 的 rowClass 而不是自己拼 tr：行的 DOM 由 Arco 生成，
    * 手改会在排序/筛选重新渲染后丢失。
    *
-   * 重复组的颜色类名带序号：CSS 里为 1..6 号各准备一种颜色，超过 6 组
-   * 循环使用——同一屏内相邻组不同色即可，不必为几十组各配一色
-   * （颜色太多反而分不清）。
+   * 重复组与疑似组的样式不同：重复用实心底色的组色，疑似用统一的警示色。
+   * 两者不能共用一套配色——那样用户分不清「这几个内容一样」与
+   * 「这几个只是看起来一样」。
    */
   function rowClass(raw: TableData): string {
     const rec = raw as unknown as SchematicSummary;
     const cls: string[] = [];
     if (selected.value?.path === rec.path) cls.push("row-selected");
     const no = dupNoOf(rec.path);
-    if (no > 0) cls.push(`row-dup-${((no - 1) % 6) + 1}`);
+    if (no > 0) {
+      cls.push(`row-dup-${dupColorNo(rec.path)}`);
+    } else if (suspectNoOf(rec.path) > 0) {
+      cls.push("row-dup-suspect");
+    }
     return cls.join(" ");
   }
 
   /** 该行是否属于某个重复组，用于在文件名旁显示标记 */
   function isDup(path: string): boolean {
     return dupNoOf(path) > 0;
+  }
+
+  /** 该行是否属于某个疑似重复组 */
+  function isSuspect(path: string): boolean {
+    return suspectNoOf(path) > 0;
   }
 
   return {
@@ -954,13 +1106,17 @@ export function createFileListSlice(s: FileListDeps) {
     revealRow,
     dupBusy,
     dupResult,
+    dupSuspects,
     dupGroupNo,
     dupFileCount,
+    suspectFileCount,
     scanDuplicatesInline,
     clearDuplicateScan,
     rowClass,
     dupNoOf,
+    dupColorNo,
     isDup,
+    isSuspect,
   };
 }
 

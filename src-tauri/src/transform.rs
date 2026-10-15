@@ -42,11 +42,19 @@ pub fn rotate_element(p: [f32; 3], e: &ModelElement) -> [f32; 3] {
 ///
 /// 参数为 90 度的倍数（0~3），先绕 X 再绕 Y。
 /// 旋转以方块中心为参照，坐标范围为 0..16，因此用 16 取补。
+///
+/// `rot_x_div90` 的方向与 Minecraft 的 `x` 一致，而**不是**数学上的正向旋转：
+/// Minecraft 的 blockstate 把 `x` 当作绕轴 **-x·90 度**（右手系）施加，
+/// 因此 x=90 要把 +Y 转到 -Z（北）。曾经这里按正向旋转实现（把 90 度与 270 度
+/// 写反了），后果是所有贴在墙上/天花板上的方块都被镜像：
+/// 墙面拉杆的底座被画到墙的另一侧、把手扎进墙里，看上去就是「悬空的拉杆」。
+/// `y` 与 Minecraft 一致（-y·90 度），因此不需要改动——两轴方向不一致纯属
+/// 移植时的笔误，不是有意的约定。
 pub fn rotate_variant(p: [f32; 3], rot_x_div90: u8, rot_y_div90: u8) -> [f32; 3] {
     let [mut x, mut y, mut z] = p;
     match rot_x_div90 % 4 {
         1 => {
-            let (ny, nz) = (16.0 - z, y);
+            let (ny, nz) = (z, 16.0 - y);
             y = ny;
             z = nz;
         }
@@ -55,7 +63,7 @@ pub fn rotate_variant(p: [f32; 3], rot_x_div90: u8, rot_y_div90: u8) -> [f32; 3]
             z = 16.0 - z;
         }
         3 => {
-            let (ny, nz) = (z, 16.0 - y);
+            let (ny, nz) = (16.0 - z, y);
             y = ny;
             z = nz;
         }
@@ -188,18 +196,43 @@ mod tests {
 
     #[test]
     fn variant_rotation_matches_model_spec() {
-        // 绕 X 90 度：(x, y, z) -> (x, 16-z, y)
-        assert!(approx3(rotate_variant([1.0, 2.0, 3.0], 1, 0), [1.0, 13.0, 2.0]));
-        // 绕 X 180 度
+        // 绕 X 90 度：Minecraft 的 x 是「绕轴 -x·90 度」，因此 (x,y,z) -> (x, z, 16-y)
+        assert!(approx3(rotate_variant([1.0, 2.0, 3.0], 1, 0), [1.0, 3.0, 14.0]));
+        // 绕 X 180 度（正负同值，与方向无关）
         assert!(approx3(rotate_variant([1.0, 2.0, 3.0], 2, 0), [1.0, 14.0, 13.0]));
         // 绕 X 270 度
-        assert!(approx3(rotate_variant([1.0, 2.0, 3.0], 3, 0), [1.0, 3.0, 14.0]));
+        assert!(approx3(rotate_variant([1.0, 2.0, 3.0], 3, 0), [1.0, 13.0, 2.0]));
         // 绕 Y 90 度：(x, y, z) -> (16-z, y, x)
         assert!(approx3(rotate_variant([1.0, 2.0, 3.0], 0, 1), [13.0, 2.0, 1.0]));
         // 绕 Y 180 度
         assert!(approx3(rotate_variant([1.0, 2.0, 3.0], 0, 2), [15.0, 2.0, 13.0]));
         // 绕 Y 270 度
         assert!(approx3(rotate_variant([1.0, 2.0, 3.0], 0, 3), [3.0, 2.0, 15.0]));
+    }
+
+    /// 贴在东西向墙面上的方块：底座朝西、本体朝东。
+    ///
+    /// 这条钉的是真实的方块状态：投影里贴着西面墙、朝向为东的拉杆
+    /// （`face=wall,facing=east`，Minecraft 记为 x=90,y=90）。
+    /// 曾经 x 的两档写反，这类方块整个被镜像——底座被画到墙的另一侧、
+    /// 把手扎进墙里，看上去就是「没有依附在方块上的悬空拉杆」。
+    #[test]
+    fn wall_mounted_block_faces_away_from_its_wall() {
+        // 竖直向上的杆（模型里 +Y 方向的一点），转到 facing=east 后应指向 +X
+        let up = rotate_variant([8.0, 16.0, 8.0], 1, 1);
+        assert!(
+            approx3(up, [16.0, 8.0, 8.0]),
+            "facing=east 的墙上方块应朝东，实际 {up:?}"
+        );
+        // 底座那一面（模型里朝下、贴在方块底面的那一面）必须落在西侧 x=0
+        let base = rotate_variant([8.0, 0.0, 8.0], 1, 1);
+        assert!(
+            approx3(base, [0.0, 8.0, 8.0]),
+            "底座应贴在西面墙上（x=0），实际 {base:?}"
+        );
+        // 天花板（x=180）与地面（x=0）方向不受影响，避免修一处坏一处
+        assert!(approx3(rotate_variant([8.0, 0.0, 8.0], 2, 0), [8.0, 16.0, 8.0]));
+        assert!(approx3(rotate_variant([8.0, 0.0, 8.0], 0, 0), [8.0, 0.0, 8.0]));
     }
 
     #[test]
@@ -236,9 +269,9 @@ mod tests {
             to_world([16.0, 0.0, 0.0], &e, 0, 0, [2, 3, 4]),
             [3.0, 3.0, 4.0]
         ));
-        // 带变体旋转时，先旋转再平移
+        // 带变体旋转时，先旋转再平移（绕 X 90 度后 (1,2,3) -> (1,3,14)）
         let got = to_world([1.0, 2.0, 3.0], &e, 1, 0, [0, 0, 0]);
-        let want = [1.0 / 16.0, 13.0 / 16.0, 2.0 / 16.0];
+        let want = [1.0 / 16.0, 3.0 / 16.0, 14.0 / 16.0];
         assert!(approx3(got, want));
     }
 
@@ -250,8 +283,9 @@ mod tests {
         // （对照 C++ RotateBlock：Y90 为 (16-z, y, x)，
         //   方向向量按中心偏移换算后得 (0,0,1)）
         assert_eq!(rotate_cull_offset([1, 0, 0], 0, 1), [0, 0, 1]);
-        // 绕 X 90 度：+Y 方向应变为 +Z 方向
-        assert_eq!(rotate_cull_offset([0, 1, 0], 1, 0), [0, 0, 1]);
+        // 绕 X 90 度：+Y 方向应变为 -Z 方向
+        // （Minecraft 的 x 是绕轴 -x·90 度，与上面的 rotate_variant 同一约定）
+        assert_eq!(rotate_cull_offset([0, 1, 0], 1, 0), [0, 0, -1]);
         // 绕 Y 180 度：+X 变为 -X
         assert_eq!(rotate_cull_offset([1, 0, 0], 0, 2), [-1, 0, 0]);
         // 绕 Y 90 度：+Z 方向应变为 -X 方向
@@ -271,14 +305,17 @@ mod tests {
     #[test]
     fn element_rotation_precedes_variant_rotation() {
         // 两种变换不可交换，顺序必须为「先元素后变体」：
-        // 先用元素旋转把点移动到 (0,0,1)，再做变体绕 X 90 度得 (0,15,0)
+        // 元素绕 X 90 度把 (0,1,0) 移到 (0,0,1)，变体再绕 X 180 度得 (0,16,15)
         let mut e = elem(true, 1, 0, 0.0, [0.0; 3]);
         e.rot_vec = [90.0, 0.0, 0.0];
-        let got = to_world([0.0, 1.0, 0.0], &e, 1, 0, [0, 0, 0]);
-        assert!(approx3(got, [0.0, 15.0 / 16.0, 0.0]), "实际 {got:?}");
+        let got = to_world([0.0, 1.0, 0.0], &e, 2, 0, [0, 0, 0]);
+        assert!(
+            approx3(got, [0.0, 16.0 / 16.0, 15.0 / 16.0]),
+            "实际 {got:?}"
+        );
 
         // 若顺序反了会得到不同结果，这里断言两者确实不同
-        let wrong = rotate_element(rotate_variant([0.0, 1.0, 0.0], 1, 0), &e);
-        assert!(!approx3(wrong, [0.0, 15.0, 0.0]), "顺序反了应得到不同结果");
+        let wrong = rotate_element(rotate_variant([0.0, 1.0, 0.0], 2, 0), &e);
+        assert!(!approx3(wrong, [0.0, 16.0, 15.0]), "顺序反了应得到不同结果");
     }
 }

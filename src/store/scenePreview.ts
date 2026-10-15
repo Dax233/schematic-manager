@@ -20,7 +20,8 @@ import { buildScene, renderBlockIcons } from "../api";
 import type SceneViewer from "../components/SceneViewer.vue";
 import { OffscreenRenderer } from "../render/scene3d";
 import { NamePool, joinPath, previewStem } from "../render/export_name";
-import type { AnalysisResult, BlockCount, SceneData, SchematicSummary } from "../types";
+import type { AnalysisResult, BlockRow, SceneData, SchematicSummary } from "../types";
+import { itemKeyOf } from "../utils/block_item";
 import { formatStacks } from "../utils/format";
 
 /** 3D 预览与方块统计域用到的其他域成员（循环引用回避见 fileList.ts） */
@@ -198,7 +199,8 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     { title: "渲染图", slotName: "icon", width: 60 },
     { title: "中文名", slotName: "zhName", width: 150, ellipsis: true, tooltip: true },
     { title: "方块", dataIndex: "name", ellipsis: true, tooltip: true },
-    { title: "状态", dataIndex: "state", ellipsis: true, tooltip: true },
+    // 状态走插槽：合并显示的行要写「含 N 种状态」而不是某一个代表状态
+    { title: "状态", dataIndex: "state", slotName: "state", ellipsis: true, tooltip: true },
     { title: "数量", dataIndex: "count", width: 90 },
     { title: "堆叠", slotName: "stacks", width: 110 },
     {
@@ -244,12 +246,68 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   const ICON_BATCH = 128;
   const blockPage = ref(1);
 
-  /** 当前页的行。渲染图只给可见的这批，整表一次性加载会有几 MB 的 data URL。 */
-  const blockPageRows = computed<BlockCount[]>(() => {
+  /** 方块统计表的行：按**物品**合计，忽略方块状态与摆放形态。
+   *
+   * 后端给的是「每个方块状态用了多少个」。要合计两层：
+   *   1. 状态（红石粉的强度、铁轨的朝向与通电、楼梯的朝向……）；
+   *   2. 同一个物品的不同方块形态（火把与墙上的火把、立地与墙上的告示牌、
+   *      炼药锅的内容物、铁砧的破损程度）——见 utils/block_item.ts 的规律。
+   * 用户要看的是「这种物品一共要备多少」，两层都属于摆放差异。
+   *
+   * 一行里如果出现了基础形态（例如同时有火把与墙上的火把），就用基础形态的
+   * 名字、中文名与渲染图：那一行代表的是「火把」这个物品，而不是墙挂形态。
+   * 跨了哪几个方块名记在 forms 里，替换时据此说明只覆盖了其中一个名字。
+   */
+  const blockRows = computed<BlockRow[]>(() => {
     const all = s.analysis.value?.blocks ?? [];
-    const start = (blockPage.value - 1) * BLOCK_PAGE_SIZE;
-    return all.slice(start, start + BLOCK_PAGE_SIZE);
+    const out: BlockRow[] = [];
+    const at = new Map<string, number>();
+    for (const b of all) {
+      // 后端已按数量降序返回，因此同一方块第一项就是数量最多的那个状态
+      const key = itemKeyOf(b.name);
+      const i = at.get(key);
+      if (i === undefined) {
+        at.set(key, out.length);
+        out.push({ ...b, stateCount: 1, forms: [b.name] });
+        continue;
+      }
+      const row = out[i];
+      row.count += b.count;
+      row.stateCount += 1;
+      if (!row.forms.includes(b.name)) row.forms.push(b.name);
+      // 基础形态优先当代表：名字、中文名、渲染图都取它的
+      if (b.name === key && row.name !== key) {
+        row.name = b.name;
+        row.zhName = b.zhName;
+        row.enName = b.enName;
+        row.state = b.state;
+      }
+    }
+    // 合计后的数量与后端给出的单状态数量不同，名次要重排：否则「用了 8000 个
+    // 的红石粉」会排在「用了 12 个的石头」后面。数量相同按名字排，结果稳定
+    // （不用 localeCompare：它随环境语言数据变化，同一份数据在不同机器上会排出不同顺序）。
+    out.sort((a, b) => b.count - a.count || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    return out;
   });
+
+  /** 当前页的行。渲染图只给可见的这批，整表一次性加载会有几 MB 的 data URL。 */
+  const blockPageRows = computed<BlockRow[]>(() => {
+    const start = (blockPage.value - 1) * BLOCK_PAGE_SIZE;
+    return blockRows.value.slice(start, start + BLOCK_PAGE_SIZE);
+  });
+
+  /** 状态一栏显示什么。
+   *
+   * 合计了多条记录的行不能只写它那一个代表状态：那一行的数量是所有这些记录的
+   * 总和，写一个具体状态会让人以为「只有这么多是那个状态的」。跨了多个方块名
+   * 时还要点明这一点——用户以为「这一行就是火把」，实际上墙上的火把也在里面。
+   */
+  function blockStateText(row: BlockRow): string {
+    if (row.forms.length > 1) {
+      return `（含 ${row.forms.length} 种形态、共 ${row.stateCount} 种状态）`;
+    }
+    return row.stateCount > 1 ? `（含 ${row.stateCount} 种状态）` : row.state;
+  }
 
   /** 状态键 → data URL。用普通 Map 而不是 reactive：
    * 这里会有几百上千项，逐项做响应式代理得不偿失，
@@ -275,7 +333,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   }
 
   /** 按需加载这一页里还没有渲染图的行。 */
-  async function ensureBlockIcons(rows: BlockCount[]) {
+  async function ensureBlockIcons(rows: BlockRow[]) {
     const dataVersion = s.selected.value?.dataVersion ?? 0;
     if (dataVersion <= 0) return;
     const missing = rows
@@ -327,13 +385,15 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
    *
    * 用制表符而不是逗号：方块名里含 `:` 与 `[`，但不会有制表符；
    * 名字里若真有制表符或换行会被替换掉，避免一行数据被拆成两行。
+   * 行取合并后的 blockRows，与界面上看到的一致——导出与显示对不上
+   * 会让人以为导出漏了方块。
    */
   function blockTableText(): string {
     const rows: string[] = [];
     rows.push(["中文名", "方块ID", "状态", "数量", "堆叠"].join("\t"));
-    for (const b of s.analysis.value?.blocks ?? []) {
+    for (const b of blockRows.value) {
       const name = (b.zhName || b.enName || "").replace(/[\t\r\n]/g, " ");
-      const state = b.state.replace(/[\t\r\n]/g, " ");
+      const state = blockStateText(b).replace(/[\t\r\n]/g, " ");
       rows.push([name, b.name, state, String(b.count), formatStacks(b.count)].join("\t"));
     }
     return rows.join("\r\n");
@@ -341,7 +401,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
 
   /** 把方块统计导出为 .txt 文件（用户可选保存位置） */
   async function exportBlockTable() {
-    const blocks = s.analysis.value?.blocks ?? [];
+    const blocks = blockRows.value;
     if (blocks.length === 0) {
       Message.warning("当前没有方块统计可导出");
       return;
@@ -361,7 +421,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
 
   /** 复制方块表到剪贴板 */
   async function copyBlockTable() {
-    const blocks = s.analysis.value?.blocks ?? [];
+    const blocks = blockRows.value;
     if (blocks.length === 0) {
       Message.warning("当前没有方块统计可复制");
       return;
@@ -405,7 +465,9 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     resetBlockColumnWidths,
     BLOCK_PAGE_SIZE,
     blockPage,
+    blockRows,
     blockPageRows,
+    blockStateText,
     iconOf,
     iconErrorOf,
     resetBlockIcons,

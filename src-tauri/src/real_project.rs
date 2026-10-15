@@ -808,27 +808,32 @@ fn piston_head_all_property_combinations_resolve() {
     assert!(failures.is_empty(), "以下活塞头状态解析异常：\n{}", failures.join("\n"));
 }
 
-/// 真实投影里同时带 x 与 y 旋转的方块，其最终朝向必须与参考实现一致。
+/// 真实投影里同时带 x 与 y 旋转的方块，其最终朝向必须与既定约定一致。
 ///
-/// 变体旋转在 blockstate 里写作 `"x": 90, "y": 180`。参考实现
-/// legacy-cpp/render.cpp 的 RotateBlock 是**先 X 后 Y**，且各轴用 16 取补
-/// （绕方块中心 8,8,8 旋转）。若顺序写反，只有**两个都非零**的方块才会转错——
-/// 单独一个轴非零时两种顺序结果常常相同，因此这类缺陷容易漏掉，
-/// 表现正是「有时候会不对」。
+/// 变体旋转在 blockstate 里写作 `"x": 90, "y": 180`。约定为**先 X 后 Y**，
+/// 且各轴用 16 取补（绕方块中心 8,8,8 旋转）。若顺序写反，只有**两个都非零**
+/// 的方块才会转错——单独一个轴非零时两种顺序结果常常相同，因此这类缺陷容易
+/// 漏掉，表现正是「有时候会不对」。
 ///
 /// 这里不复用 rotate_variant 的结果做参照（那等于自己和自己比），
-/// 而是照抄 legacy 的公式独立算一遍再比对。
+/// 而是照约定独立算一遍再比对。
+///
+/// `x` 的方向：blockstate 的 `x` 是绕轴 **-x·90 度**（右手系），因此 x=90
+/// 把 +Y 转到 -Z。legacy-cpp/render.cpp 的 RotateBlock 在这一点上与 Minecraft
+/// 相反（把 90 度与 270 度写反），早期照抄它导致所有贴墙、贴天花板的方块被
+/// 镜像——墙面拉杆的底座落到墙的另一侧、把手扎进墙里。现在以 Minecraft 的
+/// 约定为准；`y` 与 legacy 一致，未改动。
 #[test]
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn real_project_two_axis_rotation_matches_reference() {
     use crate::transform::rotate_variant;
 
-    /// 照抄 legacy-cpp/render.cpp 的 RotateBlock
-    fn legacy_rotate(p: [f32; 3], rot_x_div90: u8, rot_y_div90: u8) -> [f32; 3] {
+    /// 按既定约定独立实现的旋转（先 X 后 Y，各轴 16 取补）
+    fn reference_rotate(p: [f32; 3], rot_x_div90: u8, rot_y_div90: u8) -> [f32; 3] {
         let [mut x, mut y, mut z] = p;
         match rot_x_div90 % 4 {
             1 => {
-                let (ny, nz) = (16.0 - z, y);
+                let (ny, nz) = (z, 16.0 - y);
                 y = ny;
                 z = nz;
             }
@@ -837,7 +842,7 @@ fn real_project_two_axis_rotation_matches_reference() {
                 z = 16.0 - z;
             }
             3 => {
-                let (ny, nz) = (z, 16.0 - y);
+                let (ny, nz) = (16.0 - z, y);
                 y = ny;
                 z = nz;
             }
@@ -888,7 +893,7 @@ fn real_project_two_axis_rotation_matches_reference() {
                 }
                 for p in probes {
                     let got = rotate_variant(p, v.rot_x_div90, v.rot_y_div90);
-                    let want = legacy_rotate(p, v.rot_x_div90, v.rot_y_div90);
+                    let want = reference_rotate(p, v.rot_x_div90, v.rot_y_div90);
                     for a in 0..3 {
                         if (got[a] - want[a]).abs() > 1e-4 {
                             bad.push(format!(

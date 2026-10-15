@@ -255,14 +255,9 @@ body,
 
   // 重复文件按组上色：同组同色，一眼看出「这几个是一份内容」。
   //
-  // 颜色用 Arco 的语义色变量而不是写死色值，深色主题下自动适配。
-  // 只染背景与左侧色条，不动文字颜色——文字变色会与「选中行」混淆。
-  @each $name, $var in (1: "danger", 2: "warning", 3: "success", 4: "link", 5: "arcoblue", 6: "purple") {
-    .row-dup-#{$name} > .arco-table-td {
-      background-color: rgba(var(--#{$var}-1), 0.35);
-      box-shadow: inset 2px 0 0 0 rgb(var(--#{$var}-6));
-    }
-  }
+  // 配色表在文件末尾的「重复文件标记」一节：那里是顶层规则，深色主题的
+  // 覆盖才能用 body[arco-theme='dark'] 写出来（写在 .sidebar 里面会变成
+  // `.sidebar body[...]`，永远匹配不到）。
 
   // 目录栏字号收紧，同宽下能多显示内容。
   // 只改目录栏，右侧详情与对话框保持原字号：那里的文字是逐字阅读的，
@@ -689,6 +684,17 @@ $preview-row-h: $preview-stage-h + 16px;
   word-break: break-all;
 }
 
+// 资源包管理工具条：左侧导入操作、右侧「日志」入口。
+// 用 space-between 而不是给右边按钮加左外边距：左侧那组会换行，
+// 固定外边距在换行后会把按钮推到奇怪的位置。
+.pack-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 // 方块栏头部：统计信息 + 导出按钮，一行放不下时换行
 .block-head {
   display: flex;
@@ -849,4 +855,420 @@ $preview-row-h: $preview-stage-h + 16px;
   color: var(--color-text-4);
   font-size: 11px;
   cursor: help;
+}
+
+// ---------------------------------------------------------------- 重复文件标记
+//
+// 一组一色，同组同色：用户要一眼看出「这几个是一份内容」。色相沿色环每 30°
+// 取一个，共 12 个，超过就循环——循环后不同组可能撞色，所以行首还写着组号，
+// 颜色负责快速分辨、数字负责确认。
+//
+// 为什么不用 Arco 的语义色变量（--danger-1 之类）：那套只有六个颜色，
+// 第七组起必然与第一组同色，而「同色即同组」正是这里要表达的东西。
+//
+// 深浅两套取值都必须写：只写一套的话，深色主题下浅底会把白字压没，
+// 浅色主题下深底又会显得像选中。规则放在顶层而不是 .sidebar 里面——
+// 嵌进去会变成 `.sidebar body[arco-theme='dark'] ...`，永远匹配不到。
+//
+// 一律带 :not(.row-selected)：组色与选中色都是「给单元格上底色」，
+// 谁在后面写谁赢。深色那一组规则同样如此，于是选中的重复行在深色下
+// 会被组色盖住，看不出选的是哪一行。排除选中行后，两种主题行为一致。
+//
+// 只染背景与左侧色条，不动文字颜色：文字跟着变色会与「选中行」混淆。
+@for $i from 1 through 12 {
+  $hue: ($i - 1) * 30;
+  // 黄、青一带的色相本身很亮，白字对比度不足 2.5:1，组号会看不清，
+  // 这几个色相改用深色字（深色主题下的同色相更暗，仍是白字）。
+  // 120（绿色）也必须算进来：它和 60、90 一样亮，漏掉它第 5 组的组号反而最难认。
+  //
+  // 用 @if 而不是 if()：后者是 Sass 正在弃用的全局函数，
+  // 每次构建都会打印一条弃用警告。
+  $fg: #fff;
+  @if ($hue >= 45 and $hue <= 130) or ($hue >= 140 and $hue <= 200) {
+    $fg: #2b2b2b;
+  }
+
+  .row-dup-#{$i}:not(.row-selected) > .arco-table-td {
+    background-color: hsl($hue, 70%, 91%);
+    box-shadow: inset 2px 0 0 0 hsl($hue, 70%, 45%);
+  }
+
+  // 两个类一起写：基础样式 .dup-chip（在文件更后面）也设了 color，
+  // 同为一个类时靠书写顺序决胜负，会被它覆盖成白字。
+  .dup-chip.dup-chip-#{$i} {
+    color: $fg;
+    background-color: hsl($hue, 70%, 45%);
+  }
+
+  body[arco-theme='dark'] {
+    .row-dup-#{$i}:not(.row-selected) > .arco-table-td {
+      background-color: hsl($hue, 40%, 24%);
+      box-shadow: inset 2px 0 0 0 hsl($hue, 60%, 55%);
+    }
+
+    .dup-chip.dup-chip-#{$i} {
+      color: #fff;
+      background-color: hsl($hue, 45%, 42%);
+    }
+  }
+}
+
+// 疑似重复：名称、尺寸、方块数相同而内容不同——还不能断言「可以删」，
+// 因此不用上面的组色，统一用警示色，与「已确认重复」区分开。
+//
+// 左侧那条色条只留给已确认的重复组：它代表「这几个内容一模一样」，
+// 疑似组不该借用。疑似靠底色 + 描边的「疑似」标记辨认。
+.row-dup-suspect:not(.row-selected) > .arco-table-td {
+  background-color: rgba(var(--warning-1), 0.45);
+}
+
+body[arco-theme='dark'] .row-dup-suspect:not(.row-selected) > .arco-table-td {
+  background-color: rgba(var(--warning-6), 0.16);
+}
+
+// 名称列里的重复标记：组号色块 + 文件名。
+// 文件名本身要能省略号截断，因此这里用 flex 让色块固定宽度、
+// 文字部分吃掉剩余空间（min-width: 0 是 flex 子项能收缩的前提）。
+.dup-name {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+
+  &__text {
+    overflow: hidden;
+    min-width: 0;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.dup-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  padding: 0 3px;
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  // 描边版（疑似）比实心版各多 1px 边框，不按 border-box 算就会高 2px
+  box-sizing: border-box;
+  border-radius: 2px;
+
+  // 疑似用描边而不是实心：实心色块表示「这是某一组」，
+  // 而疑似只是待核对——只靠颜色区分时，它和 2 号组的橙色几乎一样。
+  &--suspect {
+    border: 1px solid rgb(var(--warning-6));
+    background-color: transparent;
+    color: rgb(var(--warning-6));
+  }
+}
+
+// 深色下 --warning-6 偏暗，描边与文字都改用更亮的一档才看得清
+body[arco-theme='dark'] .dup-chip--suspect {
+  border-color: rgb(var(--warning-3));
+  color: rgb(var(--warning-3));
+}
+
+// ---------------------------------------------------------------- 版本转换窗口
+//
+// 左栏是待处理的方块清单，右栏是可选方块列表，两栏并排——用户要同时看到
+// 「缺了哪些方块」和「有哪些方块可选」，挤在一个窄列里只能来回滚动。
+//
+// 两栏共用一个固定高度：内容多时各自滚动，而不是把弹窗撑出屏幕
+// （弹窗本身不滚动，撑出去的部分用户够不到）。
+.conv-split {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+  height: min(58vh, 560px);
+}
+
+.conv-split__pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+// 左栏整体可滚：表格不给固定高度，行数多时由这一层滚，
+// 免得内容被裁掉（表头随之滚走可以接受，行数是分页限定的）
+.conv-split__pane--main {
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+.conv-split__pane--pick {
+  flex: 0 0 330px;
+  overflow: hidden;
+}
+
+.conv-pick {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  border: 1px solid var(--color-border-2);
+  border-radius: 2px;
+}
+
+// 列表项：中文名在上，方块 ID 与英文名在下。
+// 用 button 而不是 div：可聚焦、回车可触发，键盘也能点选。
+.conv-pick__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-1);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--color-fill-2);
+  }
+
+  // 已经是当前行的替代品：标出来，免得重复点同一条
+  &.is-current {
+    background-color: rgba(var(--success-1), 0.6);
+    box-shadow: inset 2px 0 0 0 rgb(var(--success-6));
+  }
+
+  // 目标版本里没有的方块：仍然列出来（用户正是在找它），但压暗并标注，
+  // 点它不会填进去。只靠「列表里没有」会让人以为方块库缺了它。
+  &.is-other-version {
+    cursor: not-allowed;
+
+    .conv-block__zh,
+    .conv-block__id {
+      color: var(--color-text-4);
+    }
+  }
+}
+
+.conv-pick__warn {
+  margin-left: 6px;
+  padding: 0 4px;
+  color: rgb(var(--danger-6));
+  font-size: 10px;
+  border: 1px solid rgb(var(--danger-6));
+  border-radius: 2px;
+}
+
+body[arco-theme='dark'] .conv-pick__item.is-current {
+  background-color: rgba(var(--success-6), 0.18);
+}
+
+// 中文名是用户认方块的主要依据，放第一行、用正常文字色；
+// 方块 ID 与英文名是精确依据，用次要颜色与小一号字。
+.conv-block {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+// 实际会用到的替代品：中文名与 ID 各占一行，都在输入框下面
+.conv-block__eff {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.conv-block__zh {
+  overflow: hidden;
+  color: var(--color-text-1);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conv-block__id {
+  overflow: hidden;
+  color: var(--color-text-3);
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// 「替代为」那一格的状态色：只给输入框上色，不染整格、更不染整行。
+//
+// 整行或整格上色会把输入框下面的中文名与 ID 也泡在色块里，表格看起来
+// 是一片绿红，反而看不出重点；只圈输入框才和红框的提示方式一致。
+// 三种状态：todo=还没定替代品（红），auto=自动识别的推荐（绿），
+// set=用户自己选过或填过（不上色，已经做过决定的行不必再抢注意力）。
+//
+// 选择器落在 .arco-input-wrapper 上：Arco 的输入框边框与底色都画在它身上
+// （.arco-input 只是里面的 input 元素），改它才是改用户看到的那个框。
+.conv-block--todo .arco-input-wrapper {
+  border-color: rgb(var(--danger-6));
+  background-color: rgba(var(--danger-6), 0.06);
+}
+
+.conv-block--auto .arco-input-wrapper {
+  border-color: rgb(var(--success-6));
+  background-color: rgba(var(--success-6), 0.06);
+}
+
+// 深色下 6% 的底色几乎看不出来（Arco 的深色主题只重定义 --color-* 语义变量，
+// 不重定义 --danger-6 / --success-6），底色要单独提一档；边框本身两种主题下
+// 都够清楚
+body[arco-theme='dark'] .conv-block--todo .arco-input-wrapper {
+  background-color: rgba(var(--danger-6), 0.24);
+}
+
+body[arco-theme='dark'] .conv-block--auto .arco-input-wrapper {
+  background-color: rgba(var(--success-6), 0.24);
+}
+
+// 当前正在编辑的那一行：整行给主色底，用户必须能一眼看出
+// 「现在点方块会填到哪一行」。这是唯一还会染整行的状态色。
+.conv-window .arco-table tr.conv-row--active > .arco-table-td {
+  background-color: var(--color-primary-light-2);
+  box-shadow: inset 3px 0 0 0 rgb(var(--primary-6));
+}
+
+body[arco-theme='dark'] .conv-window .arco-table tr.conv-row--active > .arco-table-td {
+  background-color: rgba(var(--primary-6), 0.22);
+}
+
+// ---------------------------------------------------------------- 版本转换窗口的字号
+//
+// 整扇窗口的字号抬一号：全局那条 12px 只作用于左侧目录栏，对话框保持
+// Arco 默认的 14px，而这里要逐条核对中文名与方块 ID，默认字号偏小。
+//
+// 用 .conv-window（挂在弹窗根上，见 ConvertModal.vue 的 modal-class）
+// 收窄范围：同一份样式表还服务目录栏与其它窗口，不能全局调字号。
+// Arco 的字号规则是 `.arco-table .arco-table-td`（0,2,0），因此这里
+// 多带一层 .arco-table 把优先级压过去，避免靠书写顺序取胜。
+.conv-window .arco-table .arco-table-th,
+.conv-window .arco-table .arco-table-td {
+  font-size: 15px;
+}
+
+.conv-window .hint-dim {
+  font-size: 13px;
+}
+
+.conv-window .conv-block__zh {
+  font-size: 13px;
+}
+
+.conv-window .conv-block__id {
+  font-size: 12px;
+}
+
+// ---------------------------------------------------------------- 方块替换窗口
+//
+// 与版本转换窗口同一套做法：左栏填规则，右栏方块列表（点选即填入），
+// 状态色只标在输入框上，整扇窗口字号同样抬一号。
+.repl-split {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+  height: min(58vh, 560px);
+}
+
+.repl-split__pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+// 规则表单整体可滚：字段比右栏高时由这一层滚，不裁内容
+.repl-split__pane--form {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.repl-split__pane--pick {
+  flex: 0 0 330px;
+  overflow: hidden;
+}
+
+.repl-pick {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  border: 1px solid var(--color-border-2);
+  border-radius: 2px;
+}
+
+// 列表项：中文名在上，方块 ID 与英文名在下。
+// 用 button 而不是 div：可聚焦、回车可触发，键盘也能点选。
+.repl-pick__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-1);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--color-fill-2);
+  }
+}
+
+.repl-block {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+// 中文名：这个窗口里认方块的主要依据，比正文再大一号并用黑色，
+// 一眼就能看清。深色主题下黑字读不出来，因此深色下改用正文色。
+.repl-block__zh {
+  overflow: hidden;
+  color: #000;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body[arco-theme='dark'] .repl-block__zh {
+  color: var(--color-text-1);
+}
+
+.repl-block__id {
+  overflow: hidden;
+  color: var(--color-text-3);
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// 还空着的必填输入框：一圈红边，明确「这里还没填」。
+// 用户已经填上的行不上色——颜色只在需要提示时才出现。
+// 与转换窗口一样，边框与底色画在 .arco-input-wrapper 上。
+.repl-block--empty .arco-input-wrapper {
+  border-color: rgb(var(--danger-6));
+  background-color: rgba(var(--danger-6), 0.06);
+}
+
+// 深色下 6% 的底色几乎看不出来（Arco 的深色主题只重定义 --color-* 语义变量，
+// 不重定义 --danger-6），底色要单独提一档；边框本身两种主题下都够清楚
+body[arco-theme='dark'] .repl-block--empty .arco-input-wrapper {
+  background-color: rgba(var(--danger-6), 0.24);
+}
+
+// 字号与版本转换窗口保持一致：这里的说明文字与输入框都按同一档放大，
+// 两个窗口挨着用不会有大小不一的感觉。
+.repl-window .hint-dim {
+  font-size: 13px;
+}
+
+.repl-window .arco-form-item-label-col > .arco-form-item-label {
+  font-size: 14px;
 }

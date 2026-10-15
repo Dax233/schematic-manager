@@ -14,6 +14,7 @@ import BackupDrawer from "./components/BackupDrawer.vue";
 import ConvertModal from "./components/ConvertModal.vue";
 import DetailPanel from "./components/DetailPanel.vue";
 import DirSidebar from "./components/DirSidebar.vue";
+import LogModal from "./components/LogModal.vue";
 import PackModal from "./components/PackModal.vue";
 import ReplaceModal from "./components/ReplaceModal.vue";
 import SetupModal from "./components/SetupModal.vue";
@@ -70,6 +71,8 @@ void followSystemTheme();
     <PackModal />
 
     <SetupModal />
+
+    <LogModal />
 
     <ReplaceModal />
 

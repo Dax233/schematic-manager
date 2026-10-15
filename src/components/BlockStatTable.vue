@@ -16,6 +16,8 @@ const {
   blockTableColumns,
   BLOCK_PAGE_SIZE,
   blockPage,
+  blockRows,
+  blockStateText,
   iconOf,
   iconErrorOf,
   copyBlockTable,
@@ -54,7 +56,7 @@ const {
         :key="blockTableKey"
         class="block-table"
         :columns="blockTableColumns"
-        :data="analysis.blocks"
+        :data="blockRows"
         :pagination="{ pageSize: BLOCK_PAGE_SIZE, current: blockPage }"
         row-key="state"
         size="small"
@@ -87,6 +89,9 @@ const {
           </span>
         </template>
         <template #stacks="{ record }">{{ formatStacks(record.count) }}</template>
+        <!-- 合并显示的行写明合并了多少种状态：那一行的数量是所有状态的总和，
+             只写一个代表状态会让人以为「只有这么多是那个状态的」 -->
+        <template #state="{ record }">{{ blockStateText(record) }}</template>
       </a-table>
     </template>
     <a-empty v-else description="选择投影文件后显示方块统计" />
