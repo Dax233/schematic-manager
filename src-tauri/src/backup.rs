@@ -749,34 +749,43 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// 只改大小写时，两个分组目录在 Windows 上其实是同一个目录。
+    /// 只改大小写时的重新链接。
     ///
     /// 这条防的是把刚写好的 .orig_path 连同目录一起删掉——
     /// 那样备份文件还在、却再也无法还原。
+    ///
+    /// 分组目录名取自 list() 给出的**当前**路径，不能用 create() 当时返回的
+    /// 旧路径：在大小写敏感的文件系统上，分组目录会随改名从 `demo_<哈希>`
+    /// 变成 `DEMO_<哈希>`，旧目录按设计已被清理，拿旧路径断言必然落空。
     #[test]
     fn relink_handles_case_only_rename_in_place() {
         let base = temp_dir("relink_case");
         let root = backup_root(&base);
         let old = base.join("demo.litematic");
         std::fs::write(&old, b"v1").unwrap();
-        let b = create(&base, &old, "metadata").unwrap();
+        create(&base, &old, "metadata").unwrap();
 
         let new = base.join("DEMO.litematic");
         std::fs::rename(&old, &new).unwrap();
         let n = relink(&root, &old, &new).unwrap();
         assert_eq!(n, 1);
 
-        // 分组目录必须仍然存在，且 .orig_path 指向新路径
-        let dir = b.backup_path.parent().unwrap();
+        // 改名后仍只有一组备份，且分组目录与 .orig_path 都落在新名字下
+        let items = list(&root);
+        assert_eq!(items.len(), 1, "改名不该多出或丢掉分组");
+        assert_eq!(items[0].stem, "DEMO");
+        let dir = items[0].path.parent().unwrap();
         assert!(dir.exists(), "分组目录不能被自己删掉");
         assert!(
-            dir.join(".orig_path").exists(),
+            dir.join(ORIG_PATH_FILE).exists(),
             ".orig_path 不能被自己删掉，否则备份永远无法还原"
         );
-        let items = list(&root);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].stem, "DEMO");
-        assert!(matches_target(&items[0].path, &new));
+        assert!(matches_target(&items[0].path, &new), ".orig_path 应指向新路径");
+
+        // 备份内容与还原能力都要保住：把目标文件改脏再还原，应回到备份里那份
+        std::fs::write(&new, b"dirty").unwrap();
+        restore(&items[0].path, &new).unwrap();
+        assert_eq!(std::fs::read(&new).unwrap(), b"v1", "重新链接后的备份应仍可还原");
         let _ = std::fs::remove_dir_all(&base);
     }
 
