@@ -185,7 +185,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: ./scripts/resolve-release.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_RUN_NUMBER" with-commits
+        run: bash ./scripts/resolve-release.sh "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_RUN_NUMBER" with-commits
 
   # ---------------------------------------------------------------- 多平台构建
   build:
@@ -301,7 +301,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          ./scripts/update-release-notes.sh \
+          bash ./scripts/update-release-notes.sh \
             "${{ needs.prepare.outputs.release_id }}" \
             "${{ needs.prepare.outputs.tag }}" \
             "${{ needs.prepare.outputs.prerelease }}"

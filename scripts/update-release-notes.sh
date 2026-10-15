@@ -22,7 +22,9 @@ COMMITS_FILE="$(mktemp)"
 NOTES_FILE="$(mktemp --suffix=.md)"
 trap 'rm -f "$COMMITS_FILE" "$NOTES_FILE"' EXIT
 
-./scripts/collect-commits.sh "$TAG" "$COMMITS_FILE"
+# 用 bash 显式调用：脚本在 git 里没有可执行位（Windows 上 core.filemode=false，
+# 新建的 .sh 一律记为 100644），直接 ./ 调用在 Linux runner 上会 Permission denied。
+bash ./scripts/collect-commits.sh "$TAG" "$COMMITS_FILE"
 node scripts/release-notes-render.mjs "$TAG" "$ASSETS_JSON" "$COMMITS_FILE" > "$NOTES_FILE"
 
 # Release 由 resolve-release.sh 以公开状态创建，这里只刷新正文。

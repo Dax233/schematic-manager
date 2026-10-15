@@ -53,7 +53,9 @@ else
     COMMITS_FILE="$(mktemp)"
     BODY_FILE="$(mktemp --suffix=.md)"
     trap 'rm -f "$COMMITS_FILE" "$BODY_FILE"' EXIT
-    ./scripts/collect-commits.sh "$TAG" "$COMMITS_FILE"
+    # 用 bash 显式调用：脚本在 git 里没有可执行位（Windows 上 core.filemode=false，
+    # 新建的 .sh 一律记为 100644），直接 ./ 调用在 Linux runner 上会 Permission denied。
+    bash ./scripts/collect-commits.sh "$TAG" "$COMMITS_FILE"
     node scripts/release-notes-render.mjs "$TAG" - "$COMMITS_FILE" > "$BODY_FILE"
     BODY_ARGS=(-F "body=@$BODY_FILE")
   fi
