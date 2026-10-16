@@ -25,6 +25,7 @@ mod mcver;
 mod mesh;
 mod model_pack;
 mod nbt;
+mod open_url;
 mod png;
 mod pool;
 mod pack_build;
@@ -95,6 +96,7 @@ pub fn run() {
             commands::save_setup_state,
             commands::app_version,
             commands::check_update,
+            commands::open_url,
         ])
         .run(tauri::generate_context!());
 

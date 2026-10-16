@@ -3796,4 +3796,120 @@ describe("更新窗口", () => {
     expect(btn!.getAttribute("title"), "应说明是预留入口").toContain("预留");
     w.unmount();
   });
+
+  it("点地址框即复制并提示「已复制地址」", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    stubInvoke({ app_version: "0.0.2", check_update: info() });
+    const w = mountApp();
+    await flushPromises();
+    await openUpdate(w);
+    toolbarButton("检测更新")!.click();
+    await flushPromises();
+
+    const box = document.querySelector(".update-url") as HTMLElement;
+    expect(box, "应有可点击的地址框").toBeTruthy();
+    box.click();
+    await flushPromises();
+
+    expect(writeText, "应把地址写进剪贴板").toHaveBeenCalledWith(
+      "https://github.com/heiheids/schematic-manager/releases/tag/v0.0.3",
+    );
+    expect(shownMessages().join(" "), "应提示已复制").toContain("已复制地址");
+    w.unmount();
+  });
+
+  it("没查到发布时，地址框给的是发布列表页而不是空", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    stubInvoke({
+      app_version: "0.0.2",
+      check_update: info({ latest: "", tag: "", hasUpdate: false, releaseUrl: "" }),
+    });
+    const w = mountApp();
+    await flushPromises();
+    await openUpdate(w);
+    toolbarButton("检测更新")!.click();
+    await flushPromises();
+
+    (document.querySelector(".update-url") as HTMLElement).click();
+    await flushPromises();
+    expect(writeText).toHaveBeenCalledWith(
+      "https://github.com/heiheids/schematic-manager/releases",
+    );
+    w.unmount();
+  });
+
+  it("复制失败时如实报错，不谎报已复制", async () => {
+    Object.assign(navigator, {
+      clipboard: { writeText: vi.fn().mockRejectedValue(new Error("权限被拒")) },
+    });
+    // execCommand 也不可用（jsdom 本就没有实现），两条路都失败
+    const exec = vi.fn().mockReturnValue(false);
+    Object.assign(document, { execCommand: exec });
+    stubInvoke({ app_version: "0.0.2" });
+    const w = mountApp();
+    await flushPromises();
+    await openUpdate(w);
+
+    (document.querySelector(".update-url") as HTMLElement).click();
+    await flushPromises();
+    expect(shownMessages().join(" "), "不能谎报已复制").not.toContain("已复制地址");
+    expect(shownMessages().join(" "), "应说明失败原因").toContain("复制失败");
+    w.unmount();
+  });
+
+  it("「打开下载地址」把地址交给后端打开", async () => {
+    stubInvoke({ app_version: "0.0.2", check_update: info() });
+    const w = mountApp();
+    await flushPromises();
+    await openUpdate(w);
+    toolbarButton("检测更新")!.click();
+    await flushPromises();
+
+    toolbarButton("打开下载地址")!.click();
+    await flushPromises();
+    const call = mockInvoke.mock.calls.find((c) => c[0] === "open_url");
+    expect(call, "应调用 open_url").toBeTruthy();
+    expect((call![1] as { url: string }).url, "应打开该发布的页面").toContain(
+      "releases/tag/v0.0.3",
+    );
+    w.unmount();
+  });
+
+  it("作者主页显示并可点击跳转", async () => {
+    stubInvoke({ app_version: "0.0.2" });
+    const w = mountApp();
+    await flushPromises();
+    await openUpdate(w);
+
+    const text = document.body.textContent ?? "";
+    expect(text, "应显示作者主页一行").toContain("作者主页");
+    expect(text, "应显示主页地址").toContain("https://space.bilibili.com/19428259");
+
+    const link = document.querySelector(".about-link") as HTMLElement;
+    expect(link, "主页应是可点击的链接").toBeTruthy();
+    link.click();
+    await flushPromises();
+    const call = mockInvoke.mock.calls.find((c) => c[0] === "open_url");
+    expect(call, "应调用 open_url").toBeTruthy();
+    expect((call![1] as { url: string }).url).toBe("https://space.bilibili.com/19428259");
+    w.unmount();
+  });
+
+  it("打开链接失败时显示原因，而不是点了没反应", async () => {
+    stubInvoke({
+      app_version: "0.0.2",
+      open_url: () => {
+        throw new Error("只允许打开 http/https 链接");
+      },
+    });
+    const w = mountApp();
+    await flushPromises();
+    await openUpdate(w);
+    (document.querySelector(".about-link") as HTMLElement).click();
+    await flushPromises();
+    expect(shownMessages().join(" "), "应显示失败原因").toContain("打开链接失败");
+    w.unmount();
+  });
 });

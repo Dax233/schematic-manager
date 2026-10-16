@@ -12,9 +12,17 @@
  *
  * 与其他域无协作：本域不读写别处的状态，也不需要别的域提供数据。
  */
-import { ref } from "vue";
-import { appVersion, checkUpdate } from "../api";
+import { computed, ref } from "vue";
+import { Message } from "@arco-design/web-vue";
+import { appVersion, checkUpdate, openUrl } from "../api";
+import { copyText } from "../utils/clipboard";
 import type { UpdateInfo } from "../types";
+
+/** 作者主页：与作者名一样属于固定信息，放在这里供窗口与动作共用 */
+export const AUTHOR_PAGE = "https://space.bilibili.com/19428259";
+
+/** 发布页：检测不到具体发布时的兜底地址，永远可以打开 */
+export const RELEASES_PAGE = "https://github.com/heiheids/schematic-manager/releases";
 
 export function createUpdateSlice() {
   const updateOpen = ref(false);
@@ -25,6 +33,13 @@ export function createUpdateSlice() {
   const updateChecking = ref(false);
   /** 检测失败的原因；为空表示没出错 */
   const updateError = ref("");
+
+  /** 界面上展示与打开的下载地址。
+   *
+   * 查到了具体发布就用它，否则给发布列表页——两处都要用这个值，
+   * 各写一次 `|| RELEASES_PAGE` 迟早会有一处漏掉。
+   */
+  const releaseUrl = computed(() => updateInfo.value?.releaseUrl || RELEASES_PAGE);
 
   /** 打开窗口：读一次版本号，并清掉上一次的检测结果。
    *
@@ -67,14 +82,56 @@ export function createUpdateSlice() {
     }
   }
 
+  /** 复制下载地址。
+   *
+   * 成功与失败都要明说：剪贴板可能被权限或环境拒绝，静默失败会让用户
+   * 以为地址已经复制好了，去粘贴时才发现是空的。
+   */
+  async function copyReleaseUrl() {
+    try {
+      await copyText(releaseUrl.value);
+      Message.success("已复制地址");
+    } catch (e) {
+      Message.error(`复制失败：${e}`);
+    }
+  }
+
+  /** 用系统浏览器打开一个外部链接。
+   *
+   * 失败必须报出来：点了没反应会让人以为程序坏了，而原因（后端不肯放行、
+   * 系统没有 xdg-open 之类）恰恰是用户能处理的。
+   */
+  async function openExternal(url: string) {
+    try {
+      await openUrl(url);
+    } catch (e) {
+      Message.error(`打开链接失败：${e}`);
+    }
+  }
+
+  /** 打开下载地址 */
+  async function openReleaseUrl() {
+    await openExternal(releaseUrl.value);
+  }
+
+  /** 打开作者主页 */
+  async function openAuthorPage() {
+    await openExternal(AUTHOR_PAGE);
+  }
+
   return {
     updateOpen,
     currentVersion,
     updateInfo,
     updateChecking,
     updateError,
+    releaseUrl,
+    authorPage: AUTHOR_PAGE,
     openUpdate,
     runUpdateCheck,
+    copyReleaseUrl,
+    openReleaseUrl,
+    openAuthorPage,
   };
 }
 

@@ -1,5 +1,5 @@
 /**
- * 更新窗口：显示当前版本与作者，并可检测 GitHub 上有没有新版本。
+ * 更新窗口：显示当前版本、作者与作者主页，并可检测 GitHub 上有没有新版本。
  *
  * 版本号取自后端 `app_version`（编译进二进制的包版本），不是界面里的常量：
  * CI 在构建前才把版本号写入 Cargo.toml，界面若自己写一份，两者迟早对不上。
@@ -7,9 +7,8 @@
  * 检测结果分四种，分别用不同措辞，避免把「没查到」说成「已是最新」：
  * 有更新 / 已是最新 / 仓库里没有可解析的发布 / 检测失败（附原因）。
  *
- * 发布页地址用只读输入框展示而不是做成可点击链接：本项目没有引入打开外部
- * 链接的插件，做不成真正的跳转；只读输入框可以直接选中复制，比一个点了
- * 没反应的链接诚实。
+ * 下载地址与作者主页都交给系统浏览器打开（后端 open_url）。下载地址框点击
+ * 即复制——地址通常用来贴给别人，选中再按 Ctrl+C 是多一步。
  */
 <script setup lang="ts">
 import { useAppStore } from "../store";
@@ -20,20 +19,23 @@ const {
   updateInfo,
   updateChecking,
   updateError,
+  releaseUrl,
+  authorPage,
   runUpdateCheck,
+  copyReleaseUrl,
+  openReleaseUrl,
+  openAuthorPage,
 } = useAppStore();
 
 /** 作者信息：按用户要求展示 */
 const AUTHOR = "bilibili黑山大叔";
-/** 发布页总是可以在浏览器里打开的地址，检测前也要能看到 */
-const RELEASES_PAGE = "https://github.com/heiheids/schematic-manager/releases";
 </script>
 
 <template>
   <a-modal
     v-model:visible="updateOpen"
     title="更新"
-    :width="520"
+    :width="600"
     :footer="false"
     unmount-on-close
   >
@@ -44,6 +46,12 @@ const RELEASES_PAGE = "https://github.com/heiheids/schematic-manager/releases";
     <div class="about-row">
       <span class="about-row__label">作者</span>
       <span class="about-row__value">{{ AUTHOR }}</span>
+    </div>
+    <div class="about-row">
+      <span class="about-row__label">作者主页</span>
+      <span class="about-row__value">
+        <a-link class="about-link" @click="openAuthorPage">{{ authorPage }}</a-link>
+      </span>
     </div>
     <div class="about-row">
       <span class="about-row__label">检测目标</span>
@@ -78,19 +86,24 @@ const RELEASES_PAGE = "https://github.com/heiheids/schematic-manager/releases";
       <div v-if="updateInfo.publishedAt" class="hint-dim" style="margin-bottom: 8px">
         发布时间：{{ updateInfo.publishedAt }}
       </div>
-
-      <div class="about-row">
-        <span class="about-row__label">发布页</span>
-        <a-input
-          class="about-row__value"
-          :model-value="updateInfo.releaseUrl || RELEASES_PAGE"
-          readonly
-          size="small"
-        />
-      </div>
-      <div class="hint-dim">选中上面的地址复制到浏览器即可下载。</div>
     </template>
 
-    <div v-else class="hint-dim">点「检测更新」查看是否有新版本。</div>
+    <div v-else-if="!updateError" class="hint-dim" style="margin-bottom: 8px">
+      点「检测更新」查看是否有新版本。
+    </div>
+
+    <!-- 下载地址：未检测时也给出发布列表页，随时可打开或复制 -->
+    <div class="about-row">
+      <span class="about-row__label">下载地址</span>
+      <div
+        class="about-row__value update-url"
+        title="点击复制地址"
+        @click="copyReleaseUrl"
+      >
+        <a-input :model-value="releaseUrl" readonly size="small" />
+      </div>
+      <a-button size="small" @click="openReleaseUrl">打开下载地址</a-button>
+    </div>
+    <div class="hint-dim">点击地址即复制；「打开下载地址」用浏览器打开该页面。</div>
   </a-modal>
 </template>

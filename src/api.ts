@@ -283,3 +283,11 @@ export function appVersion(): Promise<string> {
 export function checkUpdate(): Promise<UpdateInfo> {
   return invoke<UpdateInfo>("check_update");
 }
+
+/** 用系统默认浏览器打开外部链接。
+ *
+ * 后端只放行 http/https 并挡掉可能干扰命令行解析的字符，非法链接会 reject。
+ */
+export function openUrl(url: string): Promise<void> {
+  return invoke<void>("open_url", { url });
+}

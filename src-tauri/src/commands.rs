@@ -16,6 +16,7 @@ use crate::dto::{
     UpdateInfoDto, VersionOptionDto,
 };
 use crate::litematic::{self, Summary};
+use crate::open_url;
 use crate::update;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -2083,5 +2084,15 @@ pub fn check_update() -> Result<UpdateInfoDto, String> {
         published_at: newest.map(|r| r.published_at).unwrap_or_default(),
         repo: update::REPO.to_string(),
     })
+}
+
+/// 用系统默认浏览器打开一个外部链接。
+///
+/// URL 来自前端（其中下载地址又来自 GitHub 接口的返回），属于外部数据，
+/// 因此这里先校验再执行：只放行 http/https，并挡掉可能干扰命令行解析的
+/// 字符。详见 open_url 模块的说明。
+#[tauri::command]
+pub fn open_url(url: String) -> Result<(), String> {
+    open_url::open(&url).map_err(|e| e.to_string())
 }
 

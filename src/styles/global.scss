@@ -708,6 +708,16 @@ $preview-row-h: $preview-stage-h + 16px;
   word-break: break-all;
 }
 
+// 可点击的地址：给出手型光标，让「点它会复制」这件事看得出来
+.update-url {
+  cursor: pointer;
+}
+
+// 作者主页链接：不加下划线会更像普通文字，看不出可点
+.about-link {
+  cursor: pointer;
+}
+
 // 操作日志列表：逐条分开，每条三段——时间、动作、细节。
 // 原先整行用等宽字体 + pre-wrap + break-all 直接铺出来：时间戳是 20 位数字，
 // 说明里可能塞几十个文件名，于是一整块糊在一起，逐条阅读很吃力。
