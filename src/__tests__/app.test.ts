@@ -129,8 +129,15 @@ const scene: SceneData = {
  * 因此这里把会返回对象/标量的命令都显式列出。
  */
 function stubInvoke(overrides: Record<string, unknown> = {}) {
-  mockInvoke.mockImplementation((async (cmd: string) => {
-    if (cmd in overrides) return overrides[cmd];
+  mockInvoke.mockImplementation((async (cmd: string, args?: unknown) => {
+    if (cmd in overrides) {
+      const v = overrides[cmd];
+      // 允许用函数给出结果：既能按参数返回不同数据，也能直接抛出以测错误分支。
+      // 若不支持函数，测「命令失败」就只能整体替换实现，那样别的命令会落到
+      // 兜底分支拿到错误类型的结果（例如 base_db_status 拿到数组），
+      // 进而产生与被测行为无关的未处理异常。
+      return typeof v === "function" ? (v as (a: unknown) => unknown)(args) : v;
+    }
     switch (cmd) {
       case "load_ui_state":
         // 契约是 string | null。默认「从未保存过」，因此回 null；
@@ -3657,6 +3664,136 @@ describe("大方块数文件的渲染闸门", () => {
     await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
     await flushPromises();
     expect(startButton(), "离开过该文件后要重新点「开始渲染」").toBeTruthy();
+    w.unmount();
+  });
+});
+
+/** 「更新」窗口与顶部预留的 RMC 入口 */
+describe("更新窗口", () => {
+  function toolbarButton(text: string): HTMLElement | undefined {
+    return [...document.querySelectorAll("button")].find((b) =>
+      (b.textContent ?? "").trim().includes(text),
+    ) as HTMLElement | undefined;
+  }
+
+  /** 打开「更新」窗口 */
+  async function openUpdate(w: ReturnType<typeof mountApp>) {
+    toolbarButton("更新")!.click();
+    await flushPromises();
+    return w;
+  }
+
+  const info = (over: Partial<Record<string, unknown>> = {}) => ({
+    current: "0.0.2",
+    latest: "0.0.3",
+    tag: "v0.0.3",
+    hasUpdate: true,
+    releaseUrl: "https://github.com/heiheids/schematic-manager/releases/tag/v0.0.3",
+    publishedAt: "2026-10-20T10:00:00Z",
+    repo: "heiheids/schematic-manager",
+    ...over,
+  });
+
+  it("打开窗口即显示当前版本与作者，不自动联网", async () => {
+    stubInvoke({ app_version: "0.0.2" });
+    const w = mountApp();
+    await flushPromises();
+    await openUpdate(w);
+
+    const text = document.body.textContent ?? "";
+    expect(text, "应显示当前版本").toContain("0.0.2");
+    expect(text, "应显示作者").toContain("bilibili黑山大叔");
+    expect(
+      mockInvoke.mock.calls.some((c) => c[0] === "check_update"),
+      "打开窗口不该自动检测：离线时会凭空多一次失败",
+    ).toBe(false);
+    w.unmount();
+  });
+
+  it("点「检测更新」后显示发现的新版本与发布页", async () => {
+    stubInvoke({ app_version: "0.0.2", check_update: info() });
+    const w = mountApp();
+    await flushPromises();
+    await openUpdate(w);
+
+    toolbarButton("检测更新")!.click();
+    await flushPromises();
+
+    const text = document.body.textContent ?? "";
+    expect(text, "应说明发现了新版本").toContain("发现新版本");
+    expect(text, "应给出新版本号").toContain("0.0.3");
+    // 发布页地址用只读输入框展示，可选中复制
+    const url = [...document.querySelectorAll("input")].find(
+      (i) => i.value.includes("github.com/heiheids/schematic-manager/releases"),
+    );
+    expect(url, "应给出发布页地址").toBeTruthy();
+    w.unmount();
+  });
+
+  it("已是最新时不谎报有更新", async () => {
+    stubInvoke({
+      app_version: "0.0.3",
+      check_update: info({ current: "0.0.3", latest: "0.0.3", hasUpdate: false }),
+    });
+    const w = mountApp();
+    await flushPromises();
+    await openUpdate(w);
+    toolbarButton("检测更新")!.click();
+    await flushPromises();
+
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("已是最新");
+    expect(text, "不能同时出现「发现新版本」").not.toContain("发现新版本");
+    w.unmount();
+  });
+
+  it("仓库里查不到任何发布时如实说明，不说成「最新」", async () => {
+    stubInvoke({
+      app_version: "0.0.2",
+      check_update: info({ latest: "", tag: "", hasUpdate: false, releaseUrl: "" }),
+    });
+    const w = mountApp();
+    await flushPromises();
+    await openUpdate(w);
+    toolbarButton("检测更新")!.click();
+    await flushPromises();
+
+    const text = document.body.textContent ?? "";
+    expect(text, "应说明没查到发布").toContain("没有查到任何发布");
+    expect(text).not.toContain("已是最新");
+    w.unmount();
+  });
+
+  it("检测失败时显示原因，而不是显示成没有新版本", async () => {
+    stubInvoke({
+      app_version: "0.0.2",
+      // 网络失败：命令直接抛错。其余命令仍走标准替身，避免无关命令
+      // 拿到错误类型的结果而产生额外的未处理异常
+      check_update: () => {
+        throw new Error("连接 api.github.com 超时");
+      },
+    });
+    const w = mountApp();
+    await flushPromises();
+    await openUpdate(w);
+    toolbarButton("检测更新")!.click();
+    await flushPromises();
+
+    const text = document.body.textContent ?? "";
+    expect(text, "应显示失败原因").toContain("连接 api.github.com 超时");
+    expect(text, "不能把失败说成最新").not.toContain("已是最新");
+    expect(text, "也不能说成没有发布").not.toContain("没有查到任何发布");
+    w.unmount();
+  });
+
+  it("工具栏有预留的 RMC投影站 按钮", async () => {
+    stubInvoke();
+    const w = mountApp();
+    await flushPromises();
+    const btn = toolbarButton("RMC投影站");
+    expect(btn, "应有 RMC投影站 按钮").toBeTruthy();
+    // 按用户要求点击不做任何事，但要能看出这个入口是预留的
+    expect(btn!.getAttribute("title"), "应说明是预留入口").toContain("预留");
     w.unmount();
   });
 });

@@ -497,6 +497,27 @@ pub struct SetupOutcomeDto {
     pub outcomes: Vec<SetupVersionOutcomeDto>,
 }
 
+/// 一次更新检测的结果。
+///
+/// `latest` 与 `tag` 在查不到任何可解析的发布时为空串，此时 `hasUpdate` 为 false：
+/// 「查不到」与「有新版本」必须分清，否则网络异常会被说成有更新。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfoDto {
+    /// 当前可执行文件的版本号
+    pub current: String,
+    /// 最新发布的版本号（去掉前导 v）
+    pub latest: String,
+    /// 最新发布的原始 tag
+    pub tag: String,
+    pub has_update: bool,
+    /// 该发布的页面地址
+    pub release_url: String,
+    pub published_at: String,
+    /// 检测目标仓库，界面直接展示
+    pub repo: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -569,5 +590,31 @@ mod tests {
         };
         let v = serde_json::to_value(&ver).unwrap();
         assert_keys(&v, &["blockCount", "dataVersion", "index", "isOverlay", "name"]);
+    }
+
+    #[test]
+    fn update_info_keys_are_camel_case() {
+        let info = UpdateInfoDto {
+            current: "0.0.2".into(),
+            latest: "0.0.2-dev.6".into(),
+            tag: "v0.0.2-dev.6".into(),
+            has_update: false,
+            release_url: "https://github.com/x/y/releases/tag/v0.0.2-dev.6".into(),
+            published_at: "2026-10-16T18:27:53Z".into(),
+            repo: "heiheids/schematic-manager".into(),
+        };
+        let v = serde_json::to_value(&info).unwrap();
+        assert_keys(
+            &v,
+            &[
+                "current",
+                "latest",
+                "tag",
+                "hasUpdate",
+                "releaseUrl",
+                "publishedAt",
+                "repo",
+            ],
+        );
     }
 }

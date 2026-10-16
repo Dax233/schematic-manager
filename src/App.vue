@@ -18,6 +18,7 @@ import LogModal from "./components/LogModal.vue";
 import ReplaceModal from "./components/ReplaceModal.vue";
 import SetupModal from "./components/SetupModal.vue";
 import TitleBar from "./components/TitleBar.vue";
+import UpdateModal from "./components/UpdateModal.vue";
 import { useTheme } from "./composables/useTheme";
 import { SIDEBAR_MAX_W, SIDEBAR_MIN_W } from "./composables/useSidebarResize";
 import { provideAppStore } from "./store";
@@ -72,6 +73,8 @@ void followSystemTheme();
     <LogModal />
 
     <ReplaceModal />
+
+    <UpdateModal />
 
     <BackupDrawer />
 

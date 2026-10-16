@@ -13,9 +13,10 @@ use crate::dto::{
     EntityTextureStatusDto, FileOpOutcome, McScanDto, McVersionDto, RenameOutcomeDto,
     ReplaceOutcomeDto, ReplaceRuleDto, SceneDto, SaveOutcome, ScanResult, SchematicSummary,
     SetupOutcomeDto, SetupSource, SetupVersionDto, SetupVersionOutcomeDto, UnreadableFileDto,
-    VersionOptionDto,
+    UpdateInfoDto, VersionOptionDto,
 };
 use crate::litematic::{self, Summary};
+use crate::update;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tauri::Manager;
@@ -2051,5 +2052,36 @@ pub fn load_setup_state(app: tauri::AppHandle) -> Result<Option<String>, String>
 #[tauri::command]
 pub fn save_setup_state(app: tauri::AppHandle, json: String) -> Result<(), String> {
     write_ui_state_file(&config_dir(&app)?.join(SETUP_STATE_FILE), &json)
+}
+
+/// 当前可执行文件的版本号。
+///
+/// 取自编译进二进制的包版本，而不是界面里的常量：CI 在构建前会把版本号写进
+/// Cargo.toml，因此这个值就是安装包自身的版本。
+#[tauri::command]
+pub fn app_version() -> String {
+    update::current_version().to_string()
+}
+
+/// 检查是否有新版本（读 GitHub 的发布列表）。
+///
+/// 网络失败按错误上抛，由界面显示原因——检测更新最需要让用户分清的是
+/// 「确实没有新版本」与「没查成」，静默返回「无更新」会把后者说成前者。
+#[tauri::command]
+pub fn check_update() -> Result<UpdateInfoDto, String> {
+    let outcome = update::check().map_err(|e| e.to_string())?;
+    let newest = outcome.newest.clone();
+    Ok(UpdateInfoDto {
+        current: outcome.current.to_string(),
+        latest: newest
+            .as_ref()
+            .map(|r| r.version.to_string())
+            .unwrap_or_default(),
+        tag: newest.as_ref().map(|r| r.tag.clone()).unwrap_or_default(),
+        has_update: outcome.has_update(),
+        release_url: newest.as_ref().map(|r| r.url.clone()).unwrap_or_default(),
+        published_at: newest.map(|r| r.published_at).unwrap_or_default(),
+        repo: update::REPO.to_string(),
+    })
 }
 

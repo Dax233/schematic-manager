@@ -682,6 +682,32 @@ $preview-row-h: $preview-stage-h + 16px;
   line-height: 20px;
 }
 
+// 「更新」窗口里的信息行：标签固定宽度、值占其余空间，几行整齐对齐。
+//
+// 值可能是纯文本也可能是只读输入框，两种都在这里对齐；输入框那一行用来
+// 展示发布页地址，方便直接选中复制（本项目没有打开外部链接的插件）。
+.about-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.about-row__label {
+  flex: none;
+  width: 64px;
+  color: var(--color-text-2);
+}
+
+.about-row__value {
+  flex: 1;
+  min-width: 0;
+  color: var(--color-text-1);
+  word-break: break-all;
+}
+
 // 操作日志列表：逐条分开，每条三段——时间、动作、细节。
 // 原先整行用等宽字体 + pre-wrap + break-all 直接铺出来：时间戳是 20 位数字，
 // 说明里可能塞几十个文件名，于是一整块糊在一起，逐条阅读很吃力。

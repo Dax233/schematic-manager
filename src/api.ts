@@ -26,6 +26,7 @@ import type {
   SetupOutcome,
   SetupSource,
   SetupVersion,
+  UpdateInfo,
   VersionOption,
 } from "./types";
 
@@ -271,4 +272,14 @@ export function onBaseSetupProgress(
   handler: (p: BaseSetupProgress) => void,
 ): Promise<() => void> {
   return listen<BaseSetupProgress>("base-setup-progress", (e) => handler(e.payload));
+}
+
+/** 当前可执行文件的版本号 */
+export function appVersion(): Promise<string> {
+  return invoke<string>("app_version");
+}
+
+/** 检查是否有新版本（后端读 GitHub 发布列表）。网络失败会 reject。 */
+export function checkUpdate(): Promise<UpdateInfo> {
+  return invoke<UpdateInfo>("check_update");
 }

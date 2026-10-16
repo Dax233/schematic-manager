@@ -36,6 +36,7 @@ mod scene;
 mod tint;
 mod startup;
 mod transform;
+mod update;
 mod visibility;
 mod zip;
 
@@ -92,6 +93,8 @@ pub fn run() {
             commands::setup_add_versions,
             commands::load_setup_state,
             commands::save_setup_state,
+            commands::app_version,
+            commands::check_update,
         ])
         .run(tauri::generate_context!());
 

@@ -25,6 +25,7 @@ const {
   openBackups,
   setupOnOpen,
   openSetup,
+  openUpdate,
 } = useAppStore();
 </script>
 
@@ -80,6 +81,16 @@ const {
     </a-button>
     <a-button size="small" @click="openBackups">备份与日志</a-button>
     <a-button size="small" :loading="setupOnOpen" @click="openSetup">版本库</a-button>
+    <a-button size="small" @click="openUpdate">更新</a-button>
+    <!-- RMC投影站：按用户要求先只放按钮，点击不做任何事，
+         这个入口预留给附加程序接入。
+         TODO(附加程序接入后)：接上附加程序提供的入口。完成条件是该按钮能
+         打开 RMC 投影站（或唤起附加程序）且失败时有明确提示；在此之前
+         保持无行为，不显示任何「点不动的按钮」式的伪交互。
+         跟踪方式：随附加程序的开发进度一并处理，仓库内暂无对应任务号。 -->
+    <a-button size="small" title="RMC投影站（入口已预留，附加程序接入后可用）">
+      RMC投影站
+    </a-button>
     <span class="preview__spacer" />
     <span class="hint-dim">
       共 {{ files.length }} 个投影<span v-if="searchText">，匹配 {{ filteredFiles.length }} 个</span>

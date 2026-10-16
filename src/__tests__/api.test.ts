@@ -279,4 +279,9 @@ describe("契约整体性", () => {
       }
     }
   });
+
+  it("appVersion 与 checkUpdate 都是无参命令", async () => {
+    await expectCall(() => api.appVersion(), "app_version");
+    await expectCall(() => api.checkUpdate(), "check_update");
+  });
 });

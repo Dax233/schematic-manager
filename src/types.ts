@@ -353,3 +353,24 @@ export interface BaseSetupProgress {
   total: number;
   error: string;
 }
+
+/** 一次更新检测的结果。
+ *
+ * `latest` 与 `tag` 在仓库里查不到可解析的发布时为空串，此时 `hasUpdate` 为
+ * false：界面上「没有新版本」与「没查到发布」要分开说，不能混为一谈。
+ */
+export interface UpdateInfo {
+  /** 当前可执行文件的版本号 */
+  current: string;
+  /** 最新发布的版本号（去掉前导 v） */
+  latest: string;
+  /** 最新发布的原始 tag，如 v0.0.2-dev.6 */
+  tag: string;
+  hasUpdate: boolean;
+  /** 该发布的页面地址；查不到发布时为空串 */
+  releaseUrl: string;
+  /** 发布时间（ISO 8601）；查不到时为空串 */
+  publishedAt: string;
+  /** 检测目标仓库，如 heiheids/schematic-manager */
+  repo: string;
+}

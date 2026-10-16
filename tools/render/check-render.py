@@ -236,11 +236,14 @@ SHIM = r"""
   // 注意：「重复文件筛查」**不在**此列——按用户要求它已改为内联扫描
   // 地址栏里已勾选的目录，不再弹窗。留在列表里会让脚本一直等一个
   // 永远不出现的对话框。
-  var DIALOG_BUTTONS = ["方块替换", "版本转换", "备份与日志"];
+  var DIALOG_BUTTONS = ["方块替换", "版本转换", "备份与日志", "更新"];
   var DIALOG_TITLES = {
     "方块替换": "方块替换",
     "版本转换": "转换游戏版本",
     "备份与日志": "备份与日志",
+    // 与按钮同字也没关系：这里只在 .arco-modal-title/.arco-drawer-title
+    // 里找，工具栏上那个按钮不在其列。
+    "更新": "更新",
   };
   var DIALOGS = [];
   // 已尝试过的对话框名（与 DIALOGS 里带结论的字符串分开：
@@ -336,6 +339,18 @@ SHIM = r"""
       // 回数组会让 App 走进 JSON 解析失败分支并弹出警告（替身类型给错）。
       case "load_ui_state": return Promise.resolve(null);
       case "save_ui_state": return Promise.resolve(undefined);
+      // 「更新」窗口：版本号取本地命令，检测结果给一份「有新版本」的样本，
+      // 这样窗口里三种结论各自的排版都能被渲染出来核对。
+      case "app_version": return Promise.resolve("0.0.2");
+      case "check_update": return Promise.resolve({
+        current: "0.0.2",
+        latest: "0.0.3-dev.1",
+        tag: "v0.0.3-dev.1",
+        hasUpdate: true,
+        releaseUrl: "https://github.com/heiheids/schematic-manager/releases/tag/v0.0.3-dev.1",
+        publishedAt: "2026-10-20T10:00:00Z",
+        repo: "heiheids/schematic-manager",
+      });
       default: return Promise.resolve([]);
     }
   }
@@ -1287,7 +1302,7 @@ def main():
         # DIALOG_BUTTONS 定义在注入页面的 JS 里，Python 侧取不到，
         # 因此这里重复一份数量。两处必须同步：改了一处没改另一处，
         # 表现就是「明明都开了却报数量不符」。
-        EXPECTED_DIALOGS = 3
+        EXPECTED_DIALOGS = 4
         if len(dlg_results) != EXPECTED_DIALOGS:
             dlg_extra.append(False)
             print(
