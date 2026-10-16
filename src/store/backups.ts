@@ -62,7 +62,13 @@ export function createBackupsSlice(s: BackupsDeps) {
     // 纳秒用 BigInt 解析再转毫秒，避免超出安全整数范围导致时间错乱
     const ms = Number(BigInt(ns) / 1000000n);
     const d = new Date(ms);
-    return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
+    if (Number.isNaN(d.getTime())) return "—";
+    // 逐段拼出 YYYY/MM/DD HH:mm:ss，不用 toLocaleString：后者按运行环境的
+    // 区域设置排版，英文环境会给出 10/16/2026, 8:17:31 AM，同一份日志在不同
+    // 机器上格式不一致，也让断言随环境时好时坏。
+    const two = (n: number) => String(n).padStart(2, "0");
+    const date = `${d.getFullYear()}/${two(d.getMonth() + 1)}/${two(d.getDate())}`;
+    return `${date} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
   }
 
   async function refreshBackups() {

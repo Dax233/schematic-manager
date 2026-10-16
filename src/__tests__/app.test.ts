@@ -3289,8 +3289,10 @@ describe("日志管理窗口", () => {
     // 每条的三个部分各自成元素：时间单独一列、动作成标签、细节另起一段。
     // 断言不再比对整行原文——正因为「整行糊成一段」才要改版。
     const row = modal!.querySelector(".log-list__row")!;
+    // 形状写死到时分秒：区域设置一变，toLocaleString 会给出
+    // 10/16/2026, 8:17:31 AM 这类 12 小时制，年在前面的断言挡不住
     expect(row.querySelector(".log-list__time")!.textContent, "时间要格式化成日期").toMatch(
-      /^\d{4}[/-]\d{1,2}[/-]\d{1,2}/,
+      /^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}$/,
     );
     expect(row.querySelector(".log-list__action")!.textContent?.trim()).toBe("替换");
     expect(row.querySelector(".log-list__detail")!.textContent).toContain(
