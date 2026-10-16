@@ -39,10 +39,10 @@ fn box_regions(tex_off: [f32; 2], size: [f32; 3]) -> [[f32; 4]; 6] {
     [
         [x2, v, x2 + dx, v + dz],  // up
         [x1, v, x2, v + dz],       // down
-        [u, y1, x1, y2],           // east（x-）
-        [x1, y1, x2, y2],          // north（z-）
-        [x2, y1, x3, y2],          // west（x+）
-        [x3, y1, x4, y2],          // south（z+）
+        [u, y1, x1, y2],           // east（+x）
+        [x1, y1, x2, y2],          // north（-z）
+        [x2, y1, x3, y2],          // west（-x）
+        [x3, y1, x4, y2],          // south（+z）
     ]
 }
 
@@ -105,9 +105,9 @@ fn box_element(
 #[derive(Clone, Copy)]
 enum ChestHalf {
     Single,
-    /// 左半：拼缝在它 **-x** 一侧（占 x 0..15）
+    /// 左半：模型坐标系里拼缝在 **-x** 一侧（占 x 0..15），与原版左半层一致
     Left,
-    /// 右半：拼缝在它 **+x** 一侧（占 x 1..16）
+    /// 右半：模型坐标系里拼缝在 **+x** 一侧（占 x 1..16）
     Right,
 }
 
@@ -122,11 +122,41 @@ impl ChestHalf {
     }
 }
 
+/// 半只箱子该用哪张贴图。
+///
+/// 原版四张半箱贴图各自把**拼缝那一面**留空——那一面被邻半挡住，不必画。
+/// 实测（量每格的不透明像素数，箱盖与箱体两行都一样）：
+///   `*_left`  空的是 **+x** 面，`*_right` 空的是 **-x** 面。
+///
+/// 而两半在**模型坐标系**里的拼缝是：左半占 x 0..15，拼缝在 **-x**；
+/// 右半占 x 1..16，拼缝在 **+x**。两者合起来就意味着贴图与 `type` 是**交叉**
+/// 对应的：左半要用 `_right`，右半要用 `_left`。
+///
+/// 用反了不会报错，只会把「朝外」的那一面画成空的：渲染出来像箱子缺了一面，
+/// 两半也接不上。这一点用不透明像素数就能看出来——贴图配错时，某些朝向下
+/// 箱子只有约 41% 的像素，配对了是 55%。
+fn chest_texture(short: &str, half: ChestHalf) -> &'static str {
+    match (short, half) {
+        ("ender_chest", _) => "entity/chest/ender",
+        ("trapped_chest", ChestHalf::Single) => "entity/chest/trapped",
+        ("trapped_chest", ChestHalf::Left) => "entity/chest/trapped_right",
+        ("trapped_chest", ChestHalf::Right) => "entity/chest/trapped_left",
+        (_, ChestHalf::Single) => "entity/chest/normal",
+        (_, ChestHalf::Left) => "entity/chest/normal_right",
+        (_, ChestHalf::Right) => "entity/chest/normal_left",
+    }
+}
+
 /// 单只箱子的几何：箱体 + 箱盖 + 锁扣，三个盒子共用一张贴图。
 ///
 /// 箱子是否敞开记在方块实体数据里、不在方块状态中，因此一律按闭合状态绘制。
 /// 贴图是原版的 64×64 展开图；大箱子的两半各有自己的贴图（`normal_left` /
 /// `normal_right`），锁扣都贴在拼缝那一侧，合起来中间只有一个扣。
+///
+/// 坐标为**原版箱子模型的坐标系**：正面（锁扣一侧）在 +z。这一点与方块 JSON
+/// 模型相反——那些模型的正面画在 north 面（见 `block/orientable_with_bottom.json`
+/// 把 `front` 挂在 `north`），因此箱子的朝向旋转要比它们多转 180°，
+/// 见 `variants_of` 里的说明。
 fn chest_elements(texture: &str, half: ChestHalf) -> Vec<ModelElementDef> {
     let px = [64.0, 64.0];
     let (x0, x1, lock_x, lock_w) = match half {
@@ -139,8 +169,8 @@ fn chest_elements(texture: &str, half: ChestHalf) -> Vec<ModelElementDef> {
         box_element([x0, 0.0, 1.0], [x1, 10.0, 15.0], [0.0, 19.0], px, texture),
         // 箱盖：贴在箱体上沿
         box_element([x0, 9.0, 1.0], [x1, 14.0, 15.0], [0.0, 0.0], px, texture),
-        // 锁扣：贴在正面外侧，大箱子时落在拼缝上
-        box_element([lock_x, 7.0, 15.0], [lock_x + lock_w, 11.0, 16.0], [0.0, 0.0], px, texture),
+        // 锁扣：与原版一致地嵌在正面那一层（z 14..15），而不是凸出到方块外
+        box_element([lock_x, 7.0, 14.0], [lock_x + lock_w, 11.0, 15.0], [0.0, 0.0], px, texture),
     ]
 }
 
@@ -380,28 +410,26 @@ pub fn variants_of(block: &str) -> Option<Vec<CodeVariant>> {
     }
 
     if short == "chest" || short == "trapped_chest" || short == "ender_chest" {
-        // 末影箱永远是单只；普通箱与陷阱箱都能两两拼成大箱子，两半各有贴图
-        let forms: &[(ChestHalf, &str)] = match short {
-            "ender_chest" => &[(ChestHalf::Single, "entity/chest/ender")],
-            "trapped_chest" => &[
-                (ChestHalf::Single, "entity/chest/trapped"),
-                (ChestHalf::Left, "entity/chest/trapped_left"),
-                (ChestHalf::Right, "entity/chest/trapped_right"),
-            ],
-            _ => &[
-                (ChestHalf::Single, "entity/chest/normal"),
-                (ChestHalf::Left, "entity/chest/normal_left"),
-                (ChestHalf::Right, "entity/chest/normal_right"),
-            ],
+        // 末影箱永远是单只；普通箱与陷阱箱都能两两拼成大箱子
+        let halves: &[ChestHalf] = if short == "ender_chest" {
+            &[ChestHalf::Single]
+        } else {
+            &[ChestHalf::Single, ChestHalf::Left, ChestHalf::Right]
         };
         // 朝向原先由游戏代码处理，这里展开成四条变体，靠 y 轴旋转区分。
-        // 顺序：north 不旋转，顺时针每档 90 度。普通箱与陷阱箱再按 `type`
+        // 顺序：north、east、south、west 每档 90 度。普通箱与陷阱箱再按 `type`
         // 分成单箱与左右半，这样并排的两个箱子才接成一只大箱子；末影箱没有
         // `type` 属性（它永远单只），条件串里也就不能写它，否则匹配不上。
+        //
+        // **旋转数值要比方块 JSON 模型多 180 度**：JSON 模型把正面画在 north 面
+        // （`block/orientable_with_bottom.json` 把 front 挂在 north），因此
+        // facing=north 对应 `y=0`；而箱子模型是从原版渲染代码照搬的，正面在 +z，
+        // 同一个 facing 要多转半圈。少这 180 度时锁扣会朝反方向，大箱子的拼缝
+        // 也跟着错位——两半各贴各的外侧，中间裂开，看起来就是「没有合并」。
         let has_type = short != "ender_chest";
         let mut out = Vec::new();
         for (i, facing) in ["north", "east", "south", "west"].iter().enumerate() {
-            for (half, texture) in forms {
+            for half in halves {
                 out.push(CodeVariant {
                     when: if has_type {
                         format!("facing={facing},type={}", half.state_value())
@@ -409,8 +437,8 @@ pub fn variants_of(block: &str) -> Option<Vec<CodeVariant>> {
                         format!("facing={facing}")
                     },
                     rot_x_div90: 0,
-                    rot_y_div90: i as u32,
-                    elements: chest_elements(texture, *half),
+                    rot_y_div90: (i as u32 + 2) % 4,
+                    elements: chest_elements(chest_texture(short, *half), *half),
                 });
             }
         }
@@ -436,6 +464,139 @@ mod tests {
             let uv = f.uv.expect("代码模型的面必须自带 UV");
             for v in uv {
                 assert!((0.0..=16.0).contains(&v), "面 {name} 的 UV {v} 超出 0..16 空间");
+            }
+        }
+    }
+
+    /// 大箱子两半在世界坐标里必须朝邻半那一侧贴齐。
+    ///
+    /// 期望值不是推出来的，而是量出来的：一份真实投影里，`facing=north` 的一对
+    /// 是 left 在低 x、right 在高 x；`facing=west` 的一对是 right 在低 z、left 在
+    /// 高 z。归纳起来，左半始终落在「朝向再转 +90 度」的方向上（north 朝 -z，
+    /// 转 +90 度是 west 即 -x，所以左半在 -x 侧，自身往 +x 贴）。
+    ///
+    /// 这条盯住的是「两半各贴各的外侧、中间裂开」那类错误：模型正面画在 +z
+    /// （与原版箱子渲染代码一致）而旋转少算 180 度时，拼缝方向会整体反过来。
+    #[test]
+    fn chest_halves_meet_toward_the_neighbour() {
+        use crate::transform::rotate_variant;
+        let chest = variants_of("minecraft:chest").expect("箱子应有几何");
+        // (facing, type, 贴齐的轴, 贴齐的边界值) —— 轴 0=x、2=z
+        let cases = [
+            ("north", "left", 0usize, 16.0f32),
+            ("north", "right", 0, 0.0),
+            ("south", "left", 0, 0.0),
+            ("south", "right", 0, 16.0),
+            ("west", "left", 2, 0.0),
+            ("west", "right", 2, 16.0),
+            ("east", "left", 2, 16.0),
+            ("east", "right", 2, 0.0),
+        ];
+        for (facing, kind, axis, want_edge) in cases {
+            let when = format!("facing={facing},type={kind}");
+            let v = chest
+                .iter()
+                .find(|v| v.when == when)
+                .unwrap_or_else(|| panic!("应有变体 {when}"));
+            let body = &v.elements[0];
+            let a = rotate_variant(body.from, v.rot_x_div90 as u8, v.rot_y_div90 as u8);
+            let b = rotate_variant(body.to, v.rot_x_div90 as u8, v.rot_y_div90 as u8);
+            let lo = a[axis].min(b[axis]);
+            let hi = a[axis].max(b[axis]);
+            let name = ["x", "y", "z"][axis];
+            assert!(
+                (lo - want_edge).abs() < 0.01 || (hi - want_edge).abs() < 0.01,
+                "{when} 的箱体在 {name} 上是 {lo}..{hi}，应当贴到 {want_edge}（靠邻半那一侧）"
+            );
+        }
+    }
+
+    /// 箱子的锁扣要贴在正面那一层（z 14..15），和原版一样，而不是凸出到方块外。
+    #[test]
+    fn chest_lock_sits_flush_with_the_front_face() {
+        for half in [ChestHalf::Single, ChestHalf::Left, ChestHalf::Right] {
+            let elements = chest_elements("entity/chest/normal", half);
+            let lock = elements.last().expect("应有锁扣");
+            assert_eq!(
+                (lock.from[2], lock.to[2]),
+                (14.0, 15.0),
+                "锁扣应与箱体正面（z=15）齐平"
+            );
+        }
+    }
+
+    /// 空白贴图必须正好落在拼缝那一面。
+    ///
+    /// 原版四张半箱贴图各自把**拼缝面**留空（被邻半挡住）。实测：`*_left` 空的
+    /// 是 +x 面、`*_right` 空的是 -x 面（箱盖与箱体两行一致）。这里把这条事实
+    /// 写成表，再和几何算出来的拼缝方向对照——两者不一致时，朝外的那一面会被
+    /// 画成空的，箱子看上去就缺一面，两半也接不上。
+    ///
+    /// 拼缝方向来自模型坐标系里的占位：左半 x 0..15（拼缝在 -x），右半 x 1..16
+    /// （拼缝在 +x）；本测试自己旋转角点，因此旋转改了也会被抓到。
+    #[test]
+    fn half_textures_leave_the_seam_face_blank() {
+        use crate::transform::rotate_variant;
+        // (贴图, 留空的面) —— 量自原版 entity/chest/*.png
+        let blank_face = |tex: &str| match tex {
+            "entity/chest/normal_left" | "entity/chest/trapped_left" => "east",
+            "entity/chest/normal_right" | "entity/chest/trapped_right" => "west",
+            other => panic!("{other} 不是半箱贴图"),
+        };
+        // 拼缝在世界坐标里的方向（与 chest_halves_meet_toward_the_neighbour 同一张表）
+        let seam = |facing: &str, kind: &str| match (facing, kind) {
+            ("north", "left") => [1.0, 0.0, 0.0],
+            ("north", "right") => [-1.0, 0.0, 0.0],
+            ("south", "left") => [-1.0, 0.0, 0.0],
+            ("south", "right") => [1.0, 0.0, 0.0],
+            ("west", "left") => [0.0, 0.0, -1.0],
+            ("west", "right") => [0.0, 0.0, 1.0],
+            ("east", "left") => [0.0, 0.0, 1.0],
+            ("east", "right") => [0.0, 0.0, -1.0],
+            _ => panic!("未覆盖 {facing}/{kind}"),
+        };
+
+        let chest = variants_of("minecraft:chest").expect("箱子应有几何");
+        for facing in ["north", "east", "south", "west"] {
+            for kind in ["left", "right"] {
+                let when = format!("facing={facing},type={kind}");
+                let v = chest.iter().find(|v| v.when == when).expect("应有变体");
+                let body = &v.elements[0];
+                let texture = body
+                    .faces
+                    .iter()
+                    .map(|(_, f)| f.texture.clone())
+                    .next()
+                    .expect("箱体应有贴图");
+                let blank = blank_face(&texture);
+
+                // 算留空的那一面转到世界坐标后朝哪边。取该面在模型坐标里的
+                // **面心**（-x/+x 面分别在 from[0]/to[0]，y、z 取中点），整点过一遍
+                // 旋转，再相对方块中心 (8,8,8) 看它偏在哪个轴向上。
+                // 不能只比 x：转 90 度后 ±x 面会跑到 ±z 上。
+                let face_center_model = match blank {
+                    "east" => [body.to[0], (body.from[1] + body.to[1]) / 2.0, (body.from[2] + body.to[2]) / 2.0],
+                    "west" => [body.from[0], (body.from[1] + body.to[1]) / 2.0, (body.from[2] + body.to[2]) / 2.0],
+                    other => panic!("半箱贴图只在 ±x 留空，实际是 {other}"),
+                };
+                let p = rotate_variant(
+                    face_center_model,
+                    v.rot_x_div90 as u8,
+                    v.rot_y_div90 as u8,
+                );
+                let d = [p[0] - 8.0, p[1] - 8.0, p[2] - 8.0];
+                // 取绝对值最大的那个轴作为朝向
+                let blank_dir = if d[0].abs() >= d[2].abs() {
+                    [if d[0] > 0.0 { 1.0 } else { -1.0 }, 0.0, 0.0]
+                } else {
+                    [0.0, 0.0, if d[2] > 0.0 { 1.0 } else { -1.0 }]
+                };
+                let want = seam(facing, kind);
+                assert_eq!(
+                    blank_dir, want,
+                    "{when}：留空的是 {texture} 的 {blank} 面，转到世界坐标后朝 {blank_dir:?}，\
+                     但它应当朝拼缝方向 {want:?}——贴图与两半对反了"
+                );
             }
         }
     }
@@ -513,8 +674,10 @@ mod tests {
                 .unwrap_or_default()
         };
         assert_eq!(tex_of("facing=north,type=single"), "entity/chest/normal");
-        assert_eq!(tex_of("facing=north,type=left"), "entity/chest/normal_left");
-        assert_eq!(tex_of("facing=north,type=right"), "entity/chest/normal_right");
+        // 半箱贴图与 type 是交叉对应的，理由见 chest_texture 的注释：
+        // 每张贴图把「拼缝那一面」留空，而左半占 x 0..15（拼缝在模型 -x 一侧）
+        assert_eq!(tex_of("facing=north,type=left"), "entity/chest/normal_right");
+        assert_eq!(tex_of("facing=north,type=right"), "entity/chest/normal_left");
 
         // 陷阱箱有自己的左右半贴图
         let trapped = variants_of("minecraft:trapped_chest").unwrap();
@@ -525,14 +688,16 @@ mod tests {
                 .map(|v| v.elements[0].faces[0].1.texture.clone())
                 .unwrap_or_default()
         };
-        assert_eq!(trapped_tex("facing=north,type=left"), "entity/chest/trapped_left");
-        assert_eq!(trapped_tex("facing=north,type=right"), "entity/chest/trapped_right");
+        // 陷阱箱同理：左右半贴图与 type 交叉对应
+        assert_eq!(trapped_tex("facing=north,type=left"), "entity/chest/trapped_right");
+        assert_eq!(trapped_tex("facing=north,type=right"), "entity/chest/trapped_left");
     }
 
     /// 大箱子的两半各宽 15 格、都把靠拼缝的一侧顶到方块边界，锁扣也落在拼缝上。
     ///
-    /// 拼缝在哪一侧由贴图决定：左右半的贴图里，被拼缝挡住的那些面是透明的
-    /// （左半空的是 -x 面、右半空的是 +x 面），照此才能让两半严丝合缝地接起来。
+    /// 拼缝在模型坐标系里的位置：左半占 x 0..15（拼缝在 -x），右半占 x 1..16
+    /// （拼缝在 +x）。两半按同一套旋转摆到世界里之后，各自顶到靠邻半的那条
+    /// 方块边界上，接缝正好合在一条线上。
     #[test]
     fn chest_halves_meet_at_the_seam() {
         let chest = variants_of("minecraft:chest").unwrap();
