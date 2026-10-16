@@ -51,7 +51,7 @@ export function createBackupsSlice(s: BackupsDeps) {
   const logs = ref<string[]>([]);
   const logLoading = ref(false);
   /** 独立的「日志管理」窗口。与备份抽屉里的日志页签看的是同一份内容，
-   *  只是多一个不用先打开备份管理的入口（资源包管理右侧的「日志」）。 */
+   *  入口在备份与日志的「操作日志」页签里。 */
   const logOpen = ref(false);
 
   function formatTime(ns: string): string {

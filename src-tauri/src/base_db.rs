@@ -7,6 +7,7 @@
 
 use crate::blockdb::BlockDb;
 use crate::error::{AppError, AppResult};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// 支持补齐的正式版：(数据版本, 版本号)，按数据版本严格升序。
@@ -160,7 +161,7 @@ pub fn load_base_block_db(dir: &Path) -> AppResult<(BlockDb, Vec<(String, String
 /// 扫描到的本机已装版本。
 #[derive(Debug)]
 pub struct McVersionHit {
-    /// 版本目录名，即版本 id（如 `1.20.1`）
+    /// 版本 id，取自 jar 内 version.json 的 `id`（如 `1.20.1`）
     pub id: String,
     /// 从 jar 内 version.json 读到的数据版本
     pub data_version: i32,
@@ -171,67 +172,219 @@ pub struct McVersionHit {
 #[derive(Debug)]
 pub struct McScan {
     pub versions: Vec<McVersionHit>,
-    /// 存在同名 jar 但读不出版本信息的目录；逐条说明原因，不静默跳过
+    /// 看着像客户端却读不出版本信息的文件；逐条说明原因，不静默跳过
     pub warnings: Vec<String>,
 }
 
-/// 扫描 .minecraft 目录，列出 versions/ 下每个带同名客户端 jar 的版本。
+/// 递归走查的深度上限。
 ///
-/// 目录本身或 versions/ 子目录读不了时报错：用户选错目录时应得到明确
-/// 提示，而不是一份空清单。单个 jar 损坏只记警告，不影响其它版本。
+/// 用户可以选任意目录（甚至整块盘）：没有上限时一次扫描可能走上几十分钟，
+/// 界面看起来就是卡死。真实客户端的存放层级很浅（`.minecraft/versions/<id>/`），
+/// 六层足以覆盖各家启动器的目录结构。
+const SCAN_MAX_DEPTH: usize = 6;
+
+/// 一次扫描最多检查多少个 jar。
+///
+/// 与深度上限同理：在一个装满模组的目录里逐个解压几千个包会长时间卡住。
+const SCAN_MAX_JARS: usize = 2000;
+
+/// 扫描任意目录，递归找出其中所有能识别的 Minecraft 客户端 jar。
+///
+/// 不要求目录是 .minecraft：整棵子树都会走一遍，逐个 jar 读 `version.json`
+/// 判断它是不是客户端，版本 id 与数据版本都取自该文件而不是目录名——jar 可能
+/// 被改名、也可能被放在任意位置。
+///
+/// 没有 `version.json` 的 jar 是模组一类，静默跳过：扫一个 mods 目录时把它们
+/// 逐条报成「失败」只会刷屏。有 `version.json` 却解析不出来的才作为失败项上报。
+/// 同一个版本在多个位置出现时只保留先遇到的那个（目录项排序后走查，结果稳定）。
+///
 /// 结果按数据版本升序。
 pub fn scan_minecraft(dir: &Path) -> AppResult<McScan> {
-    let versions_dir = dir.join("versions");
-    let rd = std::fs::read_dir(&versions_dir).map_err(|e| {
-        AppError::Parse(format!(
-            "读取 {} 失败：{e}（请选择 .minecraft 目录，其下应有 versions 子目录）",
-            versions_dir.display()
-        ))
-    })?;
-    let mut scan = McScan {
-        versions: Vec::new(),
-        warnings: Vec::new(),
-    };
-    for entry in rd {
-        let entry = entry.map_err(|e| {
-            AppError::Parse(format!("读取 {} 失败：{e}", versions_dir.display()))
-        })?;
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
+    let meta = std::fs::metadata(dir)
+        .map_err(|e| AppError::Parse(format!("读取 {} 失败：{e}", dir.display())))?;
+    if !meta.is_dir() {
+        return Err(AppError::Parse(format!("{} 不是目录", dir.display())));
+    }
+
+    let mut scan = McScan { versions: Vec::new(), warnings: Vec::new() };
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut checked = 0usize;
+    let mut truncated = false;
+    let mut pending: Vec<(PathBuf, usize)> = vec![(dir.to_path_buf(), 0)];
+
+    while let Some((current, depth)) = pending.pop() {
+        let Ok(rd) = std::fs::read_dir(&current) else { continue };
+        // 目录项顺序由文件系统决定，先排序再走：同一台机器上结果稳定
+        let mut entries: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+        entries.sort();
+
+        for path in entries {
+            let Ok(ft) = std::fs::symlink_metadata(&path) else { continue };
+            // 符号链接一律不跟：链成环时走查不会终止
+            if ft.file_type().is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
+                if depth < SCAN_MAX_DEPTH {
+                    pending.push((path, depth + 1));
+                } else {
+                    truncated = true;
+                }
+                continue;
+            }
+            let is_jar = path
+                .extension()
+                .map(|e| e.eq_ignore_ascii_case("jar"))
+                .unwrap_or(false);
+            if !is_jar {
+                continue;
+            }
+            if checked >= SCAN_MAX_JARS {
+                truncated = true;
+                break;
+            }
+            checked += 1;
+            match read_jar_version(&path) {
+                Ok(Some((id, data_version))) => {
+                    if seen.insert(id.clone()) {
+                        scan.versions.push(McVersionHit {
+                            id,
+                            data_version,
+                            jar_path: path,
+                        });
+                    }
+                }
+                // 不是客户端（模组、资源包一类），静默跳过
+                Ok(None) => {}
+                Err(e) => scan.warnings.push(format!("{}：{e}", path.display())),
+            }
         }
-        let id = entry.file_name().to_string_lossy().into_owned();
-        let jar = path.join(format!("{id}.jar"));
-        // 加载器/整合包目录（如 fabric-loader-…）没有同名 jar，属正常情况
-        if !jar.is_file() {
-            continue;
+        if checked >= SCAN_MAX_JARS {
+            break;
         }
-        match read_jar_data_version(&jar) {
-            Ok(data_version) => scan.versions.push(McVersionHit {
-                id,
-                data_version,
-                jar_path: jar,
-            }),
-            Err(e) => scan.warnings.push(format!("{id}：{e}")),
-        }
+    }
+
+    if truncated {
+        scan.warnings.push(format!(
+            "为避免长时间扫描，最多走到第 {SCAN_MAX_DEPTH} 层、检查 {SCAN_MAX_JARS} 个 jar；\
+             需要更深处的版本时，直接选那一层目录再扫一次"
+        ));
     }
     scan.versions.sort_by_key(|v| v.data_version);
     Ok(scan)
 }
 
-/// 从客户端 jar 的 version.json 读数据版本。
-fn read_jar_data_version(jar: &Path) -> AppResult<i32> {
+/// 从客户端 jar 读出版本 id 与数据版本。
+///
+/// 返回 `Ok(None)` 表示这个 jar 不是客户端（里面没有 `version.json`）——
+/// 那是模组的正常形态，不该当成错误。
+fn read_jar_version(jar: &Path) -> AppResult<Option<(String, i32)>> {
     let jf = crate::jar_file::JarFile::open(&jar.to_string_lossy())?;
-    let raw = jf
-        .raw("version.json")
-        .map_err(|e| AppError::Parse(format!("jar 里没有 version.json：{e}")))?;
+    let Ok(raw) = jf.raw("version.json") else {
+        return Ok(None);
+    };
     let v: serde_json::Value = serde_json::from_slice(&raw)
         .map_err(|e| AppError::Parse(format!("version.json 解析失败：{e}")))?;
+    let id = v
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::Parse("version.json 里没有 id".into()))?
+        .to_string();
     let n = v
         .get("world_version")
         .and_then(|v| v.as_i64())
         .ok_or_else(|| AppError::Parse("version.json 里没有 world_version".into()))?;
-    i32::try_from(n).map_err(|_| AppError::Parse(format!("world_version {n} 超出范围")))
+    let data_version = i32::try_from(n)
+        .map_err(|_| AppError::Parse(format!("world_version {n} 超出范围")))?;
+    Ok(Some((id, data_version)))
+}
+
+/// 从本机资源库里找出指定版本的语言文件（路径 -> 内容）。
+///
+/// 客户端 jar 只带 `en_us.json`，其余语言随资源索引下载后存在
+/// `.minecraft/assets/objects/<hash 前两位>/<hash>` 里，因此中文要从这里补。
+/// 索引文件本身给出「资源路径 -> hash」的映射。
+///
+/// 目标版本的索引缺失时（例如只装过别的版本、或索引被清理过）退而用任意
+/// 一个能查到该语言的索引：语言表只是取名字用的辅助数据，方块名跨版本相当
+/// 稳定，比整列没有中文更有用。对应地，查不到就不提供，构建侧会回落到英文。
+pub fn find_lang_files(
+    mc_dir: &Path,
+    version_id: &str,
+) -> Vec<(String, Vec<u8>)> {
+    const LANGS: [&str; 2] = ["zh_cn", "en_us"];
+
+    let indexes = mc_dir.join("assets").join("indexes");
+    let objects = mc_dir.join("assets").join("objects");
+    if !indexes.is_dir() || !objects.is_dir() {
+        return Vec::new();
+    }
+
+    // 先试该版本自己声明的索引，再退到本机任意索引
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(id) = asset_index_id(mc_dir, version_id) {
+        candidates.push(indexes.join(format!("{id}.json")));
+    }
+    if let Ok(rd) = std::fs::read_dir(&indexes) {
+        let mut rest: Vec<PathBuf> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().map(|x| x == "json").unwrap_or(false))
+            .collect();
+        rest.sort();
+        candidates.extend(rest);
+    }
+
+    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+    for idx in candidates {
+        let Ok(raw) = std::fs::read(&idx) else { continue };
+        let Ok(json) = serde_json::from_slice::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let Some(objs) = json.get("objects").and_then(|v| v.as_object()) else {
+            continue;
+        };
+        for lang in LANGS {
+            let path = format!("assets/minecraft/lang/{lang}.json");
+            if out.iter().any(|(p, _)| p == &path) {
+                continue;
+            }
+            let Some(hash) = objs
+                .get(&format!("minecraft/lang/{lang}.json"))
+                .and_then(|v| v.get("hash"))
+                .and_then(|v| v.as_str())
+            else {
+                continue;
+            };
+            if hash.len() < 2 {
+                continue;
+            }
+            let obj = objects.join(&hash[..2]).join(hash);
+            let Ok(bytes) = std::fs::read(&obj) else { continue };
+            out.push((path, bytes));
+        }
+        if out
+            .iter()
+            .any(|(p, _)| p.ends_with("zh_cn.json"))
+        {
+            break;
+        }
+    }
+    out
+}
+
+/// 读版本 json 里声明的资源索引 id（`assetIndex.id`）。
+fn asset_index_id(mc_dir: &Path, version_id: &str) -> Option<String> {
+    let path = mc_dir
+        .join("versions")
+        .join(version_id)
+        .join(format!("{version_id}.json"));
+    let raw = std::fs::read(path).ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    json.get("assetIndex")?
+        .get("id")?
+        .as_str()
+        .map(|s| s.to_string())
 }
 
 /// 官方启动器的默认 .minecraft 位置；环境变量缺失时返回 None。
@@ -308,6 +461,62 @@ mod tests {
     }
 
     #[test]
+    fn finds_language_files_through_the_asset_index() {
+        // 中文不在客户端 jar 里，而在 .minecraft/assets 的对象库中，
+        // 靠资源索引查到 hash 才能取到。找不到就会整列没有中文名。
+        let mc = test_dir("lang");
+        let versions = mc.join("versions").join("1.21.11");
+        std::fs::create_dir_all(&versions).unwrap();
+        std::fs::write(
+            versions.join("1.21.11.json"),
+            br#"{"id":"1.21.11","assetIndex":{"id":"29"}}"#,
+        )
+        .unwrap();
+
+        let indexes = mc.join("assets").join("indexes");
+        std::fs::create_dir_all(&indexes).unwrap();
+        std::fs::write(
+            indexes.join("29.json"),
+            br#"{"objects":{"minecraft/lang/zh_cn.json":{"hash":"aabbcc","size":3}}}"#,
+        )
+        .unwrap();
+
+        let zh = br#"{"block.minecraft.stone":"should-not-be-this"}"#;
+        let obj = mc.join("assets").join("objects").join("aa");
+        std::fs::create_dir_all(&obj).unwrap();
+        std::fs::write(obj.join("aabbcc"), zh).unwrap();
+
+        let got = find_lang_files(&mc, "1.21.11");
+        assert_eq!(got.len(), 1, "应找到中文语言文件，实际 {got:?}");
+        assert_eq!(got[0].0, "assets/minecraft/lang/zh_cn.json");
+        assert_eq!(got[0].1, zh);
+    }
+
+    #[test]
+    fn language_lookup_falls_back_to_another_index_and_gives_up_quietly() {
+        // 目标版本的索引不在本机时（只装过别的版本、索引被清理过），
+        // 退到本机任意能查到该语言的索引；一个都查不到就不提供，
+        // 让构建侧回落到英文名，而不是报错中断补库
+        let mc = test_dir("lang_fallback");
+        std::fs::create_dir_all(mc.join("assets").join("indexes")).unwrap();
+        std::fs::write(
+            mc.join("assets").join("indexes").join("17.json"),
+            br#"{"objects":{"minecraft/lang/zh_cn.json":{"hash":"ddeeff"}}}"#,
+        )
+        .unwrap();
+        let obj = mc.join("assets").join("objects").join("dd");
+        std::fs::create_dir_all(&obj).unwrap();
+        std::fs::write(obj.join("ddeeff"), b"{}").unwrap();
+
+        let got = find_lang_files(&mc, "9.9.9");
+        assert_eq!(got.len(), 1, "应退到本机其它索引，实际 {got:?}");
+
+        // 资源库整体不存在时返回空，且不 panic
+        let empty = test_dir("lang_missing");
+        assert!(find_lang_files(&empty, "1.21.11").is_empty());
+    }
+
+    #[test]
     fn scan_finds_versions_and_warns_on_broken_jars() {
         let dir = test_dir("scan");
         let versions = dir.join("versions");
@@ -343,10 +552,79 @@ mod tests {
     }
 
     #[test]
-    fn scan_requires_a_versions_dir() {
-        let dir = test_dir("scan-no-versions");
-        let e = scan_minecraft(&dir).unwrap_err().to_string();
-        assert!(e.contains("versions"), "错误应点明缺 versions 目录：{e}");
+    fn scan_recurses_into_subdirectories_of_any_directory() {
+        // 目录不要求是 .minecraft：任意目录、任意层级里的客户端 jar 都要找到。
+        // 版本 id 取自 jar 内的 version.json，而不是文件夹名——jar 可能被改名。
+        let dir = test_dir("scan-recursive");
+        let nested = dir.join("启动器").join("实例").join("versions").join("随便起的名字");
+        std::fs::create_dir_all(&nested).unwrap();
+        let jar = crate::jar_file::make_zip(&[(
+            "version.json",
+            br#"{"id":"1.21.1","world_version":3955}"#.as_slice(),
+        )]);
+        std::fs::write(nested.join("client.jar"), jar).unwrap();
+
+        // 模组：没有 version.json，应静默跳过而不是报一堆失败
+        let mods = dir.join("mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        let mod_jar = crate::jar_file::make_zip(&[(
+            "fabric.mod.json",
+            br#"{"id":"sodium"}"#.as_slice(),
+        )]);
+        std::fs::write(mods.join("sodium-0.5.jar"), mod_jar).unwrap();
+
+        let scan = scan_minecraft(&dir).expect("扫描失败");
+        assert_eq!(scan.versions.len(), 1, "应找到深层目录里的客户端 jar");
+        assert_eq!(scan.versions[0].id, "1.21.1", "id 应取自 version.json");
+        assert_eq!(scan.versions[0].data_version, 3955);
+        assert!(scan.warnings.is_empty(), "模组不应产生警告：{:?}", scan.warnings);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scan_keeps_one_hit_per_version_and_sorts_by_data_version() {
+        let dir = test_dir("scan-dedupe");
+        for (tag, dv) in [("a", 3955), ("b", 3465)] {
+            let d = dir.join(tag);
+            std::fs::create_dir_all(&d).unwrap();
+            let version = if dv == 3955 { "1.21.1" } else { "1.20.1" };
+            let body = format!(r#"{{"id":"{version}","world_version":{dv}}}"#);
+            std::fs::write(d.join("client.jar"), crate::jar_file::make_zip(&[(
+                "version.json",
+                body.as_bytes(),
+            )]))
+            .unwrap();
+        }
+        // 同一版本的第二个副本：不该出现两行
+        let dup = dir.join("c");
+        std::fs::create_dir_all(&dup).unwrap();
+        std::fs::write(dup.join("copy.jar"), crate::jar_file::make_zip(&[(
+            "version.json",
+            br#"{"id":"1.20.1","world_version":3465}"#.as_slice(),
+        )]))
+        .unwrap();
+
+        let scan = scan_minecraft(&dir).expect("扫描失败");
+        assert_eq!(scan.versions.len(), 2, "同一版本只保留一条");
+        let dvs: Vec<i32> = scan.versions.iter().map(|v| v.data_version).collect();
+        assert_eq!(dvs, [3465, 3955], "结果按数据版本升序");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scan_rejects_a_missing_or_non_directory() {
+        let dir = test_dir("scan-missing");
+        let missing = dir.join("并不存在");
+        let e = scan_minecraft(&missing).unwrap_err().to_string();
+        assert!(e.contains("失败"), "目录不存在应报错：{e}");
+
+        let file = dir.join("a.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let e = scan_minecraft(&file).unwrap_err().to_string();
+        assert!(e.contains("不是目录"), "指向文件时应说明不是目录：{e}");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

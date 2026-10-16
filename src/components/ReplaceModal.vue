@@ -72,46 +72,61 @@ function zhStatus(raw: string): string {
       <!-- 左栏：替换规则 -->
       <div class="repl-split__pane repl-split__pane--form">
         <a-form :model="replaceForm" layout="vertical" size="small">
+          <!-- 每个字段一层 .repl-field：标签、输入框、说明一律纵向排开、间距一致。
+               直接把输入框与说明并列写在表单项里时，Arco 的控制区会把它们摆成
+               一行，说明文字跑到输入框右边，左侧就对不齐了。 -->
           <a-form-item label="源方块（要替换掉的）">
-            <!-- 还空着的必填输入框给一圈红边（见 .repl-block--empty），
-                 填上就不上色：颜色只在需要提示时才出现 -->
-            <div class="repl-block" :class="{ 'repl-block--empty': !replaceForm.fromName.trim() }">
-              <a-input
-                v-model="replaceForm.fromName"
-                placeholder="例如 minecraft:oak_stairs"
-                allow-clear
-                @focus="setPickField('from')"
-                @click="setPickField('from')"
-              />
+            <div class="repl-field">
+              <!-- 还空着的必填输入框给一圈红边（见 .repl-block--empty），
+                   填上就不上色：颜色只在需要提示时才出现 -->
+              <div
+                class="repl-block"
+                :class="{ 'repl-block--empty': !replaceForm.fromName.trim() }"
+              >
+                <a-input
+                  v-model="replaceForm.fromName"
+                  placeholder="例如 minecraft:oak_stairs"
+                  allow-clear
+                  @focus="setPickField('from')"
+                  @click="setPickField('from')"
+                />
+              </div>
               <div v-if="zhName(replaceForm.fromName)" class="repl-block__zh">
                 中文名：{{ zhName(replaceForm.fromName) }}
               </div>
               <div v-else-if="zhStatus(replaceForm.fromName)" class="hint-dim">
                 {{ zhStatus(replaceForm.fromName) }}
               </div>
-            </div>
-            <div class="hint-dim">
-              在「方块」页签点击任意行可直接填入，属性限定也会一并带入
+              <div class="hint-dim">
+                在「方块」页签点击任意行可直接填入，属性限定也会一并带入
+              </div>
             </div>
           </a-form-item>
 
           <a-form-item label="源属性限定（可留空）">
-            <a-input
-              v-model="replaceForm.fromPropsText"
-              placeholder="例如 facing=east,half=top"
-              allow-clear
-            />
+            <div class="repl-field">
+              <a-input
+                v-model="replaceForm.fromPropsText"
+                placeholder="例如 facing=east,half=top"
+                allow-clear
+              />
+            </div>
           </a-form-item>
 
           <a-form-item label="目标方块（要换成的）">
-            <div class="repl-block" :class="{ 'repl-block--empty': !replaceForm.toName.trim() }">
-              <a-input
-                v-model="replaceForm.toName"
-                placeholder="例如 minecraft:stone"
-                allow-clear
-                @focus="setPickField('to')"
-                @click="setPickField('to')"
-              />
+            <div class="repl-field">
+              <div
+                class="repl-block"
+                :class="{ 'repl-block--empty': !replaceForm.toName.trim() }"
+              >
+                <a-input
+                  v-model="replaceForm.toName"
+                  placeholder="例如 minecraft:stone"
+                  allow-clear
+                  @focus="setPickField('to')"
+                  @click="setPickField('to')"
+                />
+              </div>
               <div v-if="zhName(replaceForm.toName)" class="repl-block__zh">
                 中文名：{{ zhName(replaceForm.toName) }}
               </div>
@@ -122,33 +137,37 @@ function zhStatus(raw: string): string {
           </a-form-item>
 
           <a-form-item label="目标属性覆盖（可选）">
-            <a-input
-              v-model="replaceForm.toPropsText"
-              placeholder="例如 facing=west"
-              allow-clear
-            />
+            <div class="repl-field">
+              <a-input
+                v-model="replaceForm.toPropsText"
+                placeholder="例如 facing=west"
+                allow-clear
+              />
+            </div>
           </a-form-item>
 
           <a-form-item label="属性处理">
-            <a-checkbox v-model="replaceForm.inheritProps">
-              继承源方块中目标也支持的属性
-            </a-checkbox>
+            <div class="repl-field">
+              <a-checkbox v-model="replaceForm.inheritProps">
+                继承源方块中目标也支持的属性
+              </a-checkbox>
+            </div>
           </a-form-item>
 
           <a-form-item>
-            <a-space>
+            <div class="repl-field repl-field--row">
               <a-button :loading="replaceBusy" :disabled="!selected" @click="doPreview">
                 预计替换数量
               </a-button>
-              <span v-if="replacePreview !== null" class="preview__info">
+              <span v-if="replacePreview !== null" class="repl-preview">
                 将替换 <b>{{ replacePreview.toLocaleString() }}</b> 个方块
               </span>
-            </a-space>
+            </div>
           </a-form-item>
 
           <div class="hint-dim">
             方块库共 {{ blockVersions.length }} 个版本可选；替换前会自动备份，
-            可在「备份管理」中还原。
+            可在「备份与日志」中还原。
           </div>
         </a-form>
       </div>

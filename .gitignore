@@ -46,7 +46,6 @@ Thumbs.db
 *.swp
 
 # ---- 运行期数据 ----
-packs/
 backups/
 diag.log
 

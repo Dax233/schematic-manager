@@ -660,19 +660,81 @@ $preview-row-h: $preview-stage-h + 16px;
   }
 }
 
-// 操作日志列表
+// 预览区里「方块数过大、默认不渲染」的提示与按钮。
+//
+// 居中一列：上方说明为什么没画、下方一个按钮，视线路径与「3D 视图没出来」
+// 这件事对得上——比丢一句错误文字到角落更容易找到该怎么办。
+.scene-gate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  padding: 0 24px;
+  text-align: center;
+}
+
+.scene-gate__text {
+  color: var(--color-text-2);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+// 操作日志列表：逐条分开，每条三段——时间、动作、细节。
+// 原先整行用等宽字体 + pre-wrap + break-all 直接铺出来：时间戳是 20 位数字，
+// 说明里可能塞几十个文件名，于是一整块糊在一起，逐条阅读很吃力。
+// 现在时间单独占一列（等宽、固定宽度），动作成标签，细节另起一段正常换行；
+// 条目之间用边框与留白分开。
 .log-list {
   max-height: 520px;
   overflow-y: auto;
-  font-family: Consolas, "Courier New", monospace;
-  font-size: 12px;
 
   &__row {
-    padding: 3px 6px;
+    display: flex;
+    gap: 10px;
+    padding: 8px 10px;
     border-bottom: 1px solid var(--color-border-1);
     color: var(--color-text-2);
-    white-space: pre-wrap;
-    word-break: break-all;
+    font-size: 13px;
+    line-height: 20px;
+
+    &:hover {
+      background-color: var(--color-fill-1);
+    }
+  }
+
+  // 时间列：等宽字体 + 不换行，多行日志的时间里也对得齐
+  &__time {
+    flex: 0 0 auto;
+    color: var(--color-text-3);
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  &__body {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  // 动作：单独一个标签，扫一眼就知道这条是什么操作
+  &__action {
+    display: inline-block;
+    margin-right: 6px;
+    padding: 0 6px;
+    border: 1px solid var(--color-border-2);
+    border-radius: 2px;
+    background-color: var(--color-fill-1);
+    color: var(--color-text-1);
+    font-size: 12px;
+    line-height: 18px;
+  }
+
+  // 细节：文件名一类可能很长，正常换行（不再 break-all 把词切碎）
+  &__detail {
+    word-break: break-word;
   }
 }
 
@@ -682,17 +744,6 @@ $preview-row-h: $preview-stage-h + 16px;
   font-size: 12px;
   color: var(--color-text-2);
   word-break: break-all;
-}
-
-// 资源包管理工具条：左侧导入操作、右侧「日志」入口。
-// 用 space-between 而不是给右边按钮加左外边距：左侧那组会换行，
-// 固定外边距在换行后会把按钮推到奇怪的位置。
-.pack-bar {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 12px;
 }
 
 // 方块栏头部：统计信息 + 导出按钮，一行放不下时换行
@@ -1163,6 +1214,29 @@ body[arco-theme='dark'] .conv-window .arco-table tr.conv-row--active > .arco-tab
   font-size: 12px;
 }
 
+// 目标版本里「尚未加载」的版本：灰字，点一下就下载并构建。
+//
+// Arco 把 disabled 的下拉项画成浅灰，但那是「不能选」的意思；这里的语义是
+// 「还没准备好，点一下就开始准备」，因此不用它的禁用样式，自己给一套灰字 +
+// 可点的样式，并把「未加载，点击下载」写在后面，让可点这件事有明确指示。
+.conv-window .conv-version--pending {
+  color: var(--color-text-3);
+
+  &:hover {
+    background-color: var(--color-fill-2);
+  }
+}
+
+.conv-version__pending {
+  cursor: pointer;
+}
+
+.conv-version__tag {
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--color-text-4);
+}
+
 // ---------------------------------------------------------------- 方块替换窗口
 //
 // 与版本转换窗口同一套做法：左栏填规则，右栏方块列表（点选即填入），
@@ -1219,6 +1293,23 @@ body[arco-theme='dark'] .conv-window .arco-table tr.conv-row--active > .arco-tab
   }
 }
 
+// 一个字段：输入框与其下方的中文名、说明纵向排开，间距全场一致。
+// 单独一层是必要的：表单项的控制区会把并列的子元素摆成一行，
+// 说明文字会跑到输入框右边，各字段的左边线就对不齐了。
+.repl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+// 横向排的字段（按钮 + 结果说明）
+.repl-field--row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
 .repl-block {
   display: flex;
   flex-direction: column;
@@ -1226,20 +1317,24 @@ body[arco-theme='dark'] .conv-window .arco-table tr.conv-row--active > .arco-tab
   min-width: 0;
 }
 
-// 中文名：这个窗口里认方块的主要依据，比正文再大一号并用黑色，
-// 一眼就能看清。深色主题下黑字读不出来，因此深色下改用正文色。
+// 中文名：认方块的依据，用颜色与字重强调，字号与其余文字齐平——
+// 相邻几行大小不一（标签 14、中文名 14、说明 13、输入框 12）看着就是乱的。
 .repl-block__zh {
   overflow: hidden;
   color: #000;
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+// 深色主题下黑字读不出来，改用正文色；强调由字重承担
 body[arco-theme='dark'] .repl-block__zh {
   color: var(--color-text-1);
 }
 
+// 方块 ID 与英文名：等宽字体，与中文名同一行距
 .repl-block__id {
   overflow: hidden;
   color: var(--color-text-3);
@@ -1263,12 +1358,56 @@ body[arco-theme='dark'] .repl-block--empty .arco-input-wrapper {
   background-color: rgba(var(--danger-6), 0.24);
 }
 
-// 字号与版本转换窗口保持一致：这里的说明文字与输入框都按同一档放大，
-// 两个窗口挨着用不会有大小不一的感觉。
-.repl-window .hint-dim {
-  font-size: 13px;
+// 这一扇窗口的字号与行距统一到一档：标签、输入框、中文名、说明、结果文字
+// 全是 13px、20px 行高。相邻几行大小不一（原先标签 14、中文名 14、说明 13、
+// 输入框 12）看上去就是乱的——要强调中文名，用颜色与字重，而不是改字号。
+// 与版本转换窗口同档，两个窗口挨着用不会有大小不一的感觉。
+.repl-window {
+  .hint-dim,
+  .repl-block__zh,
+  .repl-preview {
+    font-size: 13px;
+    line-height: 20px;
+  }
+
+  .arco-form-item-label-col > .arco-form-item-label {
+    font-size: 13px;
+    line-height: 20px;
+    padding-bottom: 2px;
+  }
+
+  // 字段之间统一留白；Arco 默认 8px 与字段内 4px 的行距分不开，
+  // 各个字段看起来会挤成一片
+  .arco-form-item {
+    margin-bottom: 16px;
+  }
+
+  .arco-input,
+  .arco-input-wrapper {
+    font-size: 13px;
+  }
+
+  // 输入框铺满整列：方块 ID 形如 minecraft:white_stained_glass，窄框里会被截断，
+  // 而「填的是什么」恰恰是这扇窗口最要紧的信息。原先输入框只占列宽的一小截，
+  // 下面的说明文字却铺满整列，左边线看着就是散的。
+  .repl-field .arco-input-wrapper {
+    width: 100%;
+  }
 }
 
-.repl-window .arco-form-item-label-col > .arco-form-item-label {
-  font-size: 14px;
+// 替换数量的结果说明：必须单行。原先共用详情面板的 .preview__info
+// （没有字号与折行约束），按钮旁被挤成「将替换 / 385 / 个方块」三行。
+.repl-preview {
+  color: var(--color-text-2);
+  white-space: nowrap;
+
+  b {
+    color: rgb(var(--primary-6));
+  }
+}
+
+// 版本转换窗口的输入框与替换窗口同档（两窗挨着用）
+.conv-window .arco-input,
+.conv-window .arco-input-wrapper {
+  font-size: 13px;
 }

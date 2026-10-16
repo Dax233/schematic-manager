@@ -50,7 +50,8 @@ const {
         </a-button>
       </div>
       <div class="hint-dim" style="margin-bottom: 6px">
-        点击任意行可以把它设为方块替换的源方块；表头可拖动调整列宽
+        数量按建造所需的物品折算：水与岩浆只算源头一个桶、门与床只算一次、双层台阶算两个，
+        摆法差异（墙上的火把等）与同一物品合为一行；点击任意行可以把它设为方块替换的源方块，表头可拖动调整列宽
       </div>
       <a-table
         :key="blockTableKey"

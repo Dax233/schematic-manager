@@ -21,7 +21,7 @@ import type SceneViewer from "../components/SceneViewer.vue";
 import { OffscreenRenderer } from "../render/scene3d";
 import { NamePool, joinPath, previewStem } from "../render/export_name";
 import type { AnalysisResult, BlockRow, SceneData, SchematicSummary } from "../types";
-import { itemKeyOf } from "../utils/block_item";
+import { itemsForState } from "../utils/material_items";
 import { formatStacks } from "../utils/format";
 
 /** 3D 预览与方块统计域用到的其他域成员（循环引用回避见 fileList.ts） */
@@ -33,6 +33,17 @@ export interface ScenePreviewDeps {
   /** 文件列表域已勾选且无解析错误的文件；批量导出的对象 */
   checkedFiles: ComputedRef<SchematicSummary[]>;
 }
+
+/**
+ * 单个方块的块数超过这个数时，默认不生成 3D 图形。
+ *
+ * 三万块以上的场景要在浏览器里建几何并上传显存，会明显卡顿甚至让界面
+ * 失去响应；等用户点「开始渲染」明确同意后再做，比默默卡住好。
+ *
+ * 口径是「统计表里的那一行」——即「方块」页签数量列看到的数：按物品合计、
+ * 忽略朝向一类的状态差异。用户看到的数字与这里的判断因此是同一个。
+ */
+const SCENE_BLOCK_LIMIT = 30000;
 
 export function createScenePreviewSlice(s: ScenePreviewDeps) {
   const viewer = ref<InstanceType<typeof SceneViewer> | null>(null);
@@ -46,11 +57,21 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   /** 批量导出的进度（null 表示未在批量导出） */
   const exportingProgress = ref<{ done: number; total: number } | null>(null);
 
+  /** 用户手动点过「开始渲染」的文件路径。
+   *
+   * 记路径而不是布尔：换了文件它自然失效，不必额外在切文件时清理——
+   * 这正对应「离开该文件后自行停止渲染」。
+   */
+  const manualRenderPath = ref("");
+
   // 场景加载失败不弹消息：错误长期展示在预览区里（sceneError），
   // 与「点一下、弹一条就消失」的瞬时操作不同
   async function loadScene(record: SchematicSummary) {
     scene.value = null;
     sceneError.value = "";
+    // 方块数过大且用户还没点过「开始渲染」：不生成几何，预览区给出按钮。
+    // 这里直接返回，连构建命令都不发——省下的正是卡顿的那一段。
+    if (sceneGate.value) return;
     sceneLoading.value = true;
     try {
       scene.value = await buildScene(record.path);
@@ -60,6 +81,26 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
       sceneLoading.value = false;
     }
   }
+
+  /** 用户明确要求渲染当前文件（方块数超过阈值时用） */
+  async function startRender() {
+    const cur = s.selected.value;
+    if (!cur) return;
+    manualRenderPath.value = cur.path;
+    await loadScene(cur);
+  }
+
+  // 离开该文件后手动渲染的授权随之失效：回来要重新点一次。
+  // 对应「渲染持续到玩家离开该文件预览为止」——不这么做的话，授权会一直
+  // 挂着，下次再打开同一个大文件时又会自动渲染起来。
+  watch(
+    () => s.selected.value?.path ?? "",
+    (path) => {
+      if (manualRenderPath.value && manualRenderPath.value !== path) {
+        manualRenderPath.value = "";
+      }
+    },
+  );
 
   const sceneInfo = computed(() => {
     if (!scene.value) return "";
@@ -246,48 +287,70 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   const ICON_BATCH = 128;
   const blockPage = ref(1);
 
-  /** 方块统计表的行：按**物品**合计，忽略方块状态与摆放形态。
+  /** 方块统计表的行：按**物品**合计，照投影模组 Litematica 的材料清单口径。
    *
-   * 后端给的是「每个方块状态用了多少个」。要合计两层：
-   *   1. 状态（红石粉的强度、铁轨的朝向与通电、楼梯的朝向……）；
-   *   2. 同一个物品的不同方块形态（火把与墙上的火把、立地与墙上的告示牌、
-   *      炼药锅的内容物、铁砧的破损程度）——见 utils/block_item.ts 的规律。
-   * 用户要看的是「这种物品一共要备多少」，两层都属于摆放差异。
+   * 后端给的是「每个方块状态用了多少个」（红石粉的强度、铁轨的朝向与通电、
+   * 楼梯的朝向……一个方块可以占几十行）。这里先把状态折算成「建造它所需的
+   * 物品与个数」（见 utils/material_items.ts），再按物品累加：同一个物品的
+   * 不同状态与不同摆法自然合成一行，数量是要备的物品数。
    *
-   * 一行里如果出现了基础形态（例如同时有火把与墙上的火把），就用基础形态的
-   * 名字、中文名与渲染图：那一行代表的是「火把」这个物品，而不是墙挂形态。
-   * 跨了哪几个方块名记在 forms 里，替换时据此说明只覆盖了其中一个名字。
+   * 代表状态取该物品下最先出现（后端按数量降序）的那一行，渲染图用它；
+   * 跨了多个方块名时，若其中有基础形态（火把与墙上的火把）就优先用基础形态
+   * 的名字、中文名与渲染图。跨了哪几个方块名记在 forms 里，替换时据此说明
+   * 只覆盖了其中一个名字。
    */
   const blockRows = computed<BlockRow[]>(() => {
     const all = s.analysis.value?.blocks ?? [];
     const out: BlockRow[] = [];
     const at = new Map<string, number>();
+    // 该物品当前的代表行是否已经是「基础形态」（方块名就等于物品名）。
+    // 行的 name 一律是物品名（水折成水桶、耕地折成泥土），所以不能靠比较
+    // name 判断代表行取自哪种摆法——墙上的火把与火把的物品名相同。
+    const baseForm = new Set<string>();
     for (const b of all) {
-      // 后端已按数量降序返回，因此同一方块第一项就是数量最多的那个状态
-      const key = itemKeyOf(b.name);
-      const i = at.get(key);
-      if (i === undefined) {
-        at.set(key, out.length);
-        out.push({ ...b, stateCount: 1, forms: [b.name] });
-        continue;
-      }
-      const row = out[i];
-      row.count += b.count;
-      row.stateCount += 1;
-      if (!row.forms.includes(b.name)) row.forms.push(b.name);
-      // 基础形态优先当代表：名字、中文名、渲染图都取它的
-      if (b.name === key && row.name !== key) {
-        row.name = b.name;
-        row.zhName = b.zhName;
-        row.enName = b.enName;
-        row.state = b.state;
+      for (const item of itemsForState(b.state)) {
+        const add = b.count * item.count;
+        const i = at.get(item.name);
+        if (i === undefined) {
+          at.set(item.name, out.length);
+          out.push({ ...b, name: item.name, count: add, stateCount: 1, forms: [b.name] });
+          if (b.name === item.name) baseForm.add(item.name);
+          continue;
+        }
+        const row = out[i];
+        row.count += add;
+        row.stateCount += 1;
+        if (!row.forms.includes(b.name)) row.forms.push(b.name);
+        // 基础形态优先当代表：中文名与渲染图取它的，用户看到的是「火把」
+        // 而不是「墙上的火把」
+        if (b.name === item.name && !baseForm.has(item.name)) {
+          baseForm.add(item.name);
+          row.zhName = b.zhName;
+          row.enName = b.enName;
+          row.state = b.state;
+        }
       }
     }
     // 合计后的数量与后端给出的单状态数量不同，名次要重排：否则「用了 8000 个
     // 的红石粉」会排在「用了 12 个的石头」后面。数量相同按名字排，结果稳定
-    // （不用 localeCompare：它随环境语言数据变化，同一份数据在不同机器上会排出不同顺序）。
+    //（不用 localeCompare：它随环境语言数据变化，同一份数据在不同机器上会排出不同顺序）。
     out.sort((a, b) => b.count - a.count || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     return out;
+  });
+
+  /** 数量最多的那一行方块（与统计表同一口径，也就是用户看到的那个数） */
+  const heaviestBlock = computed(() => {
+    const rows = blockRows.value;
+    if (rows.length === 0) return null;
+    return rows.reduce((a, b) => (b.count > a.count ? b : a));
+  });
+
+  /** 需要用户先点「开始渲染」的方块；不需要时为 null */
+  const sceneGate = computed(() => {
+    const heavy = heaviestBlock.value;
+    const cur = s.selected.value;
+    if (!heavy || !cur || heavy.count <= SCENE_BLOCK_LIMIT) return null;
+    return manualRenderPath.value === cur.path ? null : heavy;
   });
 
   /** 当前页的行。渲染图只给可见的这批，整表一次性加载会有几 MB 的 data URL。 */
@@ -452,6 +515,9 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     exporting,
     exportingProgress,
     loadScene,
+    startRender,
+    sceneGate,
+    sceneBlockLimit: SCENE_BLOCK_LIMIT,
     sceneInfo,
     setView,
     exportPreview,

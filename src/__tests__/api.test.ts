@@ -213,41 +213,6 @@ describe("重复筛查与备份", () => {
   });
 });
 
-describe("资源包", () => {
-  it("listPacks 不传参数", async () => {
-    await expectCall(() => api.listPacks(), "list_packs");
-  });
-
-  it("importJar 传 jarPath / kind / dataVersion", async () => {
-    await expectCall(() => api.importJar("/j/a.jar", 2, 3465), "import_jar", {
-      jarPath: "/j/a.jar",
-      kind: 2,
-      dataVersion: 3465,
-    });
-  });
-
-  it("importJar 未给 name 时发 null（而非省略）", async () => {
-    await expectCall(() => api.importJar("/j/a.jar", 1, 0), "import_jar", { name: null });
-  });
-
-  it("importJar 传 name", async () => {
-    await expectCall(() => api.importJar("/j/a.jar", 1, 0, "自定义"), "import_jar", {
-      name: "自定义",
-    });
-  });
-
-  it("setPackEnabled 传 file 与 enabled", async () => {
-    await expectCall(() => api.setPackEnabled("a.pack", true), "set_pack_enabled", {
-      file: "a.pack",
-      enabled: true,
-    });
-  });
-
-  it("deletePack 传 file", async () => {
-    await expectCall(() => api.deletePack("a.pack"), "delete_pack", { file: "a.pack" });
-  });
-});
-
 describe("契约整体性", () => {
   it("所有导出函数发出的命令名都是小写下划线形式", async () => {
     // 后端命令名一律 snake_case；出现驼峰或大写必然匹配不上
@@ -276,10 +241,6 @@ describe("契约整体性", () => {
       () => api.clearOperationLog(),
       () => api.openOperationLogDir(),
       () => api.mcVersionName(1),
-      () => api.listPacks(),
-      () => api.importJar("j", 1, 0),
-      () => api.setPackEnabled("f", true),
-      () => api.deletePack("f"),
     ];
     const names: string[] = [];
     for (const c of calls) {
@@ -305,9 +266,7 @@ describe("契约整体性", () => {
       () => api.buildScene("a"),
       () => api.analyzeConversion("a", 0),
       () => api.applyConversion("a", 0, []),
-      () => api.importJar("j", 1, 2),
       () => api.analyzeSchematic("a"),
-      () => api.setPackEnabled("f", true),
       () => api.saveMetadata("a", { name: "n", author: "au" }),
     ];
     for (const c of cases) {

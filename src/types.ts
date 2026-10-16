@@ -290,86 +290,6 @@ export interface AnalysisResult {
   distinctStates: number;
 }
 
-/** 一个已导入的资源包 */
-export interface PackEntry {
-  /** 资源包文件名（在 packs 目录内） */
-  file: string;
-  name: string;
-  /** 来源 jar 路径 */
-  source: string;
-  /**
-   * 来源所在目录。从 mods 文件夹批量导入时同一个目录会带出多个包，
-   * 界面据此把它们归成一组。
-   */
-  sourceDir: string;
-  /** 类型：0 内置、1 MC 版本包、2 模组包 */
-  kind: number;
-  /** 类型的中文名 */
-  kindLabel: string;
-  dataVersion: number;
-  mcVersion: string;
-  enabled: boolean;
-  size: number;
-  /** 文件是否实际存在。清单可能与磁盘不一致（用户手工删过文件）。 */
-  exists: boolean;
-}
-
-/** 资源包列表，含清单里被跳过的行 */
-/** 一个已启用却未能载入的资源包 */
-export interface PackLoadFailure {
-  file: string;
-  reason: string;
-}
-
-export interface PackList {
-  packs: PackEntry[];
-  /** 资源包存放目录，供界面直接打开去管理磁盘上的文件 */
-  packsDir: string;
-  /** 已启用但载入或合并失败的包 */
-  loadFailures: PackLoadFailure[];
-  /** 清单里解析失败而被跳过的行说明 */
-  skipped: string[];
-}
-
-/** 导入 jar 的结果 */
-export interface ImportOutcome {
-  file: string;
-  name: string;
-  kind: number;
-  kindLabel: string;
-  dataVersion: number;
-  mcVersion: string;
-  blocks: number;
-  models: number;
-  textures: number;
-  /** 解析失败而被跳过的 blockstate 数 */
-  failedBlockstates: number;
-  /** 因无法解析模型而被跳过的方块数 */
-  failedBlocks: number;
-  namespaces: number;
-  size: number;
-}
-
-/** 从 mods 文件夹批量导入的结果 */
-export interface ModsImport {
-  /** 被扫描的目录 */
-  dir: string;
-  /** 成功导入的模组 jar 文件名 */
-  imported: string[];
-  /**
-   * 失败项及原因。必须回报：某一个模组坏掉不该让其余都导不进来，
-   * 但用户也需要知道少了哪些、为什么。
-   */
-  failed: { path: string; reason: string }[];
-  /**
-   * 有意跳过的条目及原因（非 jar、按客户端包跳过）。
-   *
-   * 与 failed 分开：它们不是错误，但也不能无声无息地少导入——
-   * 名字里恰好含 client 的模组会被判成客户端包。
-   */
-  skipped: { path: string; reason: string }[];
-}
-
 // ---------------------------------------------------------------- 版本库
 
 /** 基础库里一个已就绪的版本 */
@@ -409,6 +329,8 @@ export interface SetupVersion {
   id: string;
   dataVersion: number;
   jarPath: string | null;
+  /** 本机 .minecraft 目录：后端从这里补语言文件（中文不在客户端 jar 里） */
+  mcDir?: string | null;
 }
 
 /** 单个版本的准备结果 */

@@ -1008,7 +1008,8 @@ export function createFileListSlice(s: FileListDeps) {
     analysis.value = null;
     resetDraft(record);
     if (record.error) return;
-    void s.loadScene(record);
+    // 先解析再建 3D 场景：方块数过大时预览区不自动渲染，而「过大」要看
+    // 统计结果才能判断。两个命令各自都要读一遍文件，串行并不比并行慢多少。
     analyzing.value = true;
     try {
       analysis.value = await analyzeSchematic(record.path);
@@ -1017,6 +1018,7 @@ export function createFileListSlice(s: FileListDeps) {
     } finally {
       analyzing.value = false;
     }
+    void s.loadScene(record);
   }
 
   /** 列表行的样式类：当前选中项高亮，重复文件按组上色，疑似重复另行标出。

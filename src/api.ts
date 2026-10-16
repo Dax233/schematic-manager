@@ -20,9 +20,6 @@ import type {
   FileOpOutcome,
   ReplaceOutcome,
   ReplaceRule,
-  ImportOutcome,
-  ModsImport,
-  PackList,
   RenameOutcome,
   SceneData,
   SchematicSummary,
@@ -151,45 +148,7 @@ export function mcVersionName(dataVersion: number): Promise<string> {
   return invoke<string>("mc_version_name", { dataVersion });
 }
 
-// ---------------------------------------------------------------- 资源包
-
-/** 列出已导入的资源包 */
-export function listPacks(): Promise<PackList> {
-  return invoke<PackList>("list_packs");
-}
-
-/**
- * 从 jar 导入资源包。
- * kind：1 = MC 客户端版本包（数据版本取自 jar 内 version.json），
- * 2 = 模组包（叠加到 dataVersion 指定的版本）。
- * name 为空时取 jar 文件名主干。
- */
-export function importJar(
-  jarPath: string,
-  kind: number,
-  dataVersion: number,
-  name?: string,
-): Promise<ImportOutcome> {
-  return invoke<ImportOutcome>("import_jar", {
-    jarPath,
-    kind,
-    dataVersion,
-    name: name ?? null,
-  });
-}
-
-/**
- * 从一个 mods 文件夹批量导入其中的模组。
- *
- * 只扫描该目录本身（不递归），且会跳过形如版本号的客户端 jar。
- * 单个模组失败不会中断整批，失败项在返回值里列出。
- */
-export function importModsFolder(
-  dir: string,
-  dataVersion: number,
-): Promise<ModsImport> {
-  return invoke<ModsImport>("import_mods_folder", { dir, dataVersion });
-}
+// ---------------------------------------------------------------- 方块渲染图
 
 /**
  * 批量渲染方块的等轴测小图。
@@ -208,21 +167,6 @@ export function renderBlockIcons(
     states,
     size: size ?? null,
   });
-}
-
-/** 在文件管理器里打开一个目录（不存在时由后端先创建） */
-export function openDirectory(path: string): Promise<void> {
-  return invoke<void>("open_directory", { path });
-}
-
-/** 启用或停用某个资源包 */
-export function setPackEnabled(file: string, enabled: boolean): Promise<void> {
-  return invoke<void>("set_pack_enabled", { file, enabled });
-}
-
-/** 删除某个资源包：同时移除清单记录与磁盘文件 */
-export function deletePack(file: string): Promise<void> {
-  return invoke<void>("delete_pack", { file });
 }
 
 // ---------------------------------------------------------------- 目录栏文件操作

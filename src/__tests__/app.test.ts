@@ -174,11 +174,6 @@ function stubInvoke(overrides: Record<string, unknown> = {}) {
         return { versions: [], warnings: [] };
       case "setup_add_versions":
         return { outcomes: [] };
-      case "list_packs":
-        // 返回 PackListDto（后端类型），不是数组：App.vue 打开资源包面板时
-        // 立刻读 r.packs / r.skipped / r.loadFailures，给数组会在
-        // r.skipped.length 处抛 TypeError，被 catch 变成「读取资源包清单失败」。
-        return { packs: [], packsDir: "/app/packs", skipped: [], loadFailures: [] };
       case "list_backups":
       case "read_operation_log":
         return [];
@@ -229,8 +224,8 @@ describe("界面外壳", () => {
       "方块替换",
       "版本转换",
       "重复文件筛查",
-      "备份管理",
-      "资源包管理",
+      "备份与日志",
+      "版本库",
     ]) {
       expect(text, `工具栏应含「${label}」`).toContain(label);
     }
@@ -246,7 +241,7 @@ describe("界面外壳", () => {
     expect(find("版本转换")?.attributes("disabled"), "版本转换应禁用").toBeDefined();
     // 与选中项无关的入口应始终可用
     expect(find("添加目录")?.attributes("disabled")).toBeUndefined();
-    expect(find("备份管理")?.attributes("disabled")).toBeUndefined();
+    expect(find("备份与日志")?.attributes("disabled")).toBeUndefined();
     w.unmount();
   });
 
@@ -262,7 +257,7 @@ describe("界面外壳", () => {
     // 挂载即触发一批查询会把界面拖慢；这些应当按需触发
     mountApp();
     const names = mockInvoke.mock.calls.map((c) => c[0]);
-    for (const cmd of ["list_packs", "search_blocks", "convert_targets", "scan_duplicates"]) {
+    for (const cmd of ["search_blocks", "convert_targets", "scan_duplicates"]) {
       expect(names, `初始不应调用 ${cmd}`).not.toContain(cmd);
     }
   });
@@ -340,7 +335,7 @@ describe("主要操作流程", () => {
 
     // 保存结果必须告知用户备份位置，否则改动看起来像是没发生。
     // 这里断言提示文案本身：改用 document.body.textContent 找「备份」是靠不住的
-    // ——工具栏里的「备份管理」按钮就含这两个字，无论有没有提示都会通过。
+    // ——工具栏里的「备份与日志」按钮就含这两个字，无论有没有提示都会通过。
     expect(shownMessages().join("\n"), "应提示备份路径").toContain("备份在：");
     w.unmount();
   });
@@ -1397,6 +1392,14 @@ describe("版本转换", () => {
           return { items: [summary], skippedDirs: 0, skippedPaths: [] };
         case "convert_targets":
           return [{ index: 0, name: "1.19.2", dataVersion: 3120 }];
+        case "base_db_status":
+          // 目标版本下拉会把「支持但尚未加载」的版本一并列出（点一下下载），
+          // 那份清单取自版本库状态；缺了它下拉渲染会抛错
+          return {
+            versions: [{ name: "1.20.1", dataVersion: 3465 }],
+            entityAvailable: true,
+            supported: [{ name: "1.20.1", dataVersion: 3465 }],
+          };
         case "analyze_conversion":
           analyzeCalls += 1;
           // 第一次成功且无缺口（显示成功提示），第二次失败
@@ -1523,7 +1526,12 @@ describe("版本转换窗口（中文名与替代品点选）", () => {
     return convRows().find((r) => (r.textContent ?? "").includes(text));
   }
 
-  /** 打开转换窗口 → 选目标版本 → 分析差异 */
+  /** 打开转换窗口 → 选目标版本 → 分析差异。
+   *
+   * 替身里必须给出 `base_db_status`：目标版本下拉除了已加载的版本，还会把
+   * 「支持但尚未加载」的版本以灰字列出来（点一下就下载），那份清单来自
+   * 版本库状态。少了它，下拉渲染会直接抛错，整组用例连带失败。
+   */
   async function openAndAnalyze() {
     mockInvoke.mockImplementation((async (cmd: string) => {
       switch (cmd) {
@@ -1531,6 +1539,17 @@ describe("版本转换窗口（中文名与替代品点选）", () => {
           return { items: [summary], skippedDirs: 0, skippedPaths: [] };
         case "convert_targets":
           return [{ index: 0, name: "1.19.2", dataVersion: 3120 }];
+        case "base_db_status":
+          return {
+            versions: [{ name: "1.20.1", dataVersion: 3465 }],
+            entityAvailable: true,
+            supported: [
+              { name: "1.20.1", dataVersion: 3465 },
+              { name: "1.21.11", dataVersion: 4325 },
+            ],
+          };
+        case "setup_add_versions":
+          return { outcomes: [{ id: "1.21.11", ok: true, error: "" }] };
         case "analyze_conversion":
           return CONV_ITEMS.map((i) => ({ ...i }));
         // 点选列表里的方块时用
@@ -1552,7 +1571,15 @@ describe("版本转换窗口（中文名与替代品点选）", () => {
           return [];
       }
     }) as never);
+    return await openConvertDialog();
+  }
 
+  /** 打开转换窗口、选中已加载的目标版本、点「分析差异」，只负责界面动作。
+   *
+   * 替身由调用方安装：需要模拟「版本原来是没加载的、补完才可用」的用例
+   * 得自己维持一份有状态的替身。
+   */
+  async function openConvertDialog() {
     const w = mountApp();
     mockOpen.mockResolvedValue("/p");
     await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
@@ -1580,6 +1607,111 @@ describe("版本转换窗口（中文名与替代品点选）", () => {
     await flushPromises();
     return w;
   }
+
+  it("未加载的版本以灰字列出，点一下就下载并变成可选的目标版本", async () => {
+    // 有状态替身：补库之前 1.21.11 只是「支持但未加载」，补完之后
+    // 方块库里就有了它，convert_targets 也会给出它的下标
+    let built = false;
+    const setupCalls: Array<{ id: string; jarPath: string | null }> = [];
+    mockInvoke.mockImplementation((async (cmd: string, args: never) => {
+      const a = args as unknown as { versions?: Array<{ id: string; jarPath: string | null }> };
+      switch (cmd) {
+        case "scan_litematics":
+          return { items: [summary], skippedDirs: 0, skippedPaths: [] };
+        case "base_db_status":
+          return {
+            versions: built
+              ? [
+                  { name: "1.20.1", dataVersion: 3465 },
+                  { name: "1.21.11", dataVersion: 4325 },
+                ]
+              : [{ name: "1.20.1", dataVersion: 3465 }],
+            entityAvailable: true,
+            supported: [
+              { name: "1.20.1", dataVersion: 3465 },
+              { name: "1.21.11", dataVersion: 4325 },
+            ],
+          };
+        case "convert_targets":
+          return built
+            ? [
+                { index: 0, name: "1.19.2", dataVersion: 3120 },
+                { index: 1, name: "1.21.11", dataVersion: 4325 },
+              ]
+            : [{ index: 0, name: "1.19.2", dataVersion: 3120 }];
+        case "setup_add_versions":
+          for (const v of a.versions ?? []) setupCalls.push({ id: v.id, jarPath: v.jarPath });
+          built = true;
+          return { outcomes: [{ id: "1.21.11", ok: true, error: "" }] };
+        case "analyze_conversion":
+          return [];
+        case "build_scene":
+          return scene;
+        // 选中文件后详情面板会读分析结果；必须回结构正确的对象，
+        // 否则实体表在访问 analysis.entities 时抛错，留下未处理错误
+        case "analyze_schematic":
+          return {
+            blocks: [],
+            entities: [],
+            tileEntities: [],
+            entityInstances: [],
+            nonAirTotal: 0,
+            airTotal: 0,
+            distinctBlockTypes: 0,
+            distinctStates: 0,
+          };
+        case "list_block_versions":
+          return [];
+        // 补库会先定位 .minecraft 并扫一次本机版本；这几条必须回结构正确的值，
+        // 回数组会让「扫本机已装版本」那一步抛错，补库根本发不出去
+        case "load_setup_state":
+          return null;
+        case "default_minecraft_dir":
+          return "C:/mc";
+        case "scan_minecraft":
+          return { versions: [], warnings: [] };
+        default:
+          return [];
+      }
+    }) as never);
+
+    const w = await openConvertDialog();
+
+    // 下拉里必须同时有「已加载」与「未加载」两类
+    const select = document.querySelector(".arco-select-view, .arco-select") as HTMLElement | null;
+    select!.click();
+    await flushPromises();
+    const pending = [...document.querySelectorAll(".arco-select-option")].find((o) =>
+      (o.textContent ?? "").includes("1.21.11"),
+    ) as HTMLElement | undefined;
+    expect(pending, "未加载的版本也应列出").toBeTruthy();
+    expect(pending!.textContent, "要说明点它能做什么").toContain("点击下载");
+
+    // 点它 = 开始准备这个版本，而不是把它选成目标版本
+    pending!.click();
+    await flushPromises();
+
+    expect(setupCalls, "应就这一个版本发起补库").toEqual([{ id: "1.21.11", jarPath: null }]);
+    // 补完自动选中它（下标 1 是后端补库后新给的）
+    expect(
+      shownMessages().some((m) => m.includes("已就绪")),
+      "应提示已就绪",
+    ).toBe(true);
+    // 再次展开下拉：它应当从「未加载」变成可直接选中的目标版本
+    await flushPromises();
+    const select2 = document.querySelector(".arco-select-view, .arco-select") as HTMLElement | null;
+    select2!.click();
+    await flushPromises();
+    const nowReady = [...document.querySelectorAll(".arco-select-option")].find((o) =>
+      (o.textContent ?? "").includes("1.21.11"),
+    ) as HTMLElement | undefined;
+    expect(nowReady!.textContent, "补完后不再显示「点击下载」").not.toContain("点击下载");
+    // 版本库那边也要能看到它
+    await w.findAll("button").find((b) => b.text().includes("版本库"))!.trigger("click");
+    await flushPromises();
+    expect(document.body.textContent, "版本库里应出现 1.21.11").toContain("1.21.11");
+    w.unmount();
+  });
 
   it("源方块与自动推荐的替代品都显示中文名", async () => {
     const w = await openAndAnalyze();
@@ -2663,9 +2795,11 @@ describe("方块栏渲染图", () => {
     const sign = cells(rowOf("minecraft:oak_sign"));
     expect(sign[1], "代表形态取基础形态，中文名也取它的").toBe("橡木告示牌");
     expect(sign[4], "数量应是两种形态之和").toBe("196");
-    // 只有墙挂形态时，投影里没有基础形态可比对，名字与状态保持墙挂形态自己的
-    const paleOak = cells(rowOf("minecraft:pale_oak_wall_sign"));
+    // 只有墙挂形态时，行的名字是物品名（告示牌），因为要备的就是告示牌物品；
+    // 中文名与状态仍取自投影里真实存在的那一行
+    const paleOak = cells(rowOf("minecraft:pale_oak_sign"));
     expect(paleOak[4], "数量应如实显示").toBe("14");
+    expect(paleOak[1], "中文名取自投影里存在的墙挂形态").toBe("淡橡木墙上的告示牌");
     expect(paleOak[3], "单形态单状态直接写出状态").toBe(
       "minecraft:pale_oak_wall_sign[facing=north]",
     );
@@ -3044,41 +3178,8 @@ describe("方块栏渲染图", () => {
   });
 });
 
-/** 资源包管理：导入来源、删除、打开资源包目录 */
-describe("资源包管理", () => {
-  const pack = {
-    file: "mod-x.pack",
-    name: "某模组",
-    source: "C:/mods/mod-x.jar",
-    sourceDir: "C:/mods",
-    kind: 2,
-    kindLabel: "模组包",
-    dataVersion: 3465,
-    mcVersion: "1.20.1",
-    enabled: true,
-    size: 1024,
-    exists: true,
-  };
-
-  /** 打开资源包管理弹窗并等加载完成。
-   *
-   * 断言一律查 `document.body` 而不是 `w.text()`：Arco 的弹窗通过 teleport
-   * 挂到 body 上，wrapper 的文本里拿不到它的内容。
-   */
-  async function openPacks(extra: Record<string, unknown> = {}) {
-    stubInvoke({
-      list_packs: { packs: [pack], packsDir: "C:/app/packs", skipped: [], loadFailures: [] },
-      ...extra,
-    });
-    const w = mountApp();
-    await flushPromises();
-    const entry = w.findAll("button").find((b) => b.text().includes("资源包管理"));
-    expect(entry, "工具栏应有「资源包管理」").toBeTruthy();
-    await entry!.trigger("click");
-    await flushPromises();
-    return w;
-  }
-
+/** 日志管理窗口：从备份与日志的「操作日志」页签进入 */
+describe("日志管理窗口", () => {
   /** 在弹窗里按文字找按钮 */
   function bodyButton(label: string): HTMLElement | undefined {
     return [...document.querySelectorAll("button")].find((b) =>
@@ -3086,31 +3187,10 @@ describe("资源包管理", () => {
     ) as HTMLElement | undefined;
   }
 
-  it("列出模组名与来源目录", async () => {
-    const w = await openPacks();
-    const text = document.body.textContent ?? "";
-    expect(text, "应显示模组名").toContain("某模组");
-    expect(text, "应显示来源目录").toContain("C:/mods");
-    w.unmount();
-  });
-
-  it("「打开资源包目录」把后端给的目录交给文件管理器", async () => {
-    const w = await openPacks();
-    const btn = bodyButton("打开资源包目录");
-    expect(btn, "应有「打开资源包目录」按钮").toBeTruthy();
-    btn!.click();
-    await flushPromises();
-
-    const call = mockInvoke.mock.calls.find((c) => c[0] === "open_directory");
-    expect(call, "应调用 open_directory").toBeTruthy();
-    expect(call![1]).toEqual({ path: "C:/app/packs" });
-    w.unmount();
-  });
-
   /** 日志管理窗口本身。
    *
-   * 必须按标题定位到那一个弹窗：资源包窗口先打开、在 DOM 里排在前面，
-   * 按文字在整页找按钮（bodyButton）会先命中它里面同名的按钮。 */
+   * 必须按标题定位到那一个弹窗：备份与日志抽屉里同名的文字、以及抽屉本身
+   * 都排在它前面，按文字在整页找按钮会先命中那些。 */
   function logModal(): HTMLElement | undefined {
     return [...document.querySelectorAll<HTMLElement>(".arco-modal")].find((m) =>
       (m.textContent ?? "").includes("日志管理"),
@@ -3136,22 +3216,39 @@ describe("资源包管理", () => {
     return [...root.querySelectorAll(".log-list__row")].map((r) => r.textContent ?? "");
   }
 
-  /** 点资源包管理窗口右侧的「日志」，打开日志管理窗口。
+  /** 从「备份与日志」的「操作日志」页签打开日志管理窗口。
    *
    * read_operation_log 用**有状态**替身：清空之后必须真的读到空，
    * 否则「清空 → 界面变空」这条链路验不出来（固定数组会让漏掉刷新也照样通过）。
    */
   async function openLogWindow(extra: Record<string, unknown> = {}) {
-    // 与后端实际写出的格式一致：方块替换那一行带方块中文名
+    // 与后端实际写出的格式一致：纳秒时间戳 + 制表符 + 说明。
+    // 这里曾经写成「2026-10-15 12:00:00\t…」——那是格式化后的时间，
+    // 后端从不这么写，界面也就照不出真实的显示效果。
     const state = {
       lines: [
-        "2026-10-15 12:00:00\t替换 demo.litematic：石头（minecraft:stone） -> 泥土（minecraft:dirt），共 12 个",
+        "1792138651762518000\t替换 demo.litematic：石头（minecraft:stone） -> 泥土（minecraft:dirt），共 12 个",
       ],
     };
-    const w = await openPacks({
+    stubInvoke({
       ...extra,
     });
-    // openPacks 已经装好替身，这里再叠一层带状态的日志命令
+    const w = mountApp();
+    await flushPromises();
+
+    // 备份与日志抽屉 → 操作日志页签 → 日志管理
+    const entry = w.findAll("button").find((b) => b.text().includes("备份与日志"));
+    expect(entry, "工具栏应有「备份与日志」").toBeTruthy();
+    await entry!.trigger("click");
+    await flushPromises();
+    const tab = [...document.querySelectorAll<HTMLElement>(".arco-tabs-tab")].find((t) =>
+      (t.textContent ?? "").includes("操作日志"),
+    );
+    expect(tab, "备份与日志里应有「操作日志」页签").toBeTruthy();
+    tab!.click();
+    await flushPromises();
+
+    // 叠一层带状态的日志命令替身
     const base = mockInvoke.getMockImplementation()!;
     mockInvoke.mockImplementation((async (cmd: string, args: never) => {
       if (cmd === "read_operation_log") return [...state.lines];
@@ -3162,11 +3259,13 @@ describe("资源包管理", () => {
       return base(cmd, args);
     }) as never);
 
-    const btn = bodyButton("日志");
-    expect(btn, "资源包管理窗口右侧应有「日志」按钮").toBeTruthy();
+    const btn = bodyButton("日志管理");
+    expect(btn, "「操作日志」页签里应有「日志管理」按钮").toBeTruthy();
+    // 进页签时抽屉已读过一次，记下来供「打开窗口又读一次」的断言比对
+    const readsBeforeOpen = calls("read_operation_log");
     btn!.click();
     await flushPromises();
-    return { w, state };
+    return { w, state, readsBeforeOpen };
   }
 
   /** 二次确认弹层里的「清空」按钮。
@@ -3182,13 +3281,23 @@ describe("资源包管理", () => {
     return mockInvoke.mock.calls.filter((c) => c[0] === cmd).length;
   }
 
-  it("「日志」按钮打开日志管理窗口并显示日志内容", async () => {
+  it("「日志」按钮打开日志管理窗口并逐条分开显示日志", async () => {
     const { w } = await openLogWindow();
     const modal = logModal();
     expect(modal, "应打开日志管理窗口").toBeTruthy();
-    expect(logRows(), "应渲染出日志行").toEqual([
-      "2026-10-15 12:00:00\t替换 demo.litematic：石头（minecraft:stone） -> 泥土（minecraft:dirt），共 12 个",
-    ]);
+
+    // 每条的三个部分各自成元素：时间单独一列、动作成标签、细节另起一段。
+    // 断言不再比对整行原文——正因为「整行糊成一段」才要改版。
+    const row = modal!.querySelector(".log-list__row")!;
+    expect(row.querySelector(".log-list__time")!.textContent, "时间要格式化成日期").toMatch(
+      /^\d{4}[/-]\d{1,2}[/-]\d{1,2}/,
+    );
+    expect(row.querySelector(".log-list__action")!.textContent?.trim()).toBe("替换");
+    expect(row.querySelector(".log-list__detail")!.textContent).toContain(
+      "石头（minecraft:stone） -> 泥土（minecraft:dirt），共 12 个",
+    );
+    // 时间戳不该原样出现在界面上（20 位数字读不出是什么时间）
+    expect(row.textContent, "不应原样显示纳秒时间戳").not.toContain("1792138651762518000");
     // 三个管理动作都要在这个窗口里：用户要求的正是「管理」而不只是看
     for (const label of ["刷新", "打开日志所在目录", "清空日志"]) {
       expect(logButton(label), `日志窗口里应有「${label}」`).toBeTruthy();
@@ -3197,8 +3306,11 @@ describe("资源包管理", () => {
   });
 
   it("打开日志窗口时随即读取一次日志", async () => {
-    const { w } = await openLogWindow();
-    expect(calls("read_operation_log"), "打开时应读取一次").toBe(1);
+    // 进入「操作日志」页签时抽屉已经读过一次，因此这里比对的是
+    // 「打开窗口又读了一次」，而不是总次数恰好为一
+    const { w, readsBeforeOpen } = await openLogWindow();
+    expect(logModal(), "此时日志窗口应已打开").toBeTruthy();
+    expect(calls("read_operation_log"), "打开窗口应再读一次").toBe(readsBeforeOpen + 1);
     w.unmount();
   });
 
@@ -3340,50 +3452,209 @@ describe("版本库", () => {
     w.unmount();
   });
 
-  it("默认只勾本机已装的版本，联网下载的交给用户选", async () => {
+  it("已就绪与已装的版本排在列表最前", async () => {
+    // 支持的正式版有 49 个，列表很长；用户最常看「我已经有哪些」，
+    // 因此已建好基础库的、本机装了可直接建的都要排在前面
     stubInvoke({
-      base_db_status: { versions: [], entityAvailable: false, supported },
+      base_db_status: { versions: [{ name: "1.21", dataVersion: 3953 }], entityAvailable: true, supported },
       default_minecraft_dir: "C:/mc",
       scan_minecraft: {
         versions: [{ id: "1.20.1", dataVersion: 3465, jarPath: "C:/mc/1.20.1/1.20.1.jar" }],
         warnings: [],
       },
-      setup_add_versions: { outcomes: [{ id: "1.20.1", ok: true, error: "" }] },
     });
     const w = mountApp();
     await flushPromises();
 
-    const text = document.body.textContent ?? "";
-    expect(text, "本机已装的版本应标出来").toContain("本机已装");
+    // 库非空时不会自动弹窗，从工具栏打开
+    w.findAll("button").find((b) => b.text().includes("版本库"))!.trigger("click");
+    await flushPromises();
 
-    // 1.21 本机没有，默认不勾：勾上就是几十 MB 下载，得用户自己点头
-    let btn = bodyButton("准备勾选的版本");
-    expect(btn!.textContent, "默认只勾本机已装的那一个").toContain("（1）");
+    const rows = [...document.querySelectorAll(".setup-table tbody tr")];
+    expect(rows.length, "应列出全部支持的版本").toBe(2);
+    expect(rows[0].textContent, "已就绪的版本应排在最前").toContain("1.21");
+    expect(rows[1].textContent, "本机已装的次之").toContain("1.20.1");
     w.unmount();
+  });
 
-    stubInvoke({
-      base_db_status: { versions: [], entityAvailable: false, supported },
-      default_minecraft_dir: "C:/mc",
-      scan_minecraft: {
-        versions: [{ id: "1.20.1", dataVersion: 3465, jarPath: "C:/mc/1.20.1/1.20.1.jar" }],
-        warnings: [],
-      },
-      setup_add_versions: { outcomes: [{ id: "1.20.1", ok: true, error: "" }] },
-    });
-    const w2 = mountApp();
+  it("扫描到本机版本就自动导入并标记已就绪，联网下载的才要用户勾选", async () => {
+    // 有状态替身：导入之前 1.20.1 只是「本机已装」，导入之后基础库里就有它了
+    let built = false;
+    mockInvoke.mockImplementation((async (cmd: string) => {
+      switch (cmd) {
+        case "base_db_status":
+          return {
+            versions: built ? [{ name: "1.20.1", dataVersion: 3465 }] : [],
+            entityAvailable: false,
+            supported,
+          };
+        case "default_minecraft_dir":
+          return "C:/mc";
+        case "scan_minecraft":
+          return {
+            versions: [{ id: "1.20.1", dataVersion: 3465, jarPath: "C:/mc/1.20.1/1.20.1.jar" }],
+            warnings: [],
+          };
+        case "setup_add_versions":
+          built = true;
+          return { outcomes: [{ id: "1.20.1", ok: true, error: "" }] };
+        default:
+          return [];
+      }
+    }) as never);
+    const w = mountApp();
     await flushPromises();
 
-    btn = bodyButton("准备勾选的版本");
-    btn!.click();
-    await flushPromises();
-
+    // 「找到即导入」：本机扫到的客户端 jar 直接构建，用户不必再勾一次。
+    // 用本地 jar 构建不耗流量，本来也没有需要用户决定的地方。
     const call = mockInvoke.mock.calls.find((c) => c[0] === "setup_add_versions");
-    expect(call, "应调用 setup_add_versions").toBeTruthy();
+    expect(call, "扫描后应自动导入本机版本").toBeTruthy();
     const args = call![1] as { source: string; versions: unknown[] };
     expect(args.source, "默认用官方接口").toBe("official");
-    expect(args.versions, "只把本机已装的版本交上去，不替用户决定下载").toEqual([
-      { id: "1.20.1", dataVersion: 3465, jarPath: "C:/mc/1.20.1/1.20.1.jar" },
+    // mcDir 也要交上去：中文语言文件不在客户端 jar 里，后端要从这里补
+    expect(args.versions, "只交本机扫到的那些，不替用户决定下载").toEqual([
+      {
+        id: "1.20.1",
+        dataVersion: 3465,
+        jarPath: "C:/mc/1.20.1/1.20.1.jar",
+        mcDir: "C:/mc",
+      },
     ]);
-    w2.unmount();
+
+    // 导入完成的版本应标为已就绪（用户要的就是这一步不必自己动手）
+    const rows = [...document.querySelectorAll(".setup-table tbody tr")];
+    const done = rows.find((r) => (r.textContent ?? "").includes("1.20.1"));
+    expect(done!.textContent, "导入后应标为已就绪").toContain("已就绪");
+
+    // 1.21 本机没有，默认不勾：勾上就是几十 MB 下载，得用户自己点头
+    const btn = bodyButton("准备勾选的版本");
+    expect(btn!.textContent, "要下载的版本不默认勾选").toContain("（0）");
+    w.unmount();
+  });
+});
+
+/** 单个方块数过大时，3D 图形默认不渲染，由用户点「开始渲染」 */
+describe("大方块数文件的渲染闸门", () => {
+  /** 一个方块数给定的分析结果 */
+  function analysisWith(count: number) {
+    return {
+      blocks: [
+        {
+          name: "minecraft:stone",
+          state: "minecraft:stone",
+          count,
+          zhName: "石头",
+          enName: "Stone",
+        },
+      ],
+      entities: [],
+      tileEntities: [],
+      entityInstances: [],
+      nonAirTotal: count,
+      airTotal: 0,
+      distinctBlockTypes: 1,
+      distinctStates: 1,
+    };
+  }
+
+  /** 选中列表里某一行 */
+  async function openRow(w: ReturnType<typeof mountApp>, name: string) {
+    mockOpen.mockResolvedValue("/p");
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes(name))!.trigger("click");
+    await flushPromises();
+  }
+
+  function startButton(): HTMLButtonElement | undefined {
+    return [...document.querySelectorAll("button")].find((b) =>
+      (b.textContent ?? "").includes("开始渲染"),
+    ) as HTMLButtonElement | undefined;
+  }
+
+  function builtScene(): boolean {
+    return mockInvoke.mock.calls.some((c) => c[0] === "build_scene");
+  }
+
+  it("超过 3 万时不自动建场景，点「开始渲染」才建", async () => {
+    stubInvoke({ analyze_schematic: analysisWith(40000) });
+    const w = mountApp();
+    await openRow(w, "测试.litematic");
+
+    expect(builtScene(), "方块数过大时不该自动渲染").toBe(false);
+    const btn = startButton();
+    expect(btn, "应给出「开始渲染」按钮").toBeTruthy();
+    // 要让用户看懂为什么没画：说明具体是哪个方块、有多少个
+    const text = document.querySelector(".scene-gate")!.textContent ?? "";
+    expect(text, "应说明是哪个方块").toContain("石头");
+    expect(text, "应给出实际数量").toContain("40,000");
+    expect(text, "应给出阈值").toContain("30,000");
+
+    btn!.click();
+    await flushPromises();
+    expect(builtScene(), "点过之后才建场景").toBe(true);
+    w.unmount();
+  });
+
+  it("不超过阈值时照常自动渲染，也不出现按钮", async () => {
+    stubInvoke({ analyze_schematic: analysisWith(29999) });
+    const w = mountApp();
+    await openRow(w, "测试.litematic");
+
+    expect(builtScene(), "未超阈值应照常渲染").toBe(true);
+    expect(startButton(), "不该出现「开始渲染」").toBeFalsy();
+    w.unmount();
+  });
+
+  it("离开该文件后渲染停止，再回来要重新点", async () => {
+    // 两个文件：大的那个超过阈值，小的那个没有
+    const small: SchematicSummary = {
+      ...summary,
+      path: "/p/小.litematic",
+      fileName: "小.litematic",
+    };
+    mockInvoke.mockImplementation((async (cmd: string, args: never) => {
+      const a = args as unknown as { path?: string };
+      switch (cmd) {
+        case "scan_litematics":
+          return { items: [summary, small], skippedDirs: 0, skippedPaths: [] };
+        case "analyze_schematic":
+          return analysisWith(a.path === small.path ? 10 : 40000);
+        case "build_scene":
+          return scene;
+        case "load_ui_state":
+          return null;
+        case "save_ui_state":
+          return undefined;
+        case "base_db_status":
+          return {
+            versions: [{ name: "1.20.1", dataVersion: 3465 }],
+            entityAvailable: true,
+            supported: [{ name: "1.20.1", dataVersion: 3465 }],
+          };
+        case "list_block_versions":
+          return [];
+        default:
+          return [];
+      }
+    }) as never);
+
+    const w = mountApp();
+    await openRow(w, "测试.litematic");
+    expect(startButton(), "大文件应先要用户点头").toBeTruthy();
+    startButton()!.click();
+    await flushPromises();
+    expect(builtScene(), "点过之后建了场景").toBe(true);
+
+    // 切到小文件：照常渲染，闸门不出现
+    await w.findAll("tr").find((r) => r.text().includes("小.litematic"))!.trigger("click");
+    await flushPromises();
+    expect(startButton(), "小文件不该有闸门").toBeFalsy();
+
+    // 切回大文件：上一次的「开始渲染」不该带过来
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+    expect(startButton(), "离开过该文件后要重新点「开始渲染」").toBeTruthy();
+    w.unmount();
   });
 });

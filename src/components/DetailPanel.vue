@@ -20,12 +20,15 @@ const {
   sceneLoading,
   sceneError,
   sceneInfo,
+  sceneGate,
+  sceneBlockLimit,
   brightness,
   activeView,
   exportSize,
   exporting,
   exportingProgress,
   setView,
+  startRender,
   exportPreview,
   exportBatch,
   selected,
@@ -46,7 +49,17 @@ const {
            用横向 flex 让「信息在预览右侧」这条要求不随窗口宽度漂移。 -->
       <div class="preview__main">
         <div class="preview__stage">
-          <a-spin :loading="sceneLoading" style="width: 100%; height: 100%">
+          <!-- 方块数超过阈值：默认不生成几何，等用户点「开始渲染」。
+               三万块以上的场景建几何并上传显存会明显卡顿，何时做由用户定。 -->
+          <div v-if="sceneGate" class="scene-gate">
+            <div class="scene-gate__text">
+              该投影里「{{ sceneGate.zhName || sceneGate.name }}」有
+              {{ sceneGate.count.toLocaleString() }} 个，超过
+              {{ sceneBlockLimit.toLocaleString() }} 个时不会自动渲染。
+            </div>
+            <a-button type="primary" size="small" @click="startRender">开始渲染</a-button>
+          </div>
+          <a-spin v-else :loading="sceneLoading" style="width: 100%; height: 100%">
             <SceneViewer
               ref="viewer"
               :scene="scene"

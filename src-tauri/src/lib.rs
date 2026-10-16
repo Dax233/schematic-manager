@@ -5,6 +5,7 @@ mod block_model;
 mod block_search;
 mod blockstate;
 mod blockstate_chain;
+mod code_models;
 mod blockdb;
 mod blockdb_write;
 mod commands;
@@ -27,7 +28,6 @@ mod nbt;
 mod png;
 mod pool;
 mod pack_build;
-mod pack_registry;
 mod replace;
 // 针对任意真实投影集合的端到端核对，按需运行（标了 #[ignore]）
 #[cfg(test)]
@@ -77,17 +77,11 @@ pub fn run() {
             commands::analyze_conversion,
             commands::apply_conversion,
             commands::save_metadata,
-            commands::list_packs,
-            commands::import_mods_folder,
-            commands::import_jar,
-            commands::set_pack_enabled,
-            commands::delete_pack,
             commands::delete_files,
             commands::copy_files_to_clipboard,
             commands::copy_files_to_dir,
             commands::reveal_in_file_manager,
             commands::rename_schematic,
-            commands::open_directory,
             commands::entity_texture_status,
             commands::entity_texture_pixels,
             commands::load_ui_state,

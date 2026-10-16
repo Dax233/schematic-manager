@@ -1,10 +1,11 @@
 /**
- * 备份管理抽屉：备份清单（还原/删除）与全局操作日志两个页签。
+ * 备份与日志抽屉：备份清单（还原/删除）与全局操作日志两个页签。
  *
  * 状态与动作都在 store/backups.ts，这里只做展示与触发。
  */
 <script setup lang="ts">
 import { useAppStore } from "../store";
+import OperationLogList from "./OperationLogList.vue";
 import { formatSize } from "../utils/format";
 
 const {
@@ -17,6 +18,7 @@ const {
   formatTime,
   refreshBackups,
   refreshLogs,
+  openLogs,
   onRestore,
   onDelete,
 } = useAppStore();
@@ -25,7 +27,7 @@ const {
 <template>
   <a-drawer
     v-model:visible="backupOpen"
-    title="备份管理"
+    title="备份与日志"
     :width="620"
     :footer="false"
     unmount-on-close
@@ -70,12 +72,14 @@ const {
       <a-tab-pane key="logs" title="操作日志">
         <a-space style="margin-bottom: 8px">
           <a-button size="small" @click="refreshLogs">刷新</a-button>
+          <!-- 日志管理窗口（清空、打开日志目录）从这里进：它原先挂在资源包
+               管理窗口上，那个窗口已移除；日志属于备份与运维这条线，放在
+               同一条操作日志页签里最顺手 -->
+          <a-button size="small" @click="openLogs">日志管理</a-button>
         </a-space>
         <a-spin :loading="logLoading" style="width: 100%">
           <a-empty v-if="logs.length === 0" description="暂无日志" />
-          <div v-else class="log-list">
-            <div v-for="(line, i) in logs" :key="i" class="log-list__row">{{ line }}</div>
-          </div>
+          <OperationLogList v-else :lines="logs" />
         </a-spin>
       </a-tab-pane>
     </a-tabs>

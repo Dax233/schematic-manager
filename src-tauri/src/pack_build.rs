@@ -19,6 +19,20 @@ use std::collections::HashMap;
 pub trait JarSource {
     fn entries(&self) -> Vec<String>;
     fn read(&self, name: &str) -> AppResult<Vec<u8>>;
+
+    /// jar 之外**额外**提供的语言文件路径（形如 `assets/minecraft/lang/zh_cn.json`）。
+    ///
+    /// 官方客户端 jar 里只有 `en_us.json`，中文等语言文件随资源索引下载后存在
+    /// `.minecraft/assets/objects` 里，不在 jar 内。缺了中文，方块列表与统计表
+    /// 的中文名整列都是空的，因此调用方可以把这些文件按同样的路径喂进来。
+    fn extra_lang_paths(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// 读一个额外语言文件；没有时返回 None，由调用方回落到 jar 内读取
+    fn read_extra_lang(&self, _name: &str) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 /// 构建结果统计
@@ -28,6 +42,8 @@ pub struct BuildStats {
     pub blocks: usize,
     pub models: usize,
     pub textures: usize,
+    /// 方块名语言表条目数（中英文名）
+    pub langs: usize,
     /// 解析失败而被跳过的 blockstate 数
     pub failed_blockstates: usize,
     /// 因无法解析模型而被跳过的方块数
@@ -70,6 +86,102 @@ impl StringPool {
     fn get(&self, s: &str) -> Option<u32> {
         self.index.get(s).copied()
     }
+}
+
+/// 从 jar 里读语言文件，建出方块中英文名表。
+///
+/// 基础库在用户机器上构建，语言表只能从客户端 jar 现取：客户端 jar 带着
+/// `assets/minecraft/lang/<语言>.json`（模组 jar 在各自命名空间下同理）。
+/// 少了这张表，方块列表与统计表的中文名整列都是空的——旧版随包分发的
+/// `blocks.dat.z` 由离线流水线补过这张表，运行时构建必须自己补上。
+///
+/// 键名形如 `block.minecraft.stone`、`item.minecraft.water_bucket`，名字取
+/// 「命名空间 + 余下部分」拼成 `minecraft:stone`，与语言表查询侧的写法一致
+///（见 commands::lookup_lang）。余下部分含点号的键（例如
+/// `block.minecraft.banner.base.black` 这类图案名）不是方块或物品名，跳过。
+///
+/// 物品键也要收：统计按「建造所需的物品」折算后，有些行代表的是物品而不是
+/// 方块（水与岩浆折成水桶/岩浆桶），只收方块键会让这些行没有中文名。
+/// 方块键与物品键同名时（例如 `oak_slab`）以方块键为准，两个键的译名一致，
+/// 但方块键更贴合「方块统计」的语境。
+fn load_lang_table<S: JarSource>(src: &S) -> Vec<LangEntry> {
+    use std::collections::BTreeMap;
+
+    // 语言文件按命名空间分目录，先收集「哪些命名空间提供了哪种语言」。
+    // jar 内与 jar 外（.minecraft/assets 的对象库）都要看：官方客户端 jar
+    // 只带 en_us.json，中文要靠 jar 外那一份。
+    let mut found: BTreeMap<String, BTreeMap<&str, String>> = BTreeMap::new();
+    for name in src.entries().into_iter().chain(src.extra_lang_paths()) {
+        let mut it = name.split('/');
+        if it.next() != Some("assets") {
+            continue;
+        }
+        let Some(ns) = it.next() else { continue };
+        if it.next() != Some("lang") {
+            continue;
+        }
+        let Some(file) = it.next() else { continue };
+        let lang = match file {
+            "en_us.json" => "en",
+            "zh_cn.json" => "zh",
+            _ => continue,
+        };
+        found
+            .entry(ns.to_string())
+            .or_default()
+            .insert(lang, name.clone());
+    }
+
+    // 名字 -> (英文, 中文)；两边缺哪侧就留空，查询侧会用其它版本的表补
+    let mut table: BTreeMap<String, (String, String)> = BTreeMap::new();
+    for (ns, files) in &found {
+        let mut texts: BTreeMap<&str, serde_json::Map<String, serde_json::Value>> =
+            BTreeMap::new();
+        for (lang, path) in files {
+            // 语言文件坏了不该让整次构建失败：方块与贴图仍然可用，
+            // 只是名字缺失，因此这里跳过并继续
+            let raw = match src.read_extra_lang(path) {
+                Some(v) => v,
+                None => match src.read(path) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                },
+            };
+            match serde_json::from_slice::<serde_json::Value>(&raw) {
+                Ok(serde_json::Value::Object(map)) => {
+                    texts.insert(lang, map);
+                }
+                _ => continue,
+            }
+        }
+        let mut keys: Vec<&String> = texts.values().flat_map(|m| m.keys()).collect();
+        keys.sort();
+        keys.dedup();
+        // 先物品后方块，同名的键由方块覆盖
+        for prefix in [format!("item.{ns}."), format!("block.{ns}.")] {
+            for key in &keys {
+                let Some(path) = key.strip_prefix(&prefix) else { continue };
+                if path.contains('.') {
+                    continue;
+                }
+                let name = format!("{ns}:{path}");
+                let entry = table.entry(name).or_default();
+                for (lang, map) in &texts {
+                    let Some(v) = map.get(*key).and_then(|x| x.as_str()) else { continue };
+                    match *lang {
+                        "en" => entry.0 = v.to_string(),
+                        "zh" => entry.1 = v.to_string(),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    table
+        .into_iter()
+        .map(|(block_name, (en, zh))| LangEntry { block_name, en, zh })
+        .collect()
 }
 
 /// 从 jar 构建资源包。
@@ -172,6 +284,36 @@ where
             // 与贴图池。只有先登记完，第二遍转换才能查到下标。
             let mut resolved: Vec<(bool, crate::blockstate::VariantEntry, Chain, crate::blockstate::ModelDef)> =
                 Vec::new();
+            // 箱子一类方块的几何由游戏代码绘制，jar 里只有空壳模型，
+            // 因此改由 code_models 按方块名与状态给出几何；贴图仍取自 jar。
+            for cv in crate::code_models::variants_of(&qualified).unwrap_or_default() {
+                let chain = Chain {
+                    textures: std::collections::HashMap::new(),
+                    elements: cv.elements.clone(),
+                    force_translucent: false,
+                };
+                let mdef = crate::blockstate::ModelDef {
+                    elements: cv.elements,
+                    ..Default::default()
+                };
+                for path in crate::model_pack::collect_texture_paths(&chain, &chain.elements, ns) {
+                    intern_texture(&path, src, ns, &mut strings, &mut textures, &mut tex_by_path, &mut load_texture);
+                }
+                resolved.push((
+                    false,
+                    crate::blockstate::VariantEntry {
+                        when: cv.when,
+                        // 代码模型的几何不来自某个模型文件，这里留空；
+                        // 第二遍只用到条件与旋转。
+                        model: String::new(),
+                        rot_x_div90: cv.rot_x_div90 as u8,
+                        rot_y_div90: cv.rot_y_div90 as u8,
+                        uvlock: false,
+                    },
+                    chain,
+                    mdef,
+                ));
+            }
             for (is_multipart, list) in [(false, &def.variants), (true, &def.multipart)] {
                 for v in list {
                     let Some((chain, mdef)) = load_model(src, &index, ns, &v.model) else {
@@ -262,12 +404,18 @@ where
         pixels.extend_from_slice(&t.rgba);
     }
 
+    // ---- 语言表：方块名的中英文 ----
+    let lang_entries = load_lang_table(src);
+    stats.langs = lang_entries.len();
+
     let version = VersionDef {
         name: version_id,
         data_version: dv,
         lang_idx: 0,
         texture_by_path: tex_by_path,
         blocks,
+        // 单版本包在下标 0 处放它自己的语言表（合并多个包时下标会重排，
+        // 见 BlockDb::merge）
         langs: Vec::new(),
         is_overlay,
     };
@@ -275,7 +423,7 @@ where
 
     let db = BlockDb {
         strings: strings.items.clone(),
-        langs: vec![Vec::<LangEntry>::new()],
+        langs: vec![lang_entries],
         textures: tex_infos,
         models: models.items().to_vec(),
         versions: vec![version],
@@ -347,11 +495,64 @@ fn intern_texture<S: JarSource, L>(
     if w == 0 || h == 0 || rgba.len() != w as usize * h as usize * 4 {
         return; // 尺寸与像素不一致，宁可丢弃也不要写出错数据
     }
+    let (w, h, rgba) = first_frame_of_animated(src, &entry, w, h, rgba);
     let has_alpha = rgba.chunks_exact(4).any(|p| p[3] != 255);
     let mut key = format!("{w}x{h}:").into_bytes();
     key.extend_from_slice(&rgba);
     let idx = textures.intern(&key, TexEntry { w, h, rgba, has_alpha }) as u32;
     tex_by_path.insert(path.to_string(), idx);
+}
+
+/// 动画贴图只取第一帧，当作静态贴图用。
+///
+/// 动画贴图是一条竖排的帧带：火焰 `fire_0.png` 是 16×512 的 32 帧。模型的 UV
+/// 只按「整张图」取样，帧带会被整条压进一个方块面，看上去就是花屏；而这里要
+/// 的只是「火焰长什么样」，一帧足够，也就不必在渲染端实现逐帧动画。
+///
+/// 帧尺寸取自同名 `.mcmeta` 的 `animation` 段：帧宽默认整图宽，帧高默认整图宽
+/// （原版动画贴图的帧都是正方形）；显式写了 `frameWidth`/`frameHeight` 的以它
+/// 为准。没有 `.mcmeta`、或 `.mcmeta` 里没有 `animation` 段（例如仅含
+/// `villager` 段的实体贴图）时原样返回，避免把静态贴图裁坏。
+fn first_frame_of_animated<S: JarSource>(
+    src: &S,
+    entry: &str,
+    w: u16,
+    h: u16,
+    rgba: Vec<u8>,
+) -> (u16, u16, Vec<u8>) {
+    let Ok(raw) = src.read(&format!("{entry}.mcmeta")) else {
+        return (w, h, rgba);
+    };
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(&raw) else {
+        return (w, h, rgba);
+    };
+    let Some(anim) = json.get("animation") else {
+        return (w, h, rgba);
+    };
+
+    let fw = anim
+        .get("frameWidth")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(w as u64) as usize;
+    let fh = anim
+        .get("frameHeight")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(w as u64) as usize;
+    // 帧尺寸必须落在图内，且整图要装得下完整的一帧；不满足就当作没动画
+    if fw == 0 || fh == 0 || fw > w as usize || fh > h as usize {
+        return (w, h, rgba);
+    }
+    if fw == w as usize && fh == h as usize {
+        return (w, h, rgba); // 只有一帧
+    }
+
+    let stride = w as usize * 4;
+    let mut out = Vec::with_capacity(fw * fh * 4);
+    for y in 0..fh {
+        let start = y * stride;
+        out.extend_from_slice(&rgba[start..start + fw * 4]);
+    }
+    (fw as u16, fh as u16, out)
 }
 
 /// 贴图路径 -> jar 内条目路径
@@ -552,6 +753,108 @@ mod tests {
     }
 
     #[test]
+    fn animated_texture_keeps_only_the_first_frame() {
+        // 动画贴图是一条竖排帧带（火焰是 16×512 的 32 帧）。模型的 UV 按整张图
+        // 取样，帧带被整条压进一个面就是花屏，因此只留第一帧作静态展示。
+        let mut jar = FakeJar::new();
+        jar.add_bytes(
+            "assets/minecraft/textures/block/fire_0.png",
+            crate::jar_file::make_png(2, 8, 255),
+        );
+        jar.add(
+            "assets/minecraft/textures/block/fire_0.png.mcmeta",
+            r#"{"animation":{"frametime":1}}"#,
+        );
+
+        let mut strings = StringPool::default();
+        let mut textures: ContentPool<TexEntry> = ContentPool::new();
+        let mut by_path = HashMap::new();
+        intern_texture(
+            "minecraft:block/fire_0",
+            &jar,
+            "minecraft",
+            &mut strings,
+            &mut textures,
+            &mut by_path,
+            &mut no_texture,
+        );
+
+        let items = textures.items();
+        let t = items.first().expect("应登记一张贴图");
+        assert_eq!((t.w, t.h), (2, 2), "16×8 的 4 帧带应只留第一帧 2×2");
+        assert_eq!(t.rgba.len(), 2 * 2 * 4);
+    }
+
+    #[test]
+    fn animated_texture_honours_explicit_frame_size() {
+        // 帧尺寸显式给出时以它为准（原版多数动画只写 frametime，帧为正方形）
+        let mut jar = FakeJar::new();
+        jar.add_bytes(
+            "assets/minecraft/textures/block/lava_still.png",
+            crate::jar_file::make_png(4, 16, 255),
+        );
+        jar.add(
+            "assets/minecraft/textures/block/lava_still.png.mcmeta",
+            r#"{"animation":{"frametime":2,"frameWidth":4,"frameHeight":8}}"#,
+        );
+
+        let mut strings = StringPool::default();
+        let mut textures: ContentPool<TexEntry> = ContentPool::new();
+        let mut by_path = HashMap::new();
+        intern_texture(
+            "minecraft:block/lava_still",
+            &jar,
+            "minecraft",
+            &mut strings,
+            &mut textures,
+            &mut by_path,
+            &mut no_texture,
+        );
+
+        let items = textures.items();
+        let t = items.first().expect("应登记一张贴图");
+        assert_eq!((t.w, t.h), (4, 8));
+    }
+
+    #[test]
+    fn static_texture_with_unrelated_mcmeta_is_untouched() {
+        // 只有 villager 段的 .mcmeta 不是动画，别把静态贴图裁坏；
+        // 没有 .mcmeta 的高瘦贴图（例如月相图）同样保持原样
+        let mut jar = FakeJar::new();
+        jar.add_bytes(
+            "assets/minecraft/textures/entity/villager.png",
+            crate::jar_file::make_png(2, 8, 255),
+        );
+        jar.add(
+            "assets/minecraft/textures/entity/villager.png.mcmeta",
+            r#"{"villager":{"hat":"full"}}"#,
+        );
+        jar.add_bytes(
+            "assets/minecraft/textures/block/moon_phases.png",
+            crate::jar_file::make_png(2, 8, 255),
+        );
+
+        let mut strings = StringPool::default();
+        let mut textures: ContentPool<TexEntry> = ContentPool::new();
+        let mut by_path = HashMap::new();
+        for p in ["minecraft:entity/villager", "minecraft:block/moon_phases"] {
+            intern_texture(
+                p,
+                &jar,
+                "minecraft",
+                &mut strings,
+                &mut textures,
+                &mut by_path,
+                &mut no_texture,
+            );
+        }
+
+        for t in textures.items() {
+            assert_eq!((t.w, t.h), (2, 8), "非动画贴图不该被裁剪");
+        }
+    }
+
+    #[test]
     fn builds_pack_from_minimal_jar() {
         let jar = minimal_jar();
         let built = build(&jar, "test", 0, false, no_texture).expect("构建失败");
@@ -560,6 +863,86 @@ mod tests {
         assert_eq!(built.stats.models, 1);
         assert_eq!(built.stats.failed_blocks, 0);
         assert!(!built.data.is_empty());
+    }
+
+    /// 箱子一类的方块在 jar 里只有空壳模型（没有 elements），
+    /// 几何改由 code_models 提供；建库结果里必须真的有几何与贴图。
+    #[test]
+    fn code_model_blocks_get_geometry_from_a_placeholder_model() {
+        let mut jar = minimal_jar();
+        jar.add(
+            "assets/minecraft/blockstates/chest.json",
+            r##"{"variants":{"":{"model":"block/chest"}}}"##,
+        );
+        // 与真实 jar 一致：只有粒子贴图声明，没有任何 elements
+        jar.add(
+            "assets/minecraft/models/block/chest.json",
+            r##"{"textures":{"particle":"block/oak_planks"}}"##,
+        );
+        jar.add_bytes("assets/minecraft/textures/entity/chest/normal.png", tiny_png(false));
+
+        let built = build(&jar, "test", 0, false, no_texture).expect("构建失败");
+        let db = BlockDb::load_from_bytes(&built.data, false).expect("读取失败");
+        let chest = db.versions[0]
+            .blocks
+            .iter()
+            .find(|b| b.name == "minecraft:chest")
+            .expect("箱子应进入方块库");
+
+        assert_eq!(chest.variants.len(), 12, "四个朝向 × 单箱/左半/右半");
+        for v in &chest.variants {
+            let m = &db.models[v.model_idx as usize];
+            assert!(!m.elements.is_empty(), "箱子必须有几何，否则预览里什么都看不到");
+        }
+        // 贴图确实指到了 jar 里的实体贴图
+        let single = chest
+            .variants
+            .iter()
+            .find(|v| v.when == "facing=north,type=single")
+            .expect("应有单箱变体");
+        let m = &db.models[single.model_idx as usize];
+        let path = &db.strings[m.elements[0].faces[0].texture as usize];
+        assert_eq!(path, "minecraft:entity/chest/normal");
+    }
+
+    /// x 轴旋转必须从代码模型一路写进方块库。
+    ///
+    /// 潜影盒朝侧面时靠 x 轴旋转摆位；这一环丢失的话，六种朝向都会画成盖朝上，
+    /// 而每种朝向的贴图都不缺，界面看不出少东西。
+    #[test]
+    fn code_model_keeps_x_rotation_of_its_variants() {
+        let mut jar = minimal_jar();
+        jar.add(
+            "assets/minecraft/blockstates/white_shulker_box.json",
+            r##"{"variants":{"":{"model":"block/white_shulker_box"}}}"##,
+        );
+        jar.add(
+            "assets/minecraft/models/block/white_shulker_box.json",
+            r##"{"textures":{"particle":"block/shulker_box"}}"##,
+        );
+        jar.add_bytes(
+            "assets/minecraft/textures/entity/shulker/shulker_white.png",
+            tiny_png(false),
+        );
+
+        let built = build(&jar, "test", 0, false, no_texture).expect("构建失败");
+        let db = BlockDb::load_from_bytes(&built.data, false).expect("读取失败");
+        let shulker = db.versions[0]
+            .blocks
+            .iter()
+            .find(|b| b.name == "minecraft:white_shulker_box")
+            .expect("潜影盒应进入方块库");
+
+        let rot_of = |when: &str| {
+            shulker
+                .variants
+                .iter()
+                .find(|v| v.when == when)
+                .map(|v| (v.rot_x_div90, v.rot_y_div90))
+        };
+        assert_eq!(rot_of("facing=up"), Some((0, 0)));
+        assert_eq!(rot_of("facing=down"), Some((2, 0)), "朝下要绕 x 转两档");
+        assert_eq!(rot_of("facing=east"), Some((1, 1)), "朝东要 x、y 各转一档");
     }
 
     #[test]
@@ -582,6 +965,84 @@ mod tests {
         let face = &db.models[0].elements[0].faces[0];
         let path = &db.strings[face.texture as usize];
         assert_eq!(path, "minecraft:block/stone");
+    }
+
+    #[test]
+    fn language_table_is_taken_from_the_jar() {
+        // 方块名来自语言文件。少了这张表，方块列表与统计表的名字整列都空着，
+        // 而基础库是在用户机器上从 jar 现构建的，必须自己把语言表带上。
+        let mut jar = minimal_jar();
+        jar.add(
+            "assets/minecraft/lang/en_us.json",
+            r#"{"block.minecraft.stone":"Stone","block.minecraft.dirt":"Dirt",
+                "item.minecraft.water_bucket":"Water Bucket",
+                "block.minecraft.oak_slab":"Oak Slab","item.minecraft.oak_slab":"Oak Slab Item",
+                "block.minecraft.banner.base.black":"Black Base",
+                "item.minecraft.stone":"Stone Item"}"#,
+        );
+        jar.add(
+            "assets/minecraft/lang/zh_cn.json",
+            r#"{"block.minecraft.stone":"石头","item.minecraft.water_bucket":"水桶"}"#,
+        );
+
+        let built = build(&jar, "test", 0, false, no_texture).unwrap();
+        let db = BlockDb::load_from_bytes(&built.data, false).unwrap();
+        let table = db.langs.first().expect("应带一张语言表");
+
+        let stone = table
+            .iter()
+            .find(|e| e.block_name == "minecraft:stone")
+            .expect("石头应有语言条目");
+        assert_eq!(stone.en, "Stone");
+        assert_eq!(stone.zh, "石头");
+        assert_eq!(
+            table
+                .iter()
+                .filter(|e| e.block_name == "minecraft:stone")
+                .count(),
+            1,
+            "同名时方块键应覆盖物品键，而不是留下两条"
+        );
+
+        // 统计折算后有些行代表的是物品（水折成水桶），物品名也要能查到
+        let bucket = table
+            .iter()
+            .find(|e| e.block_name == "minecraft:water_bucket")
+            .expect("物品键也要收进语言表");
+        assert_eq!(bucket.zh, "水桶");
+
+        // 同名物品与方块：以方块键的译名为准
+        let slab = table
+            .iter()
+            .find(|e| e.block_name == "minecraft:oak_slab")
+            .expect("台阶应有语言条目");
+        assert_eq!(slab.en, "Oak Slab");
+
+        // 中文文件里没有的名字仍要保留英文：查询侧会从别的版本表补中文，
+        // 这里若整条丢掉，连英文名都会跟着消失
+        let dirt = table
+            .iter()
+            .find(|e| e.block_name == "minecraft:dirt")
+            .expect("只有英文的名字也要收进来");
+        assert_eq!(dirt.en, "Dirt");
+        assert_eq!(dirt.zh, "");
+
+        // 余下部分带点号的是图案名
+        assert!(
+            !table.iter().any(|e| e.block_name.contains("banner.base")),
+            "图案名不该被当成方块名"
+        );
+    }
+
+    #[test]
+    fn empty_language_files_do_not_break_the_build() {
+        // 语言文件缺失或坏掉时，方块与贴图仍应建出来，只是没有名字
+        let jar = minimal_jar();
+        let built = build(&jar, "test", 0, false, no_texture).unwrap();
+        let db = BlockDb::load_from_bytes(&built.data, false).unwrap();
+        assert_eq!(db.langs.len(), 1, "仍应带一张（空的）语言表");
+        assert!(db.langs[0].is_empty());
+        assert_eq!(db.versions[0].blocks.len(), 1, "方块不受影响");
     }
 
     #[test]

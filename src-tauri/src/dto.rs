@@ -400,32 +400,6 @@ pub struct AnalysisResult {
     pub distinct_states: usize,
 }
 
-/// 一个已导入的资源包
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PackEntryDto {
-    /// 资源包文件名（在 packs 目录内）
-    pub file: String,
-    pub name: String,
-    /// 来源 jar 路径
-    pub source: String,
-    /// 来源所在目录；旧清单没有这一列时为空串
-    pub source_dir: String,
-    /// 类型：0 内置、1 MC 版本包、2 模组包
-    pub kind: i32,
-    /// 类型的中文名，供界面直接显示
-    pub kind_label: String,
-    pub data_version: i32,
-    /// 该数据版本对应的游戏版本名
-    pub mc_version: String,
-    pub enabled: bool,
-    /// 资源包文件大小；文件缺失时为 0
-    pub size: u64,
-    /// 文件是否实际存在。清单可能与磁盘不一致（用户手工删过文件），
-    /// 界面据此提示而不是显示一个点开就报错的条目。
-    pub exists: bool,
-}
-
 /// 一个方块的渲染图。
 ///
 /// 逐项带上 `state` 而不是按数组下标对齐：调用方一次可能只请求其中一部分，
@@ -440,79 +414,6 @@ pub struct BlockIconDto {
     /// 渲染失败的原因；成功时为空串。
     /// 必须逐项回报：某个方块画不出来不该让整批失败，但用户需要知道为什么。
     pub error: String,
-}
-
-/// 从 mods 文件夹批量导入的结果
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModsImportDto {
-    /// 被扫描的目录
-    pub dir: String,
-    /// 成功导入的模组 jar 文件名
-    pub imported: Vec<String>,
-    /// 失败项及原因。**必须回报**：某一个模组坏掉不该让其余都导不进来，
-    /// 但用户也需要知道少了哪些、为什么。
-    pub failed: Vec<UnreadableFileDto>,
-    /// 有意跳过的条目及原因（非 jar、按客户端包跳过）。
-    ///
-    /// 与 `failed` 分开：这些不是错误，但也不能无声无息地少导入——
-    /// 名字里恰好含 client 的模组会被判成客户端包，不说明的话用户
-    /// 只能靠「数目对不上」才发现。
-    pub skipped: Vec<UnreadableFileDto>,
-}
-
-/// 导入 jar 的结果
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImportOutcomeDto {
-    /// 落盘的资源包文件名
-    pub file: String,
-    pub name: String,
-    pub kind: i32,
-    pub kind_label: String,
-    pub data_version: i32,
-    pub mc_version: String,
-    /// 产出统计
-    pub blocks: usize,
-    pub models: usize,
-    pub textures: usize,
-    /// 解析失败而被跳过的 blockstate 数
-    pub failed_blockstates: usize,
-    /// 因无法解析模型而被跳过的方块数
-    pub failed_blocks: usize,
-    /// 命名空间数
-    pub namespaces: usize,
-    /// 资源包文件大小
-    pub size: u64,
-}
-
-
-/// 一个已启用却未能载入的资源包
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PackLoadFailureDto {
-    pub file: String,
-    /// 失败原因
-    pub reason: String,
-}
-
-/// 清单读取结果，含被跳过的行
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PackListDto {
-    pub packs: Vec<PackEntryDto>,
-    /// 资源包存放目录。界面上要能直接打开它去管理磁盘上的文件
-    /// （手工删掉某个包、拷入别人给的包），因此必须带出来。
-    pub packs_dir: String,
-    /// 已启用但载入或合并失败的包：`(文件名, 原因)`。
-    ///
-    /// 必须上报：这类包在界面上看起来是启用状态，实际却不参与解析，
-    /// 用户会以为贴图已经生效而困惑于「为什么没变化」。
-    pub load_failures: Vec<PackLoadFailureDto>,
-    /// 清单里解析失败而被跳过的行说明。
-    /// 必须上报：用户手工编辑过清单时，静默丢弃会让「导入的包不见了」
-    /// 无从解释。
-    pub skipped: Vec<String>,
 }
 
 /// 基础库里一个已就绪的版本（方块库 + 该版本是否带实体贴图由整体开关看）
@@ -572,6 +473,10 @@ pub struct SetupVersionDto {
     pub id: String,
     pub data_version: i32,
     pub jar_path: Option<String>,
+    /// 本机 .minecraft 目录：构建时要从这里补语言文件（中文在资源库里，
+    /// 不在客户端 jar 内）；为空则按官方默认位置找。
+    #[serde(default)]
+    pub mc_dir: Option<String>,
 }
 
 /// 单个版本的准备结果。逐版本回报而不是整批成败：
@@ -628,103 +533,6 @@ mod tests {
     ///
     /// 注意：本地检查环境用 serde 桩（无过程宏，rename_all 不生效），
     /// 该测试只在 CI 的真实 serde 下运行。
-    #[test]
-    fn pack_entry_keys_match_frontend() {
-        let dto = PackEntryDto {
-            file: "a.pack".into(),
-            name: "A".into(),
-            source: "/j/a.jar".into(),
-            source_dir: "/j".into(),
-            kind: 2,
-            kind_label: "模组包".into(),
-            data_version: 3465,
-            mc_version: "1.20.1".into(),
-            enabled: true,
-            size: 123,
-            exists: true,
-        };
-        let v = serde_json::to_value(&dto).expect("序列化失败");
-        assert_keys(&v, &[
-                "dataVersion", "enabled", "exists", "file", "kind", "kindLabel",
-                "mcVersion", "name", "size", "source", "sourceDir",
-            ]);
-    }
-
-    #[test]
-    fn import_outcome_keys_match_frontend() {
-        let dto = ImportOutcomeDto {
-            file: "a.pack".into(),
-            name: "A".into(),
-            kind: 1,
-            kind_label: "MC 版本包".into(),
-            data_version: 3465,
-            mc_version: "1.20.1".into(),
-            blocks: 1,
-            models: 2,
-            textures: 3,
-            // 易错项：不是 failedBlockStates，而是一个词
-            failed_blockstates: 4,
-            failed_blocks: 5,
-            namespaces: 6,
-            size: 7,
-        };
-        let v = serde_json::to_value(&dto).expect("序列化失败");
-        assert_keys(&v, &[
-                "blocks", "dataVersion", "failedBlockstates", "failedBlocks", "file",
-                "kind", "kindLabel", "mcVersion", "models", "name", "namespaces",
-                "size", "textures",
-            ]);
-    }
-
-    #[test]
-    fn pack_list_keys_match_frontend() {
-        let dto = PackListDto {
-            packs: Vec::new(),
-            packs_dir: "C:/app/packs".into(),
-            load_failures: vec![PackLoadFailureDto {
-                file: "broken.pack".into(),
-                reason: "载入失败：文件不存在".into(),
-            }],
-            skipped: vec!["第 3 行有误".into()],
-        };
-        let v = serde_json::to_value(&dto).expect("序列化失败");
-        assert_keys(&v, &["loadFailures", "packs", "packsDir", "skipped"]);
-    }
-
-
-    /// 载入失败项的字段也要对上：前端按 file/reason 渲染
-    #[test]
-    fn pack_load_failure_keys_match_frontend() {
-        let dto = PackLoadFailureDto {
-            file: "a.pack".into(),
-            reason: "载入失败".into(),
-        };
-        let v = serde_json::to_value(&dto).expect("序列化失败");
-        assert_keys(&v, &["file", "reason"]);
-    }
-
-    /// mods 批量导入结果的键名必须与前端 `ModsImport` 一致。
-    ///
-    /// `skipped` 漏掉或改名时前端不会报错，只是「跳过的文件」永远不显示，
-    /// 而静态检查脚本只管命令名与参数名，不看返回值字段。
-    #[test]
-    fn mods_import_keys_match_frontend() {
-        let dto = ModsImportDto {
-            dir: "C:/mods".into(),
-            imported: vec!["a.jar".into()],
-            failed: vec![UnreadableFileDto {
-                path: "b.jar".into(),
-                reason: "损坏".into(),
-            }],
-            skipped: vec![UnreadableFileDto {
-                path: "1.20.1.jar".into(),
-                reason: "名字是游戏版本号".into(),
-            }],
-        };
-        let v = serde_json::to_value(&dto).expect("序列化失败");
-        assert_keys(&v, &["dir", "failed", "imported", "skipped"]);
-    }
-
     /// 纳秒时间戳必须以字符串传递：数值会超出 JavaScript 的安全整数范围
     #[test]
     fn backup_entry_created_ns_is_a_string() {

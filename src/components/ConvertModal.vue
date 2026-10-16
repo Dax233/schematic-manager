@@ -12,7 +12,9 @@
  * 要替换的到底是哪一个方块（中文名由后端随分析结果给出，见 dto.rs）。
  */
 <script setup lang="ts">
+import { computed, ref } from "vue";
 import type { TableData } from "@arco-design/web-vue";
+import { Message } from "@arco-design/web-vue";
 import { useAppStore } from "../store";
 import type { ConvertItem } from "../types";
 
@@ -39,9 +41,128 @@ const {
   onConvPickSearch,
   pickConvBlock,
   scheduleConvZhLookup,
+  reloadConvTargets,
   runConvertAnalyze,
   doConvert,
+  // 版本库域：已支持但尚未加载的版本也要列出来，点一下现场补齐
+  supported,
+  ready,
+  progress,
+  running,
+  prepareVersion,
 } = useAppStore();
+
+/** 目标版本下拉的候选项。
+ *
+ * 已加载的版本（后端给了下标，可直接用来转换）排在最前；其余支持的版本
+ * 以灰字列在后面，点一下就下载/构建，补完再选它。两者分开是必要的：
+ * 只有加载过的版本有下标，没加载的连不上后端。
+ */
+interface TargetOption {
+  /** 已加载版本在方块库里的下标；未加载的没有 */
+  index: number | null;
+  name: string;
+  dataVersion: number;
+  /** 是否已经加载，可以直接转换 */
+  loaded: boolean;
+  /** 该版本是否正在准备中（下载或构建） */
+  preparing: boolean;
+  /** 准备进度说明；未在准备时为空 */
+  progressText: string;
+}
+
+/** 正在准备中的版本名。
+ *
+ * 补库过程是异步的，按钮上的转圈与「下载中 12%」都靠它；
+ * 与 running 配合：整批补库在跑时不允许重复点。
+ */
+const preparingName = ref("");
+
+const targetOptions = computed<TargetOption[]>(() => {
+  const loaded: TargetOption[] = convTargets.value.map((t) => ({
+    index: t.index,
+    name: t.name,
+    dataVersion: t.dataVersion,
+    loaded: true,
+    preparing: false,
+    progressText: "",
+  }));
+  const loadedNames = new Set(loaded.map((o) => o.name));
+  // 投影自己的版本与已加载的版本不重复列出：前者转过去没有意义，
+  // 后者已经在上面那一组里
+  const sourceVersion = selected.value?.dataVersion;
+  const pending: TargetOption[] = supported.value
+    .filter(
+      (v) => !loadedNames.has(v.name) && !ready.value.some((r) => r.name === v.name),
+    )
+    .filter((v) => v.dataVersion !== sourceVersion)
+    .map((v) => {
+      const p = progress.value.get(v.name);
+      return {
+        index: null,
+        name: v.name,
+        dataVersion: v.dataVersion,
+        loaded: false,
+        preparing: preparingName.value === v.name,
+        progressText: describeProgress(v.name, p),
+      };
+    });
+  return [...loaded, ...pending];
+});
+
+/** 把进度事件的阶段与百分比说成人话 */
+function describeProgress(
+  name: string,
+  p: { stage: string; received: number; total: number; error: string } | undefined,
+): string {
+  if (preparingName.value !== name || !p) return "";
+  if (p.error) return `失败：${p.error}`;
+  if (p.stage === "download") {
+    const pct = p.total > 0 ? Math.floor((p.received / p.total) * 100) : 0;
+    return `下载中 ${pct}%`;
+  }
+  return "正在构建";
+}
+
+/** 选中目标版本。
+ *
+ * 未加载的版本用一个 `pending:<版本名>` 前缀当值：选中它并不是「选定」，
+ * 而是「开始准备这个版本」，因此这里不动已选中的目标版本，只发起补库。
+ * 用下拉的 change 而不是给选项挂点击，是因为禁用项收不到点击事件，
+ * 而禁用态又正是没下标可选的未加载版本该有的表现。
+ */
+function onTargetChange(v: unknown) {
+  if (typeof v === "string" && v.startsWith("pending:")) {
+    const opt = targetOptions.value.find((o) => `pending:${o.name}` === v);
+    if (opt) void onPrepareVersion(opt);
+    return;
+  }
+  convTargetIdx.value = typeof v === "number" ? v : undefined;
+}
+
+/** 点未加载的版本：现场下载/构建它，补完自动选中 */
+async function onPrepareVersion(opt: TargetOption) {
+  if (running.value || opt.loaded) return;
+  preparingName.value = opt.name;
+  try {
+    const ok = await prepareVersion(opt.name);
+    if (!ok) {
+      Message.error(`${opt.name} 未能就绪，详见「版本库」里的结果`);
+      return;
+    }
+    // 重新取一次列表：新版本在方块库里的下标只有后端知道
+    await reloadConvTargets();
+    const hit = convTargets.value.find((t) => t.name === opt.name);
+    if (hit) {
+      convTargetIdx.value = hit.index;
+      Message.success(`${opt.name} 已就绪，已选为目标版本`);
+    } else {
+      Message.success(`${opt.name} 已就绪，可在「版本库」中查看`);
+    }
+  } finally {
+    preparingName.value = "";
+  }
+}
 
 /** 行只标「当前正在编辑」这一件事。
  *
@@ -89,13 +210,28 @@ function replZh(rec: ConvertItem): string {
     <a-space style="margin-bottom: 10px">
       <span>目标版本</span>
       <a-select
-        v-model="convTargetIdx"
+        :model-value="convTargetIdx"
         placeholder="选择要转换到的版本"
         allow-search
-        style="width: 260px"
+        style="width: 300px"
+        @change="onTargetChange"
       >
-        <a-option v-for="t in convTargets" :key="t.index" :value="t.index">
-          {{ t.name }}（dataVersion {{ t.dataVersion }}）
+        <a-option
+          v-for="t in targetOptions"
+          :key="t.name"
+          :value="t.index ?? `pending:${t.name}`"
+          :class="{ 'conv-version--pending': !t.loaded }"
+        >
+          <!-- 未加载的版本：选中它就等于「点一下开始准备」，由 change 处理；
+               这里只负责把它画成灰字并标出进度 -->
+          <span v-if="!t.loaded" class="conv-version__pending">
+            <a-spin v-if="t.preparing" :size="12" />
+            {{ t.name }}（dataVersion {{ t.dataVersion }}）
+            <span class="conv-version__tag">{{ t.progressText || "未加载，点击下载" }}</span>
+          </span>
+          <span v-else>
+            {{ t.name }}（dataVersion {{ t.dataVersion }}）
+          </span>
         </a-option>
       </a-select>
       <a-button size="small" :loading="convBusy" @click="runConvertAnalyze">分析差异</a-button>

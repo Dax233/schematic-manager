@@ -23,11 +23,25 @@ pub struct JarFile {
     archive: Archive,
     /// 条目名 -> 内容，已读取过的缓存
     cache: HashMap<String, Vec<u8>>,
+    /// jar 之外的语言文件：路径 -> 内容
+    ///
+    /// 官方客户端 jar 只带 `en_us.json`，中文等语言随资源索引下载后存在
+    /// `.minecraft/assets/objects` 里，构建基础库时要一并喂进来，
+    /// 否则方块名整列没有中文。
+    extra_langs: HashMap<String, Vec<u8>>,
 }
 
 impl JarFile {
     /// 打开一个 jar/zip 文件
     pub fn open(path: &str) -> AppResult<Self> {
+        Self::open_with_langs(path, Vec::new())
+    }
+
+    /// 打开一个 jar 并附带 jar 之外的语言文件（路径 -> 内容）
+    pub fn open_with_langs(
+        path: &str,
+        extra_langs: Vec<(String, Vec<u8>)>,
+    ) -> AppResult<Self> {
         let bytes = std::fs::read(path).map_err(|e| {
             AppError::Parse(format!("无法读取 {path}：{e}"))
         })?;
@@ -37,7 +51,12 @@ impl JarFile {
             )));
         }
         let archive = crate::zip::open(&bytes)?;
-        Ok(Self { bytes, archive, cache: HashMap::new() })
+        Ok(Self {
+            bytes,
+            archive,
+            cache: HashMap::new(),
+            extra_langs: extra_langs.into_iter().collect(),
+        })
     }
 
     /// 条目的原始（未解压）内容
@@ -105,6 +124,16 @@ impl JarSource for JarFile {
         v
     }
 
+    fn extra_lang_paths(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.extra_langs.keys().cloned().collect();
+        v.sort();
+        v
+    }
+
+    fn read_extra_lang(&self, name: &str) -> Option<Vec<u8>> {
+        self.extra_langs.get(name).cloned()
+    }
+
     fn read(&self, name: &str) -> AppResult<Vec<u8>> {
         if let Some(v) = self.cache.get(name) {
             return Ok(v.clone());
@@ -124,7 +153,29 @@ pub fn build_pack_to(
     data_version: i32,
     is_overlay: bool,
 ) -> AppResult<crate::pack_build::BuildStats> {
-    let jar = JarFile::open(jar_path)?;
+    build_pack_to_with_langs(
+        jar_path,
+        out_path,
+        pack_name,
+        data_version,
+        is_overlay,
+        Vec::new(),
+    )
+}
+
+/// 同上，并附带 jar 之外的语言文件（路径 -> 内容）。
+///
+/// 官方客户端 jar 只带 `en_us.json`，中文在 `.minecraft/assets` 的对象库里；
+/// 构建基础库时必须把中文喂进来，否则方块名整列没有中文。
+pub fn build_pack_to_with_langs(
+    jar_path: &str,
+    out_path: &str,
+    pack_name: &str,
+    data_version: i32,
+    is_overlay: bool,
+    extra_langs: Vec<(String, Vec<u8>)>,
+) -> AppResult<crate::pack_build::BuildStats> {
+    let jar = JarFile::open_with_langs(jar_path, extra_langs)?;
     let built = crate::pack_build::build(
         &jar,
         pack_name,

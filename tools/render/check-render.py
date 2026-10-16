@@ -231,17 +231,16 @@ SHIM = r"""
   if (typeof FILLER_ROWS !== "number") FILLER_ROWS = 40;
 
   // 要逐个打开的对话框，以及各自打开后应出现的标题。
-  // 打开对话框会触发各自的加载逻辑（读取可转换版本、资源包清单、备份列表），
+  // 打开对话框会触发各自的加载逻辑（读取可转换版本、备份列表、版本库清单），
   // 这些一旦抛错，界面表现就是「点了没反应」。
   // 注意：「重复文件筛查」**不在**此列——按用户要求它已改为内联扫描
   // 地址栏里已勾选的目录，不再弹窗。留在列表里会让脚本一直等一个
   // 永远不出现的对话框。
-  var DIALOG_BUTTONS = ["方块替换", "版本转换", "备份管理", "资源包管理"];
+  var DIALOG_BUTTONS = ["方块替换", "版本转换", "备份与日志"];
   var DIALOG_TITLES = {
     "方块替换": "方块替换",
     "版本转换": "转换游戏版本",
-    "备份管理": "备份管理",
-    "资源包管理": "资源包管理",
+    "备份与日志": "备份与日志",
   };
   var DIALOGS = [];
   // 已尝试过的对话框名（与 DIALOGS 里带结论的字符串分开：
@@ -302,15 +301,33 @@ SHIM = r"""
       case "list_block_versions": return Promise.resolve([
         { index: 0, name: "1.20.1", dataVersion: 3465, blockCount: 1234, isOverlay: false }
       ]);
-      case "list_packs": return Promise.resolve({ packs: [], packsDir: "C:/应用目录/packs", loadFailures: [], skipped: [] });
       case "list_backups": return Promise.resolve([]);
-      case "read_operation_log": return Promise.resolve([]);
+      // 日志行按后端真实格式：纳秒时间戳（19 位，与 backup::timestamp 一致）
+      // + 制表符 + 说明。给空数组时「操作日志」页签永远显示空状态，日志的
+      // 排版就没人看得见；位数写错则会显示成 2537 年之类的怪时间。
+      case "read_operation_log": return Promise.resolve([
+        "1792140065882147800\t删除到回收站 3 个文件：丐版高效凋灵骷髅塔3.5头每分-无凋灵玫瑰版-下界主体.litematic、空岛水流刷怪塔(双舟)金合欢.litematic、刷石机5w无侦测器附体带石材工厂.litematic",
+        "1792138661871480600\t还原 丐版高效凋灵骷髅塔3.5头每分-无凋灵玫瑰版-下界主体.litematic",
+        "1792138651762518000\t替换 丐版高效凋灵骷髅塔3.5头每分-无凋灵玫瑰版-下界主体.litematic：平滑石头台阶（minecraft:smooth_stone_slab） -> 安山岩台阶（minecraft:andesite_slab），共 1119 个",
+      ]);
       // 各功能对话框打开时会调的命令，必须回合法结构，
       // 否则前端会走到 catch 分支、对话框内一片空白
       case "convert_targets": return Promise.resolve([
         { index: 0, name: "1.20.1", dataVersion: 3465 },
         { index: 1, name: "1.19.4", dataVersion: 3337 },
       ]);
+      // 版本库状态：目标版本下拉除了已加载的版本，还会把「支持但尚未加载」
+      // 的版本以灰字列出来（点一下下载），那份清单就来自这里
+      case "base_db_status": return Promise.resolve({
+        versions: [{ name: "1.20.1", dataVersion: 3465 }],
+        entityAvailable: true,
+        supported: [
+          { name: "1.20.1", dataVersion: 3465 },
+          { name: "1.19.4", dataVersion: 3337 },
+          { name: "1.21.11", dataVersion: 4325 },
+          { name: "26.1.2", dataVersion: 4790 },
+        ],
+      });
       // 重复筛查：契约里 scanned/skippedDirs 是必填，缺了会让汇总条显示出
       // 「undefined」。这里给空结果，界面应显示「没有发现内容相同的重复」。
       // scanned 用真实的列表条数，好让「没有可筛查的文件」那条分支不被误命中。
@@ -340,11 +357,11 @@ SHIM = r"""
   };
 
   // 自动走一遍真实交互：点「添加目录」让列表出来，再点第一行让详情面板出来，
-  // 最后依次打开五个功能对话框。
+  // 最后依次打开各个功能对话框。
   //
-  // 为什么要逐个开对话框：打开时的加载逻辑（读取可转换版本、资源包清单等）
-  // 一旦抛错，界面表现就是「点了没反应」——正是最难排查的一类问题。
-  // 只截主界面看不到这些。
+  // 为什么要逐个开对话框：打开时的加载逻辑（读取可转换版本、备份列表、
+  // 版本库清单等）一旦抛错，界面表现就是「点了没反应」——正是最难排查的
+  // 一类问题。只截主界面看不到这些。
   //
   // 判据用「正文里是否出现文件名 / 数据版本」，不能用 `tbody tr`：
   // Arco 的空状态也渲染成一个 tr，用它会误判成「已有数据」而停止，
@@ -1013,9 +1030,9 @@ SHIM = r"""
         //     只查标题元素会被「已关闭的弹层」命中——把打开逻辑改成一进来就
         //     throw，检查照样通过（这正是第三次变异没被抓到的原因）。
         //     因此必须沿祖先链确认没有被 display:none 挡住。
-        //  2. 不能在整页正文里找标题：「备份管理」等四个标题与工具栏按钮同名，
+        //  2. 不能在整页正文里找标题：「备份与日志」等四个标题与工具栏按钮同名，
         //     按钮在任何情况下都在，等于永远命中。
-        //  3. 「备份管理」是 a-drawer（抽屉）不是 a-modal，标题在
+        //  3. 「备份与日志」是 a-drawer（抽屉）不是 a-modal，标题在
         //     `.arco-drawer-title` 里，只查 modal 会把它判成「未出现」。
         function shown(node) {
           var n = node;
@@ -1038,7 +1055,7 @@ SHIM = r"""
         // 关掉：点关闭按钮，否则下一个对话框会被叠住点不到
         var closeBtns = document.querySelectorAll(
           ".arco-modal-close-btn, .arco-drawer-close-btn");
-        if (closeBtns.length) closeBtns[closeBtns.length - 1].click();
+        if (closeBtns.length && !window.__keepDialog) closeBtns[closeBtns.length - 1].click();
         pendingCheck = null;
         status();
         return;
@@ -1191,6 +1208,10 @@ def main():
                 "<style>.detail__tabs{height:" + tabs_h + "px !important;"
                 "flex:none !important;}</style>"
             )
+        # SM_KEEP_DIALOG：让打开的对话框不被关掉，好把它的排版单独截出来看。
+        # 对话框插在页面中间，主界面截图里看不到它——排版问题只有这么看得到。
+        if os.environ.get("SM_KEEP_DIALOG"):
+            inject += "<script>window.__keepDialog = true;</script>"
         return html.replace("<head>", "<head>" + inject, 1) if "<head>" in html else inject + html
 
     html = make_page(FILLER_ROWS)
@@ -1266,7 +1287,7 @@ def main():
         # DIALOG_BUTTONS 定义在注入页面的 JS 里，Python 侧取不到，
         # 因此这里重复一份数量。两处必须同步：改了一处没改另一处，
         # 表现就是「明明都开了却报数量不符」。
-        EXPECTED_DIALOGS = 4
+        EXPECTED_DIALOGS = 3
         if len(dlg_results) != EXPECTED_DIALOGS:
             dlg_extra.append(False)
             print(
@@ -1282,7 +1303,7 @@ def main():
             results.append(hit)
             print(f"  {(label or kw):<24} {'是' if hit else '否'}")
 
-        for kw in ["添加目录", "方块替换", "版本转换", "重复文件筛查", "备份管理", "资源包管理"]:
+        for kw in ["添加目录", "方块替换", "版本转换", "重复文件筛查", "备份与日志", "版本库"]:
             need(kw)
         # 自动交互之后，这些必须真的出现
         need("28速单区块简单熔炉", "列表里的文件名")

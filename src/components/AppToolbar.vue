@@ -23,8 +23,6 @@ const {
   openReplace,
   openConvert,
   openBackups,
-  packOnOpen,
-  openPacksPanel,
   setupOnOpen,
   openSetup,
 } = useAppStore();
@@ -80,10 +78,7 @@ const {
     <a-button size="small" :loading="dupBusy" @click="scanDuplicatesInline">
       重复文件筛查
     </a-button>
-    <a-button size="small" @click="openBackups">备份管理</a-button>
-    <a-button size="small" :loading="packOnOpen" @click="openPacksPanel">
-      资源包管理
-    </a-button>
+    <a-button size="small" @click="openBackups">备份与日志</a-button>
     <a-button size="small" :loading="setupOnOpen" @click="openSetup">版本库</a-button>
     <span class="preview__spacer" />
     <span class="hint-dim">

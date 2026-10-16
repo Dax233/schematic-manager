@@ -248,6 +248,24 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
     }
   }
 
+  /** 重新读取可转换版本。
+   *
+   * 单独成函数是因为「版本转换」窗口里点一个尚未加载的版本会现场补库，
+   * 补完必须重取一次列表——新版本在方块库里的下标只有后端知道。
+   */
+  async function reloadConvTargets(): Promise<void> {
+    if (!s.selected.value) {
+      convTargets.value = [];
+      return;
+    }
+    try {
+      convTargets.value = await convertTargets(s.selected.value.path);
+    } catch (e) {
+      Message.error(`读取可转换版本失败：${e}`);
+      convTargets.value = [];
+    }
+  }
+
   async function openConvert() {
     convOpen.value = true;
     convItems.value = [];
@@ -263,12 +281,7 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
     for (const t of convZhTimers.values()) clearTimeout(t);
     convZhTimers.clear();
     if (!s.selected.value) return;
-    try {
-      convTargets.value = await convertTargets(s.selected.value.path);
-    } catch (e) {
-      Message.error(`读取可转换版本失败：${e}`);
-      convTargets.value = [];
-    }
+    await reloadConvTargets();
   }
 
   async function runConvertAnalyze() {
@@ -363,6 +376,7 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
     pickConvBlock,
     scheduleConvZhLookup,
     openConvert,
+    reloadConvTargets,
     runConvertAnalyze,
     doConvert,
   };

@@ -1,15 +1,16 @@
 /**
  * 日志管理窗口：查看全局操作日志，并提供清空与定位日志文件两个管理动作。
  *
- * 与「备份管理」里的操作日志页签是同一份数据（store/backups.ts 的 logs），
- * 这里只是把它做成可以单独打开的窗口——入口在资源包管理窗口右侧，
- * 不必先绕进备份管理。
+ * 与「备份与日志」里的操作日志页签是同一份数据（store/backups.ts 的 logs），
+ * 这里只是把它做成可以单独打开的窗口——入口就在那个页签里，
+ * 便于在窗口里完成清空与定位日志文件。
  *
  * 清空是不可撤销的，因此走 a-popconfirm 二次确认；日志文件本身保留
  * （见后端 backup::clear_log），所以「打开日志目录」在清空后仍然可用。
  */
 <script setup lang="ts">
 import { useAppStore } from "../store";
+import OperationLogList from "./OperationLogList.vue";
 
 const {
   logOpen,
@@ -60,9 +61,7 @@ const {
 
     <a-spin :loading="logLoading" style="width: 100%">
       <a-empty v-if="logs.length === 0" description="暂无日志" />
-      <div v-else class="log-list">
-        <div v-for="(line, i) in logs" :key="i" class="log-list__row">{{ line }}</div>
-      </div>
+      <OperationLogList v-else :lines="logs" />
     </a-spin>
   </a-modal>
 </template>

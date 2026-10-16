@@ -15,7 +15,6 @@ import ConvertModal from "./components/ConvertModal.vue";
 import DetailPanel from "./components/DetailPanel.vue";
 import DirSidebar from "./components/DirSidebar.vue";
 import LogModal from "./components/LogModal.vue";
-import PackModal from "./components/PackModal.vue";
 import ReplaceModal from "./components/ReplaceModal.vue";
 import SetupModal from "./components/SetupModal.vue";
 import TitleBar from "./components/TitleBar.vue";
@@ -67,8 +66,6 @@ void followSystemTheme();
     </div>
 
     <ConvertModal />
-
-    <PackModal />
 
     <SetupModal />
 

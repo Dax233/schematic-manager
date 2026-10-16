@@ -10,8 +10,7 @@ use crate::dto::{
     AnalysisResult, BackupEntryDto, BaseDbStatusDto, BaseVersionDto, BlockCount, BlockHitDto,
     BlockIconDto, BlockVersionDto, ConvertItemDto, ConvertOutcomeDto, ConvertTargetDto,
     DuplicateGroupDto, DuplicateScanDto, EntityCount, EntityInstanceDto, EntityTextureDto,
-    EntityTextureStatusDto, FileOpOutcome, ImportOutcomeDto, McScanDto, McVersionDto,
-    ModsImportDto, PackEntryDto, PackListDto, PackLoadFailureDto, RenameOutcomeDto,
+    EntityTextureStatusDto, FileOpOutcome, McScanDto, McVersionDto, RenameOutcomeDto,
     ReplaceOutcomeDto, ReplaceRuleDto, SceneDto, SaveOutcome, ScanResult, SchematicSummary,
     SetupOutcomeDto, SetupSource, SetupVersionDto, SetupVersionOutcomeDto, UnreadableFileDto,
     VersionOptionDto,
@@ -478,25 +477,20 @@ pub fn entity_texture_pixels(
     })
 }
 
-/// 已载入的方块库，附带资源包加载过程中的失败说明。
-///
-/// 失败原因不放在 `BlockDb` 里：它描述的是「载入过程」而不是方块库内容，
-/// 混进数据模型会让这个结构承担两种职责。
+/// 已载入的方块库。
 pub struct LoadedDb {
     pub db: std::sync::Arc<crate::blockdb::BlockDb>,
-    /// 资源包文件名 -> 加载失败原因
-    pub failures: Vec<(String, String)>,
 }
 
 /// 进程内缓存的方块库。
 ///
 /// 方块库解压后有数 MB、含数万条方块定义，而方块检索是随输入逐键
 /// 触发的；每次重新读取与解析会让输入明显卡顿。基础库在 app 数据目录下
-/// 按版本合成，载入一次即可长期复用，直到用户改动基础库或资源包。
+/// 按版本合成，载入一次即可长期复用，直到用户改动基础库。
 ///
-/// 用 `RwLock<Option<..>>` 而不是 `OnceLock`：用户导入、启用或删除资源包后，
+/// 用 `RwLock<Option<..>>` 而不是 `OnceLock`：基础库补齐或删除版本后，
 /// 方块库的内容必须随之变化。`OnceLock` 一旦写入就再也改不了，会让
-/// 「刚导入的包要重启程序才生效」——而用户没有任何理由知道这一点。
+/// 「刚补的版本要重启程序才生效」——而用户没有任何理由知道这一点。
 static BLOCK_DB: std::sync::OnceLock<std::sync::RwLock<Option<std::sync::Arc<LoadedDb>>>> =
     std::sync::OnceLock::new();
 
@@ -506,7 +500,7 @@ fn db_cache() -> &'static std::sync::RwLock<Option<std::sync::Arc<LoadedDb>>> {
 
 /// 让方块库缓存失效。
 ///
-/// 任何会改变「哪些资源包被启用」的操作之后都必须调用，否则改动要等
+/// 任何会改变基础库内容的操作之后都必须调用，否则改动要等
 /// 下次启动才生效。
 fn invalidate_db() {
     // 锁中毒说明此前有线程在持锁时 panic；缓存只是可重建的派生数据，
@@ -515,50 +509,12 @@ fn invalidate_db() {
     *g = None;
 }
 
-/// 把清单里已启用的资源包并入基础库。
-///
-/// 从 `open_db` 里抽出来是为了可测试：这段逻辑决定「用户导入的包到底
-/// 有没有生效」，而它此前完全没有测试覆盖。抽出来后可以用真实文件与
-/// 内存构造的包直接验证合并结果。
-///
-/// 单个包载入失败不能中断整库：用户可能手工删过文件、或包本身损坏，
-/// 此时其余包与基础库仍应可用。失败原因逐项返回供界面显示，
-/// **不静默跳过**——界面上显示为启用却不生效是最难排查的状态。
-///
-/// `resolve` 给出包文件的完整路径，便于测试注入临时目录。
-fn merge_enabled_packs<F>(
-    base: &mut crate::blockdb::BlockDb,
-    entries: &[crate::pack_registry::PackEntry],
-    resolve: F,
-) -> Vec<(String, String)>
-where
-    F: Fn(&str) -> PathBuf,
-{
-    let mut failures: Vec<(String, String)> = Vec::new();
-    for item in crate::pack_registry::enabled_for_load(entries) {
-        let path = resolve(&item.file);
-        // 是否为叠加包必须由清单里的类型决定：pack 文件本身不存这个信息
-        match crate::blockdb::BlockDb::load(&path.to_string_lossy(), item.is_overlay) {
-            Ok(pack) => {
-                if let Err(e) = base.merge_from(&pack, item.is_overlay) {
-                    failures.push((item.file.clone(), format!("合并失败：{e}")));
-                }
-            }
-            Err(e) => failures.push((item.file.clone(), format!("载入失败：{e}"))),
-        }
-    }
-    failures
-}
-
-/// 取方块库：app 数据目录下按版本合成的基础库 + 清单里已启用的资源包。
+/// 取方块库：app 数据目录下按版本合成的基础库。
 ///
 /// 基础库为空并不是错误：首次运行还没添加任何版本时就是这个状态，
 /// 由前端引导用户去「版本库」里补。基础库里损坏的单版本文件只记入
-/// failures，不中断整库——资源包失败的处理也是同样原则。
-///
-/// 结果会写进进程内缓存，因此必须始终带着基础库构建：允许传 None
-/// 「只要资源包」的口子会把一份没有基础库的库缓存下来，之后所有
-/// 查询都命中它，表现为打开过资源包界面后方块就查不到了。
+/// 日志，不中断整库——损坏的那一个版本会在「版本库」里显示为未就绪，
+/// 用户重新构建即可；具体原因写进日志，便于排查「明明建过却用不上」。
 fn open_db(app: &tauri::AppHandle) -> AppResult<std::sync::Arc<LoadedDb>> {
     {
         let g = db_cache().read().unwrap_or_else(|e| e.into_inner());
@@ -567,13 +523,13 @@ fn open_db(app: &tauri::AppHandle) -> AppResult<std::sync::Arc<LoadedDb>> {
         }
     }
 
-    let (mut db, mut failures) =
+    let (db, failures) =
         crate::base_db::load_base_block_db(&crate::base_db::base_blocks_dir(app)?)?;
+    for (file, reason) in &failures {
+        eprintln!("基础库的版本包 {file} 未能载入：{reason}");
+    }
 
-    let (entries, _) = read_manifest()?;
-    failures.extend(merge_enabled_packs(&mut db, &entries, |f| packs_dir().join(f)));
-
-    let loaded = std::sync::Arc::new(LoadedDb { db: std::sync::Arc::new(db), failures });
+    let loaded = std::sync::Arc::new(LoadedDb { db: std::sync::Arc::new(db) });
     let mut g = db_cache().write().unwrap_or_else(|e| e.into_inner());
     // 并发下可能被别的线程抢先设置，此时沿用已设置的即可
     if g.is_none() {
@@ -837,9 +793,9 @@ pub fn apply_conversion(
         .file_stem()
         .map(|v| v.to_string_lossy().into_owned())
         .unwrap_or_else(|| "projection".into());
-    // 版本名可能含路径分隔符或 `..`（导入资源包时未指定名称的话，
-    // 包名会直接成为版本名），必须清理成一段安全文件名再拼接，
-    // 否则写出路径会离开投影所在目录。
+    // 版本名可能含路径分隔符或 `..`（基础库的版本名取自 jar 里的
+    // version.json，用户也能自己往 base/blocks 放包），必须清理成一段
+    // 安全文件名再拼接，否则写出路径会离开投影所在目录。
     let out_path = dir.join(format!(
         "{stem}_{}.litematic",
         crate::convert::safe_file_component(&target.name)
@@ -1461,150 +1417,11 @@ mod tests {
     // std::path::Path 按各平台的分隔符切分，在 Unix 上反斜杠只是普通字符，
     // 因此 Windows 风格的 "Z:\\x.litematic" 在 Linux 上会被整体当作文件名。
     // 测试只关心「文件不存在时的行为」，用纯文件名即可。
-    /// 版本号形如 1.20.1 / 26.2 的文件名要被识别出来，
-    /// 否则客户端 jar 会被当成模组导入，污染资源包清单。
-    #[test]
-    fn mc_version_names_are_detected() {
-        for good in ["1.20.1", "1.20", "26.2", "26.1.2", "1.13.2"] {
-            assert!(is_mc_version_name(good), "{good} 是版本号，应被识别");
-        }
-        for bad in [
-            "fabric-api-0.92.2",   // 模组名里也有数字与点，但含字母
-            "sodium",              // 纯字母
-            "iris-1.7",            // 字母+数字
-            "1.20.1-beta",         // 段里含非数字
-            "",                    // 空
-            "1",                   // 只有一段
-            "a.b.c.d",             // 四段
-        ] {
-            assert!(!is_mc_version_name(bad), "{bad} 不是版本号，不应被识别");
-        }
-    }
-
-    /// 不存在的目录要报错，而不是返回「导入 0 个」让人以为成功了。
-    #[test]
-    fn import_mods_folder_rejects_missing_dir() {
-        let r = import_mods_folder("__sm_no_such_mods__".into(), 3465);
-        assert!(r.is_err(), "目录不存在时应报错");
-        let msg = r.unwrap_err();
-        assert!(msg.contains("不是目录"), "错误信息应说明原因，实际：{msg}");
-    }
-
-    /// 目录里没有 jar 时要明确报错，而不是静默返回空结果。
-    #[test]
-    fn import_mods_folder_reports_when_no_jars() {
-        let d = std::env::temp_dir().join(format!(
-            "sm_mods_empty_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|v| v.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        // 放一个非 jar 文件，确认它不会被误收
-        std::fs::write(d.join("readme.txt"), b"x").unwrap();
-        let r = import_mods_folder(d.to_string_lossy().into_owned(), 3465);
-        assert!(r.is_err(), "目录里没有 jar 时应报错");
-        assert!(r.unwrap_err().contains("没有可导入"));
-        std::fs::remove_dir_all(&d).ok();
-    }
-
     #[test]
     fn scan_missing_dir_returns_empty() {
         let r = scan_litematics("__sm_not_exist_dir__".into(), Some(2));
         assert!(r.items.is_empty());
         assert!(r.skipped_dirs > 0, "不存在的目录应计入跳过数");
-    }
-
-    /// 造一个本次测试专用的可写目录。
-    ///
-    /// 不用 `std::env::temp_dir()`：本仓库的 Windows 开发环境下系统临时目录
-    /// 不可写（见 real_project.rs 与 backup.rs 的说明），那样这些用例在默认
-    /// 环境下会直接 PermissionDenied 失败。目录名带进程号与纳秒，避免并发
-    /// 跑测试时互相踩。
-    fn mods_test_dir(tag: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let d = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("testtmp")
-            .join(format!("sm_mods_{tag}_{}_{nanos}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).expect("创建测试目录失败");
-        d
-    }
-
-    /// mods 目录的过滤规则：非 jar 与客户端包都不该进待导入列表。
-    ///
-    /// 这些规则错了不会报错，只会静默少导入几个模组，因此必须直接测。
-    #[test]
-    fn collect_mod_jars_filters_out_non_mods() {
-        let dir = mods_test_dir("scan");
-        std::fs::create_dir_all(dir.join("子目录")).unwrap();
-        std::fs::write(dir.join("readme.txt"), b"x").unwrap();
-        std::fs::write(dir.join("1.20.1.jar"), b"x").unwrap();
-        std::fs::write(dir.join("foo-client.jar"), b"x").unwrap();
-        // 大小写不同也必须按客户端包跳过：Windows 上两者是同一个东西
-        std::fs::write(dir.join("Bar-Client-1.0.jar"), b"x").unwrap();
-        std::fs::write(dir.join("真模组.jar"), b"x").unwrap();
-        std::fs::write(dir.join("another_mod.JAR"), b"x").unwrap();
-
-        let scan = collect_mod_jars(&dir).expect("扫描失败");
-        let kept: Vec<String> = scan
-            .jars
-            .iter()
-            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(
-            kept,
-            vec!["another_mod.JAR", "真模组.jar"],
-            "只应留下真正的模组 jar（扩展名大小写不敏感）"
-        );
-
-        // 跳过的必须逐条回报，否则用户只能靠「数目对不上」发现
-        let skipped: Vec<String> = scan
-            .skipped
-            .iter()
-            .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
-        for name in ["readme.txt", "1.20.1.jar", "foo-client.jar", "Bar-Client-1.0.jar"] {
-            assert!(skipped.contains(&name.to_string()), "{name} 应被记为跳过");
-        }
-        assert!(
-            !skipped.contains(&"子目录".to_string()),
-            "目录不应计入跳过项（它不是文件）"
-        );
-        assert!(scan.unreadable.is_empty(), "正常目录不应有读不出的项");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 扫描结果必须稳定排序，否则同一次导入每次的原子上传顺序都不同。
-    #[test]
-    fn collect_mod_jars_is_sorted() {
-        let dir = mods_test_dir("sort");
-        for n in ["z.jar", "a.jar", "m.jar"] {
-            std::fs::write(dir.join(n), b"x").unwrap();
-        }
-        let scan = collect_mod_jars(&dir).unwrap();
-        let names: Vec<String> = scan
-            .jars
-            .iter()
-            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(names, vec!["a.jar", "m.jar", "z.jar"]);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 不存在的目录必须报错，而不是当成「没有模组」。
-    #[test]
-    fn collect_mod_jars_rejects_missing_dir() {
-        let e = collect_mod_jars(Path::new("__sm_not_exist_mods__"))
-            .unwrap_err()
-            .to_string();
-        assert!(e.contains("无法读取目录"), "应说明目录读不了：{e}");
     }
 
     #[test]
@@ -1703,7 +1520,6 @@ mod tests {
     }
 
     use crate::blockdb::{BlockDb, BlockDef, LangEntry, Model, ModelElement, ModelFace, TextureInfo, Variant, VersionDef};
-    use crate::pack_registry::{PackEntry, PackKind};
     use std::collections::HashMap;
 
     /// 造一个可序列化、可读回的最小方块库
@@ -1764,702 +1580,16 @@ mod tests {
         }
     }
 
-    fn tmp(name: &str) -> std::path::PathBuf {
-        let d = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("test_tmp")
-            .join(format!(
-                "cmd_{}_{}",
-                name,
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ));
-        std::fs::create_dir_all(&d).unwrap();
-        d
-    }
-
-    /// 把一个库写成 zlib 压缩的 pack 文件
-    fn write_pack(dir: &std::path::Path, file: &str, db: &BlockDb) {
-        let raw = crate::blockdb_write::serialize(db).expect("序列化失败");
-        use std::io::Write;
-        let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(9));
-        e.write_all(&raw).unwrap();
-        let packed = e.finish().unwrap();
-        std::fs::write(dir.join(file), packed).unwrap();
-    }
-
-    fn entry(file: &str, kind: PackKind, enabled: bool) -> PackEntry {
-        PackEntry {
-            file: file.into(),
-            name: file.into(),
-            source: "/j/x.jar".into(),
-            source_dir: "/j".into(),
-            kind,
-            data_version: 3465,
-            enabled,
-        }
-    }
-
-    /// 这是本轮的核心验证：导入的包必须真正参与方块解析，
-    /// 而不是只写进了清单。
-    #[test]
-    fn enabled_pack_is_merged_and_its_block_becomes_findable() {
-        let dir = tmp("merge_enabled");
-        let base = sample_db("base", 3465, "minecraft:stone", "block/stone", 10);
-        let pack = sample_db("mymod", 3465, "mymod:thing", "block/thing", 20);
-        write_pack(&dir, "mymod.pack", &pack);
-
-        let mut merged = base;
-        let entries = vec![entry("mymod.pack", PackKind::Mod, true)];
-        let failures = merge_enabled_packs(&mut merged, &entries, |f| dir.join(f));
-        assert!(failures.is_empty(), "不应有失败：{failures:?}");
-
-        let ov = merged.versions.last().unwrap();
-        assert!(
-            crate::block_model::find_block(&merged, ov, "mymod:thing").is_some(),
-            "启用的包必须真正参与解析，否则导入毫无作用"
-        );
-        assert_eq!(merged.versions.len(), 2);
-    }
-
-    #[test]
-    fn disabled_pack_is_not_merged() {
-        let dir = tmp("merge_disabled");
-        let base = sample_db("base", 3465, "minecraft:stone", "block/stone", 10);
-        let pack = sample_db("mymod", 3465, "mymod:thing", "block/thing", 20);
-        write_pack(&dir, "mymod.pack", &pack);
-
-        let mut merged = base;
-        let entries = vec![entry("mymod.pack", PackKind::Mod, false)];
-        let failures = merge_enabled_packs(&mut merged, &entries, |f| dir.join(f));
-        assert!(failures.is_empty());
-        assert_eq!(merged.versions.len(), 1, "停用的包不应被并入");
-    }
-
-    #[test]
-    fn missing_pack_file_is_reported_not_ignored() {
-        // 文件被手工删掉：必须上报，界面才能提示；静默跳过会让用户
-        // 看着「已启用」却不知道为什么没生效
-        let dir = tmp("merge_missing");
-        let base = sample_db("base", 3465, "minecraft:stone", "block/stone", 10);
-        let mut merged = base;
-        let entries = vec![entry("gone.pack", PackKind::Mod, true)];
-        let failures = merge_enabled_packs(&mut merged, &entries, |f| dir.join(f));
-
-        assert_eq!(failures.len(), 1, "缺失的包必须被记为失败");
-        assert_eq!(failures[0].0, "gone.pack");
-        assert!(failures[0].1.contains("载入失败"), "原因：{}", failures[0].1);
-        assert_eq!(merged.versions.len(), 1, "基础库仍应可用");
-    }
-
-    #[test]
-    fn corrupt_pack_does_not_break_other_packs() {
-        // 一个坏包 + 一个好包：坏包上报，好包仍被并入
-        let dir = tmp("merge_corrupt");
-        let base = sample_db("base", 3465, "minecraft:stone", "block/stone", 10);
-        let good = sample_db("good", 3465, "good:block", "block/good", 30);
-        write_pack(&dir, "good.pack", &good);
-        std::fs::write(dir.join("bad.pack"), b"not a pack file at all").unwrap();
-
-        let mut merged = base;
-        let entries = vec![
-            entry("bad.pack", PackKind::Mod, true),
-            entry("good.pack", PackKind::Mod, true),
-        ];
-        let failures = merge_enabled_packs(&mut merged, &entries, |f| dir.join(f));
-
-        assert_eq!(failures.len(), 1, "只有坏包应失败：{failures:?}");
-        assert_eq!(failures[0].0, "bad.pack");
-        assert_eq!(merged.versions.len(), 2, "好包仍应被并入");
-        let ov = merged.versions.last().unwrap();
-        assert!(crate::block_model::find_block(&merged, ov, "good:block").is_some());
-    }
-
-    #[test]
-    fn version_pack_is_added_as_base_version_and_participates_in_picking() {
-        // kind=1 的版本包不是叠加层，应成为可被选中的基础版本
-        let dir = tmp("merge_version");
-        let base = sample_db("base", 3465, "minecraft:stone", "block/stone", 10);
-        let pack = sample_db("1.21", 3953, "minecraft:deepslate", "block/deepslate", 40);
-        write_pack(&dir, "v121.pack", &pack);
-
-        let mut merged = base;
-        let entries = vec![entry("v121.pack", PackKind::Version, true)];
-        merge_enabled_packs(&mut merged, &entries, |f| dir.join(f));
-
-        assert_eq!(merged.versions.len(), 2);
-        assert!(!merged.versions[1].is_overlay, "版本包不应标记为叠加包");
-        assert_eq!(merged.pick_version(3953), Some(1), "新基础版本应可被选中");
-        assert!(merged.overlays_of(1).is_empty(), "版本包不承载叠加包");
-    }
-
-    #[test]
-    fn pack_texture_is_reachable_after_merge() {
-        // 模组方块引用的贴图只存在于模组包里，合并后必须能取到其像素
-        let dir = tmp("merge_tex");
-        let base = sample_db("base", 3465, "minecraft:stone", "block/stone", 10);
-        let pack = sample_db("mymod", 3465, "mymod:thing", "block/thing", 77);
-        write_pack(&dir, "mymod.pack", &pack);
-
-        let mut merged = base;
-        merge_enabled_packs(
-            &mut merged,
-            &[entry("mymod.pack", PackKind::Mod, true)],
-            |f| dir.join(f),
-        );
-
-        let sidx = merged
-            .strings
-            .iter()
-            .position(|s| s == "block/thing")
-            .expect("字符串表里应有模组贴图路径") as u32;
-        let idx = merged.texture_pool_index(0, sidx);
-        assert_ne!(idx, crate::blockdb::NO_TEXTURE, "应通过叠加包取到贴图");
-        assert_eq!(merged.texture_pixels(idx as usize).unwrap(), &[77, 77, 77, 255]);
-    }
-
-    #[test]
-    fn load_order_follows_manifest_order() {
-        // 两个包定义同名方块：后者（清单里靠后）生效
-        let dir = tmp("merge_order");
-        let base = sample_db("base", 3465, "minecraft:stone", "block/stone", 10);
-        let a = sample_db("A", 3465, "dup:block", "block/a", 1);
-        let b = sample_db("B", 3465, "dup:block", "block/b", 2);
-        write_pack(&dir, "a.pack", &a);
-        write_pack(&dir, "b.pack", &b);
-
-        let mut merged = base;
-        let entries = vec![
-            entry("a.pack", PackKind::Mod, true),
-            entry("b.pack", PackKind::Mod, true),
-        ];
-        merge_enabled_packs(&mut merged, &entries, |f| dir.join(f));
-
-        // 版本按清单顺序追加，因此最后一个是被后载入的 b
-        let last = merged.versions.last().unwrap();
-        assert_eq!(last.name, "B", "清单靠后的包应最后载入");
-    }
-
-    #[test]
-    fn enabled_for_load_maps_kind_to_overlay_flag() {
-        use crate::pack_registry::enabled_for_load;
-        let entries = vec![
-            entry("a.pack", PackKind::Version, true),
-            entry("b.pack", PackKind::Mod, true),
-            entry("c.pack", PackKind::Mod, false),
-        ];
-        let items = enabled_for_load(&entries);
-        assert_eq!(items.len(), 2, "停用的不应出现");
-        assert!(!items[0].is_overlay, "版本包不是叠加包");
-        assert!(items[1].is_overlay, "模组包是叠加包");
-    }
-
-    // ---- delete_pack 的文件名校验 ----
-    //
-    // 这是安全校验：`file` 来自清单，而清单是可被手工编辑的文本文件。
-    // 校验不通过时必须直接拒绝，因此下面这些用例**不会触碰磁盘**——
-    // 合法文件名才会走到读写清单那一步，而那些需要真实 packs 目录，
-    // 不适合在单元测试里构造。
-    //
-    // 用例必须在 Windows 与 Linux 上得到**相同**结论：CI 的单元测试跑在
-    // Linux 上，本地开发在 Windows 上。最初用 `Path::components()` 实现时，
-    // `C:x.pack` 在 Windows 被判为盘符前缀而拒绝、在 Linux 只是普通字符而
-    // 放过，于是本地通过、CI 失败。因此实现改为纯字符串判断。
-    // 下面把带盘符的名字列进「必须拒绝」的清单，若有人改回组件解析，
-    // Linux 上的 CI 会立刻失败。
-
-    /// 各种「不是单一文件名」的输入都必须被拒绝。
-    #[test]
-    fn delete_pack_rejects_path_like_names() {
-        let bad = [
-            // 上级目录
-            "..",
-            "../x.pack",
-            "..\\x.pack",
-            "a/../../x.pack",
-            // 子目录
-            "sub/x.pack",
-            "sub\\x.pack",
-            // 绝对路径（Windows 盘符与 Unix 根）
-            "C:\\Windows\\x.pack",
-            "C:/Windows/x.pack",
-            "/etc/x.pack",
-            "\\\\server\\share\\x.pack",
-            // 盘符相对路径：不含 / \ ..，朴素的字符串检查会放过，
-            // 但 Path::join 会把基础目录整个替换掉
-            "C:x.pack",
-            "D:evil.pack",
-            // 当前目录前缀
-            "./x.pack",
-            // 空串与纯空白
-            "",
-            " ",
-        ];
-        for name in bad {
-            let r = delete_pack(name.to_string());
-            assert!(
-                r.is_err(),
-                "{name:?} 应被拒绝，实际返回 {r:?}"
-            );
-            let msg = r.unwrap_err();
-            assert!(
-                msg.contains("不合法"),
-                "{name:?} 的错误信息应说明文件名不合法，实际：{msg}"
-            );
-        }
-    }
-
-    /// 正常文件名不应被校验拦住。
-    ///
-    /// 这些输入会继续走到读写清单，因此会以「清单里没有该资源包」之类的
-    /// 原因失败——关键是错误**不是**「文件名不合法」。
-    #[test]
-    fn delete_pack_accepts_plain_file_names() {
-        for name in ["a.pack", "1.20.1.pack", "my-pack_v2.pack", "中文名.pack"] {
-            let r = delete_pack(name.to_string());
-            if let Err(e) = r {
-                assert!(
-                    !e.contains("不合法"),
-                    "{name:?} 是合法文件名，不应被判为不合法：{e}"
-                );
-            }
-        }
-    }
-}
-
-/// 删除某个资源包：同时移除清单记录与磁盘文件。
-///
-/// 顺序是先删文件再改清单：若反过来，删文件失败会留下一条指向不存在
-/// 文件的记录（界面显示缺失）；而先删文件后写清单失败时，残留的是
-/// 一条 `exists=false` 的记录，重新导入即可修复。
-#[tauri::command]
-pub fn delete_pack(file: String) -> Result<(), String> {
-    // 只接受单一文件名，不接受任何路径形式。
-    //
-    // 这里刻意用**显式且与平台无关**的判断，而不是 `Path::components()`：
-    // 后者在 Windows 上把 `C:` 解析成盘符前缀、在 Unix 上只是一个普通字符，
-    // 于是同一个输入在两个系统上得到不同结论。而清单是跨平台共用的文本
-    // 文件，同一份内容可能在两个系统上被读取，校验结果必须一致。
-    //
-    // 危险点（Windows 实测）：
-    //   Path::new(r"C:\app\packs").join("C:x.pack") == "C:x.pack"
-    // `join` 遇到带盘符前缀的路径会**直接替换掉基础目录**，删除目标就跑出
-    // 了 packs 目录。而 `C:x.pack` 不含 `/`、`\`、`..`，朴素的字符串检查
-    // 会放过它。
-    //
-    // 因此拒绝：空串、纯空白、含路径分隔符、含冒号、以及 `.` 与 `..`。
-    // 程序自己生成的文件名源自 jar 名加 `.pack` 后缀，不含这些字符，
-    // 所以不会误伤正常用法。
-    let bad = file.is_empty()
-        || file.trim().is_empty()
-        || file == "."
-        || file == ".."
-        || file.contains('/')
-        || file.contains('\\')
-        || file.contains(':');
-    if bad {
-        return Err(format!("资源包文件名不合法：{file}"));
-    }
-    let mut entries = read_manifest_for_write().map_err(|e| e.to_string())?;
-    let target = packs_dir().join(&file);
-    if target.exists() {
-        std::fs::remove_file(&target).map_err(|e| {
-            format!("无法删除资源包文件 {}：{e}", target.display())
-        })?;
-    }
-    if !crate::pack_registry::remove(&mut entries, &file) {
-        return Err(format!("清单里没有资源包 {file}"));
-    }
-    write_manifest(&entries).map_err(|e| e.to_string())?;
-    invalidate_db();
-    Ok(())
-}
-
-// ---------------------------------------------------------------- 资源包
-
-/// 资源包目录：`<程序所在目录>/packs`
-///
-/// 与备份目录同样以程序目录为根，与旧版行为一致——用户既有的 packs
-/// 目录无需迁移即可继续使用。
-fn packs_dir() -> PathBuf {
-    exe_dir().join("packs")
-}
-
-fn manifest_path() -> PathBuf {
-    packs_dir().join("packs.tsv")
-}
-
-/// 读取清单。
-///
-/// 清单不存在时视为「尚未导入任何包」，返回空清单而不是报错：
-/// 全新安装就是这种状态。
-fn read_manifest() -> AppResult<(Vec<crate::pack_registry::PackEntry>, Vec<String>)> {
-    let path = manifest_path();
-    let text = match std::fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok((Vec::new(), Vec::new()))
-        }
-        Err(e) => {
-            return Err(AppError::Parse(format!(
-                "无法读取资源包清单 {}：{e}",
-                path.display()
-            )))
-        }
-    };
-    Ok(crate::pack_registry::parse_with_errors(&text))
-}
-
-/// 写出清单。
-///
-/// 先写临时文件再改名：直接覆盖时若中途失败（磁盘满、进程被杀），
-/// 清单会处于半截状态，用户已导入的包会整批丢失记录。
-fn write_manifest(entries: &[crate::pack_registry::PackEntry]) -> AppResult<()> {
-    let dir = packs_dir();
-    std::fs::create_dir_all(&dir)?;
-    let path = manifest_path();
-    let tmp = dir.join("packs.tsv.tmp");
-    std::fs::write(&tmp, crate::pack_registry::serialize(entries))?;
-    std::fs::rename(&tmp, &path)?;
-    Ok(())
-}
-
-/// 列出已导入的资源包
-#[tauri::command]
-pub fn list_packs(app: tauri::AppHandle) -> Result<PackListDto, String> {
-    let (entries, skipped) = read_manifest().map_err(|e| e.to_string())?;
-    let dir = packs_dir();
-    let packs = entries
-        .into_iter()
-        .map(|e| {
-            let p = dir.join(&e.file);
-            let (size, exists) = match std::fs::metadata(&p) {
-                Ok(m) => (m.len(), true),
-                Err(_) => (0, false),
-            };
-            PackEntryDto {
-                kind_label: e.kind.label().to_string(),
-                mc_version: crate::mcver::version_name_from_data_version(e.data_version),
-                kind: e.kind.as_i32(),
-                file: e.file,
-                name: e.name,
-                source: e.source,
-                source_dir: e.source_dir,
-                data_version: e.data_version,
-                enabled: e.enabled,
-                size,
-                exists,
-            }
-        })
-        .collect();
-    // 取一次方块库：载入失败的原因由它记录。若库整体不可用（如清单
-    // 损坏），那不属「资源包载入失败」，不应混进这个列表——list_packs 本身
-    // 仍应能列出清单，否则用户连自己导入过什么都看不到。
-    let load_failures = match open_db(&app) {
-        Ok(loaded) => loaded
-            .failures
-            .iter()
-            .map(|(file, reason)| PackLoadFailureDto {
-                file: file.clone(),
-                reason: reason.clone(),
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    Ok(PackListDto {
-        packs_dir: dir.to_string_lossy().to_string(),
-        packs,
-        load_failures,
-        skipped,
-    })
-}
-
-/// 从 jar 导入资源包。
-///
-/// `kind`：1 = MC 客户端版本包（数据版本取自 jar 内 version.json），
-/// 2 = 模组包（叠加到 `data_version` 指定的版本）。
-///
-/// 命名规则沿用旧版：`name` 为空时取 jar 文件名主干。
-#[tauri::command]
-pub fn import_jar(
-    jar_path: String,
-    name: Option<String>,
-    kind: i32,
-    data_version: i32,
-) -> Result<ImportOutcomeDto, String> {
-    let kind = crate::pack_registry::PackKind::from_i32(kind)
-        .ok_or_else(|| format!("不支持的类型 {kind}（只接受 1=MC 版本包、2=模组包）"))?;
-    if kind == crate::pack_registry::PackKind::Builtin {
-        return Err("基础库在「版本库」里构建，不能通过导入生成".into());
-    }
-    let src = Path::new(&jar_path);
-    if !src.is_file() {
-        return Err(format!("找不到 jar 文件：{jar_path}"));
-    }
-
-    let pack_name = match name.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
-        Some(v) => v,
-        None => src
-            .file_stem()
-            .map(|v| v.to_string_lossy().into_owned())
-            .ok_or_else(|| format!("无法从路径推出资源包名：{jar_path}"))?,
-    };
-
-    let mut entries = read_manifest_for_write().map_err(|e| e.to_string())?;
-
-    let file = crate::pack_registry::pack_file_name(&pack_name, &entries)
-        .map_err(|e| e.to_string())?;
-    let out_path = packs_dir().join(&file);
-    let is_overlay = kind == crate::pack_registry::PackKind::Mod;
-
-    let stats = crate::jar_file::build_pack_to(
-        &jar_path,
-        &out_path.to_string_lossy(),
-        &pack_name,
-        data_version,
-        is_overlay,
-    )
-    .map_err(|e| e.to_string())?;
-
-    // 模组包的 data_version 由调用方指定；版本包以 jar 内的为准，
-    // 这里回读一次拿实际生效的值，避免清单记录与实际不符。
-    let actual_dv = read_pack_data_version(&out_path, is_overlay).unwrap_or(data_version);
-
-    let size = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
-    crate::pack_registry::upsert(
-        &mut entries,
-        crate::pack_registry::PackEntry {
-            file: file.clone(),
-            name: pack_name.clone(),
-            source: jar_path.clone(),
-            // 来源目录从 jar 路径推出来。从 mods 文件夹批量导入时，
-            // 界面靠这个字段把同一批包归成一组。
-            source_dir: Path::new(&jar_path)
-                .parent()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            kind,
-            data_version: actual_dv,
-            enabled: true,
-        },
-    );
-    write_manifest(&entries).map_err(|e| e.to_string())?;
-    // 新包已登记为启用，方块库必须重建才会包含它
-    invalidate_db();
-
-    Ok(ImportOutcomeDto {
-        file,
-        name: pack_name,
-        kind: kind.as_i32(),
-        kind_label: kind.label().to_string(),
-        data_version: actual_dv,
-        mc_version: crate::mcver::version_name_from_data_version(actual_dv),
-        blocks: stats.blocks,
-        models: stats.models,
-        textures: stats.textures,
-        failed_blockstates: stats.failed_blockstates,
-        failed_blocks: stats.failed_blocks,
-        namespaces: stats.namespaces,
-        size,
-    })
-}
-
-/// 从一个 mods 文件夹批量导入其中所有模组。
-///
-/// 用户要求「模组包要选择到 mods 文件夹，导入所有模组方块贴图」——
-/// 逐个选 jar 在装了上百个模组时不可行，因此提供整目录导入。
-///
-/// 行为约定：
-/// - 只处理目录**本身**下的 `.jar`，不递归。子目录里是模组自己的资源，
-///   不是可导入的模组包；递归会撞上大量非模组文件。
-/// - **单个失败不中断整批**：模组 jar 五花八门，其中一个坏掉不该让
-///   其余几十个都导不进来。失败项连同原因一并回报，由界面列出。
-/// - 跳过 MC 客户端 jar（名字形如 `1.20.1.jar` 或含 `client`）：
-///   它们属于版本包而非模组，混进来会把整份清单搞乱。
-#[tauri::command]
-pub fn import_mods_folder(
-    dir: String,
-    data_version: i32,
-) -> Result<ModsImportDto, String> {
-    let root = Path::new(&dir);
-    if !root.is_dir() {
-        return Err(format!("{dir} 不是目录"));
-    }
-    let scan = collect_mod_jars(root).map_err(|e| e.to_string())?;
-    if scan.jars.is_empty() {
-        return Err(format!("{dir} 里没有可导入的模组 jar"));
-    }
-
-    let mut imported: Vec<String> = Vec::new();
-    let mut failed: Vec<(String, String)> = scan
-        .unreadable
-        .iter()
-        .map(|(p, why)| (p.display().to_string(), why.clone()))
-        .collect();
-    for jar in &scan.jars {
-        let label = jar
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        match import_jar(
-            jar.to_string_lossy().into_owned(),
-            None,
-            crate::pack_registry::PackKind::Mod.as_i32(),
-            data_version,
-        ) {
-            Ok(_) => imported.push(label),
-            Err(e) => failed.push((label, e)),
-        }
-    }
-
-    Ok(ModsImportDto {
-        dir,
-        imported,
-        failed: failed
-            .into_iter()
-            .map(|(file, reason)| UnreadableFileDto { path: file, reason })
-            .collect(),
-        // 有意跳过的条目也要回报：名字里恰好含 client 的模组会被判成客户端包，
-        // 静默丢掉的话用户只能靠「数目对不上」才发现。
-        skipped: scan
-            .skipped
-            .into_iter()
-            .map(|(path, reason)| UnreadableFileDto {
-                path: path.to_string_lossy().into_owned(),
-                reason,
-            })
-            .collect(),
-    })
-}
-
-/// 一次 mods 目录扫描的结果
-#[derive(Debug, Default)]
-struct ModScan {
-    /// 待导入的模组 jar，按路径排序，结果稳定
-    jars: Vec<PathBuf>,
-    /// 有意跳过的条目及原因
-    skipped: Vec<(PathBuf, String)>,
-    /// 目录项读不出名字等失败，必须上报而不是 `.flatten()` 掉
-    unreadable: Vec<(PathBuf, String)>,
-}
-
-/// 扫描 mods 目录，挑出待导入的模组 jar。
-///
-/// 单独成函数是为了能脱离 AppHandle 直接测：过滤规则（非 jar、客户端 jar、
-/// 版本号命名的客户端 jar）都在这里，它们错了不会报错、只会静默少导入。
-fn collect_mod_jars(dir: &Path) -> AppResult<ModScan> {
-    let mut out = ModScan::default();
-    let entries = std::fs::read_dir(dir)
-        .map_err(|e| AppError::Parse(format!("无法读取目录 {}：{e}", dir.display())))?;
-    for e in entries {
-        // 目录项自身读失败时不能丢掉：那意味着有一个文件我们不知道是什么，
-        // 与「它不重复」是两回事，因此记进 unreadable 上报。
-        let e = match e {
-            Ok(e) => e,
-            Err(err) => {
-                out.unreadable
-                    .push((dir.to_path_buf(), format!("读取目录项失败：{err}")));
-                continue;
-            }
-        };
-        let p = e.path();
-        if !p.is_file() {
-            continue;
-        }
-        if !p
-            .extension()
-            .map(|x| x.eq_ignore_ascii_case("jar"))
-            .unwrap_or(false)
-        {
-            out.skipped.push((p, "不是 .jar 文件".into()));
-            continue;
-        }
-        let stem = p
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        // 客户端 jar 属于版本包而不是模组。大小写不敏感：Windows 上
-        // `Foo-Client.jar` 与 `foo-client.jar` 是同一个东西。
-        if stem.to_ascii_lowercase().contains("client") {
-            out.skipped.push((p, "名字含 client，按客户端包跳过".into()));
-            continue;
-        }
-        if is_mc_version_name(&stem) {
-            out.skipped.push((p, "名字是游戏版本号，按客户端包跳过".into()));
-            continue;
-        }
-        out.jars.push(p);
-    }
-    out.jars.sort();
-    out.skipped.sort();
-    out.unreadable.sort();
-    Ok(out)
-}
-
-/// 判断一个文件名主干是否形如 Minecraft 版本号（`1.20.1`、`26.2`）。
-///
-/// 客户端 jar 常以版本号命名，混进模组批量导入会污染清单。
-/// 判据：由点分隔的 2~3 段全数字。不用正则，避免为此引入依赖。
-fn is_mc_version_name(s: &str) -> bool {
-    let parts: Vec<&str> = s.split('.').collect();
-    if parts.len() < 2 || parts.len() > 3 {
-        return false;
-    }
-    parts
-        .iter()
-        .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
-}
-
-/// 读回资源包实际使用的数据版本
-fn read_pack_data_version(path: &Path, is_overlay: bool) -> Option<i32> {
-    crate::blockdb::BlockDb::load(&path.to_string_lossy(), is_overlay)
-        .ok()
-        .and_then(|db| db.versions.first().map(|v| v.data_version))
-}
-
-/// 读取清单，并要求其中没有解析失败的行。
-///
-/// 用于**所有会整份重写清单的操作**。清单里存在坏行时，重写会把它们
-/// 连同其内容一起抹掉，而用户损失的记录无从追回；因此宁可拒绝操作并
-/// 指出清单位置，让用户先修好。三个写清单的命令必须用同一个判断，
-/// 只在其中一个上加保护会让另外两个成为数据丢失的入口。
-fn read_manifest_for_write() -> AppResult<Vec<crate::pack_registry::PackEntry>> {
-    let (entries, skipped) = read_manifest()?;
-    if !skipped.is_empty() {
-        return Err(AppError::Parse(format!(
-            "资源包清单有 {} 行无法解析，请先修复 {} 后再操作：{}",
-            skipped.len(),
-            manifest_path().display(),
-            skipped.join("；")
-        )));
-    }
-    Ok(entries)
-}
-
-/// 启用或停用某个资源包
-#[tauri::command]
-pub fn set_pack_enabled(file: String, enabled: bool) -> Result<(), String> {
-    let mut entries = read_manifest_for_write().map_err(|e| e.to_string())?;
-    if !crate::pack_registry::set_enabled(&mut entries, &file, enabled) {
-        return Err(format!("清单里没有资源包 {file}"));
-    }
-    write_manifest(&entries).map_err(|e| e.to_string())?;
-    // 启用集合变了，方块库必须重建：否则要重启程序才生效
-    invalidate_db();
-    Ok(())
 }
 
 // ---------------------------------------------------------------- 目录栏文件操作
 //
-// 这四个命令都作用于用户在目录栏里勾选的文件。共同点：
+// 这些命令都作用于用户在目录栏里勾选的文件。共同点：
 // 路径来自前端，属于不可信输入，因此统一先经 file_ops::check_files
 // 校验存在性与类型，再执行具体动作。
 //
-// 与 delete_pack 的差别：后者只接受单一文件名并限制在 packs 目录内；
-// 这里的文件由用户在任意目录中选择，因此不能限制目录，
-// 但删除一律走回收站，把「误删」的代价限制在可还原范围内。
+// 文件由用户在任意目录中选择，因此不能限制目录，但删除一律走回收站，
+// 把「误删」的代价限制在可还原范围内。
 
 /// 删除选中的文件（移入系统回收站，不永久删除）。
 #[tauri::command]
@@ -2568,17 +1698,6 @@ pub fn rename_schematic(path: String, new_name: String) -> Result<RenameOutcomeD
     })
 }
 
-/// 在文件管理器里打开一个目录。
-///
-/// 目录不存在时先创建：用户还没导入过资源包时 `packs` 目录并不存在，
-/// 而「打开资源包目录」按钮正是那时候最需要能用的——他要往里放东西。
-#[tauri::command]
-pub fn open_directory(path: String) -> Result<(), String> {
-    let p = Path::new(&path);
-    std::fs::create_dir_all(p).map_err(|e| format!("创建目录 {} 失败：{e}", p.display()))?;
-    crate::file_ops::open_directory(p).map_err(|e| e.to_string())
-}
-
 // ---------------------------------------------------------------- 界面状态记忆
 
 /// 界面状态文件名。内容是一段前端自己解释的 JSON。
@@ -2684,9 +1803,9 @@ fn emit_setup_progress(app: &tauri::AppHandle, p: BaseSetupProgress) {
 pub fn base_db_status(app: tauri::AppHandle) -> Result<BaseDbStatusDto, String> {
     let dir = crate::base_db::base_blocks_dir(&app).map_err(|e| e.to_string())?;
     let (base, _failures) = crate::base_db::load_base_block_db(&dir).map_err(|e| e.to_string())?;
-    // 单个包损坏不在这里上报：打开投影时 open_db 会把载入失败逐个带到
-    // 资源包界面；状态查询只回答「哪些版本就绪」，避免一个坏文件把整个
-    // 版本列表都拖成错误。
+    // 单个包损坏不在这里上报：损坏的版本包不会被合成进来，于是它只表现为
+    // 「这个版本未就绪」，用户重新构建即可；具体原因由 open_db 记进日志。
+    // 状态查询只回答「哪些版本就绪」，避免一个坏文件把整个版本列表都拖成错误。
     let versions = base
         .versions
         .iter()
@@ -2720,10 +1839,10 @@ pub fn default_minecraft_dir() -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
-/// 扫描 .minecraft 目录里已安装的版本（只读）。
+/// 扫描任意目录（含子目录）里所有能识别的客户端 jar（只读）。
 ///
-/// 结果按数据版本升序；读不出版本信息的 jar 逐条带原因返回，
-/// 由前端决定怎么展示。
+/// 结果按数据版本升序；看着像客户端却读不出版本信息的文件逐条带原因返回，
+/// 由前端决定怎么展示。模组一类没有 `version.json` 的 jar 会被静默跳过。
 #[tauri::command]
 pub fn scan_minecraft(dir: String) -> Result<McScanDto, String> {
     let scan = crate::base_db::scan_minecraft(Path::new(&dir)).map_err(|e| e.to_string())?;
@@ -2886,12 +2005,24 @@ fn setup_one(
         },
     );
     let out = blocks_dir.join(format!("{}-{}.dat.z", v.data_version, v.id));
-    crate::jar_file::build_pack_to(
+    // 中文在资源库里而不在客户端 jar 里，构建时一并带上；找不到就不带，
+    // 构建侧会回落到英文名（比整列没有名字要好）
+    let mc_dir = v
+        .mc_dir
+        .as_ref()
+        .map(PathBuf::from)
+        .or_else(crate::base_db::default_minecraft_dir);
+    let langs = match &mc_dir {
+        Some(dir) => crate::base_db::find_lang_files(dir, &v.id),
+        None => Vec::new(),
+    };
+    crate::jar_file::build_pack_to_with_langs(
         &jar_path.to_string_lossy(),
         &out.to_string_lossy(),
         &v.id,
         v.data_version,
         false,
+        langs,
     )?;
 
     let jar = crate::jar_file::JarFile::open(&jar_path.to_string_lossy())?;

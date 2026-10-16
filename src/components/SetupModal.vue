@@ -1,6 +1,7 @@
 /**
- * 版本库弹窗：定位 .minecraft、扫描已装版本、勾选缺失版本并
- * 下载/构建基础库（方块库 + 实体贴图库）。
+ * 版本库弹窗：选择目录（含子目录）递归扫描其中的客户端 jar 并自动导入，
+ * 也可以勾选清单里没有的版本，经官方接口或 BMCL 镜像联网下载后构建
+ * （方块库 + 实体贴图库）。
  *
  * 基础库不随安装包分发，首次启动库里为空时本界面会自动弹出引导；
  * 之后从工具栏「版本库」按钮再次打开，补充缺失的版本。
@@ -65,8 +66,7 @@ function percentOf(name: string): number | null {
     unmount-on-close
   >
     <div class="hint-dim" style="margin-bottom: 12px">
-      方块库与实体贴图库由本机的客户端 jar 构建：已装的版本直接取用，
-      缺失的可经官方接口或 BMCL 镜像下载客户端后构建。
+      扫描本机该目录下所有可能的资源文件自动导入。也可选择官方接口或BMCL镜像联网下载。
       <template v-if="!entityAvailable && ready.length > 0">
         当前实体贴图库还没建起来，实体预览会缺贴图——重新准备任一版本即可补上。
       </template>
@@ -77,12 +77,12 @@ function percentOf(name: string): number | null {
         v-model="mcDir"
         size="small"
         style="width: 360px"
-        placeholder=".minecraft 目录路径"
+        placeholder="目录路径（含子目录）"
         :disabled="running"
       />
       <a-button size="small" :disabled="running" @click="pickMcDir">浏览…</a-button>
-      <a-button size="small" :loading="scanning" :disabled="running" @click="rescan">
-        扫描
+      <a-button size="small" :loading="scanning" :disabled="running" @click="rescan()">
+        扫描并导入
       </a-button>
       <a-radio-group
         :model-value="source"
@@ -107,12 +107,12 @@ function percentOf(name: string): number | null {
 
     <div class="hint-dim" style="margin-bottom: 10px">
       「官方接口」从 Mojang 下载，国内网络常不通；连不上时换「BMCL 镜像」。
-      已装的版本不消耗下载流量，直接用本地 jar。
+      本机扫到的版本直接导入、不消耗下载流量；勾选框用于清单里没有、要联网下载的版本。
     </div>
 
     <a-alert v-if="scanWarnings.length > 0" type="warning" style="margin-bottom: 10px">
       <template #title>
-        {{ scanWarnings.length }} 个版本目录读不出版本信息，已跳过
+        扫描时有 {{ scanWarnings.length }} 项读不出版本信息，已跳过
       </template>
       <div v-for="w in scanWarnings" :key="w" class="dup-path">{{ w }}</div>
     </a-alert>
@@ -120,6 +120,7 @@ function percentOf(name: string): number | null {
     <a-alert v-if="rows.length === 0" type="normal">正在读取版本库状态…</a-alert>
     <a-table
       v-else
+      class="setup-table"
       :columns="setupColumns"
       :data="rows"
       :pagination="{ pageSize: 10 }"

@@ -1,6 +1,6 @@
 /**
- * 版本库域：「版本库」弹窗的全部状态与动作——定位 .minecraft、
- * 扫描已装版本、勾选缺失版本并下载/构建基础库。
+ * 版本库域：「版本库」弹窗的全部状态与动作——选择目录、递归扫描其中的客户端
+ * jar 并自动导入，以及勾选清单里没有、需要联网下载的版本。
  *
  * 基础库是方块检索与 3D 预览的数据底座：库里一个版本都没有时，
  * 这些功能都无数据可显示，所以启动时发现库为空会自动弹出本界面
@@ -74,8 +74,20 @@ export function createSetupSlice() {
   const progress = ref<Map<string, BaseSetupProgress>>(new Map());
   const outcomes = ref<SetupVersionOutcome[]>([]);
 
-  const rows = computed<SetupRow[]>(() =>
-    supported.value.map((v) => {
+  /** 就绪与已装本机的版本排在前面，其余按数据版本升序。
+   *
+   * 支持的正式版有 49 个，列表很长；用户最常看的是「我已经有哪些」——
+   * 已建好基础库的、以及本机装了可以直接建的。排在前面就不必每次都滚动。
+   * 组内保持数据版本升序：同一组里版本高低的相对顺序仍然可读。
+   */
+  const stateRank: Record<SetupRow["state"], number> = {
+    ready: 0,
+    local: 1,
+    missing: 2,
+  };
+
+  const rows = computed<SetupRow[]>(() => {
+    const list: SetupRow[] = supported.value.map((v): SetupRow => {
       const hit = scanHits.value.get(v.name);
       if (ready.value.some((r) => r.name === v.name)) {
         // 就绪的版本也带上本机 jar：重做某一版本（贴图库缺了、包损坏了）
@@ -90,8 +102,10 @@ export function createSetupSlice() {
       return hit
         ? { name: v.name, dataVersion: v.dataVersion, state: "local", jarPath: hit.jarPath }
         : { name: v.name, dataVersion: v.dataVersion, state: "missing", jarPath: null };
-    }),
-  );
+    });
+    // sort 是稳定的：同组内保持原来的数据版本升序
+    return list.sort((a, b) => stateRank[a.state] - stateRank[b.state]);
+  });
 
   const setupColumns = [
     { title: "", slotName: "check", width: 44 },
@@ -183,11 +197,18 @@ export function createSetupSlice() {
     }
   }
 
-  /** 扫描目录里的已装版本 */
-  async function rescan() {
+  /** 扫描目录里的已装版本。
+   *
+   * 扫描是「找到即导入」：扫出的客户端 jar 直接构建进基础库，随后标记为已就绪，
+   * 用户不必再去勾选。用本地 jar 构建不消耗流量，本来也没有需要用户决定的地方；
+   * 真正需要用户点头的是「联网下载」那一类（清单里没有、本机也没有的版本）。
+   *
+   * 已经在库里的版本不重复构建。
+   */
+  async function rescan(autoImport = true) {
     const dir = mcDir.value.trim();
     if (!dir) {
-      Message.warning("请先填写或选择 .minecraft 目录");
+      Message.warning("请先填写或选择目录");
       return;
     }
     scanning.value = true;
@@ -197,6 +218,15 @@ export function createSetupSlice() {
       scanWarnings.value = r.warnings;
       addLocalToChecked();
       await persistSetupState();
+      const fresh = rows.value.filter(
+        (row) => row.state === "local" && !ready.value.some((x) => x.name === row.name),
+      );
+      if (fresh.length > 0) {
+        Message.info(`发现 ${fresh.length} 个本机版本，正在导入…`);
+      }
+      if (autoImport && fresh.length > 0) {
+        await runFor(fresh);
+      }
     } catch (e) {
       Message.error(`扫描失败：${e}`);
     } finally {
@@ -204,9 +234,9 @@ export function createSetupSlice() {
     }
   }
 
-  /** 手动选择 .minecraft 目录 */
+  /** 手动选择目录 */
   async function pickMcDir() {
-    const dir = await open({ directory: true, multiple: false, title: "选择 .minecraft 目录" });
+    const dir = await open({ directory: true, multiple: false, title: "选择目录" });
     if (typeof dir !== "string" || !dir) return;
     mcDir.value = dir;
     await rescan();
@@ -233,14 +263,13 @@ export function createSetupSlice() {
     }
   }
 
-  /** 开始准备勾选的版本：下载/使用本地 jar 并构建基础库 */
-  async function startSetup() {
-    if (running.value) return;
-    const targets = rows.value.filter((r) => checked.value.has(r.name));
-    if (targets.length === 0) {
-      Message.warning("没有勾选任何待补版本");
-      return;
-    }
+  /** 执行一批版本的补库；返回是否全部就绪。
+   *
+   * 整批补库与「点一个未加载的版本」走的是同一条链路：都从 rows 取状态
+   * （本机已装就用本地 jar，否则下载）、逐版本汇报进度、结束后刷新状态。
+   */
+  async function runFor(targets: SetupRow[]): Promise<boolean> {
+    if (running.value) return false;
     running.value = true;
     outcomes.value = [];
     progress.value = new Map();
@@ -256,13 +285,20 @@ export function createSetupSlice() {
     } catch (e) {
       console.warn("订阅版本库进度事件失败：", e);
     }
+    let allOk = false;
     try {
       const r = await setupAddVersions(
         source.value,
-        targets.map((t) => ({ id: t.name, dataVersion: t.dataVersion, jarPath: t.jarPath })),
+        targets.map((t) => ({
+          id: t.name,
+          dataVersion: t.dataVersion,
+          jarPath: t.jarPath,
+          mcDir: mcDir.value || null,
+        })),
       );
       outcomes.value = r.outcomes;
       const failed = r.outcomes.filter((o) => !o.ok);
+      allOk = r.outcomes.length > 0 && failed.length === 0;
       if (failed.length > 0) {
         Message.warning({
           content: `${r.outcomes.length - failed.length} 个版本已就绪，${failed.length} 个失败（详见弹窗列表）`,
@@ -278,6 +314,42 @@ export function createSetupSlice() {
       unlisten?.();
       running.value = false;
     }
+    return allOk;
+  }
+
+  /** 开始准备勾选的版本：下载/使用本地 jar 并构建基础库 */
+  async function startSetup() {
+    const targets = rows.value.filter((r) => checked.value.has(r.name));
+    if (targets.length === 0) {
+      Message.warning("没有勾选任何待补版本");
+      return;
+    }
+    await runFor(targets);
+  }
+
+  /** 直接准备某一个版本，供「版本转换」窗口点击未加载的版本时调用。
+   *
+   * 与版本库同一套规则：先定位 .minecraft、扫一次本机已装版本，
+   * 本机装了的直接用本地 jar 构建（不花流量），没有的才下载。
+   * 返回该版本最终是否就绪。
+   */
+  async function prepareVersion(name: string): Promise<boolean> {
+    await restoreSetupState();
+    await refreshStatus();
+    if (ready.value.some((r) => r.name === name)) return true;
+    // 本机版本还没扫过就扫一次：本地有就别下载几十 MB 的客户端。
+    // 这里不自动导入其余版本——用户点的是某一个版本，替他顺带导入一批
+    // 不是他要的结果（要整批导入请去「版本库」里扫描）
+    if (mcDir.value && scanHits.value.size === 0) await rescan(false);
+    const row = rows.value.find((r) => r.name === name);
+    if (!row) {
+      Message.error(`版本库里没有 ${name} 这个版本`);
+      return false;
+    }
+    if (row.state === "missing") {
+      Message.info(`${name} 本机没有，开始下载并构建（进度见「版本库」）`);
+    }
+    return await runFor([row]);
   }
 
   onMounted(() => {
@@ -319,6 +391,7 @@ export function createSetupSlice() {
     selectSource,
     openSetup,
     startSetup,
+    prepareVersion,
   };
 }
 

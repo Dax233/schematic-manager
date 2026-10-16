@@ -301,33 +301,35 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
 
   /** 点方块统计表的一行，把它设为替换源。
    *
-   * 表里的行按**物品**合计，可能跨多个方块名（火把与墙上的火把），而替换规则
-   * 在后端是按方块名精确相等匹配的（见 replace.rs 的 matches）。因此：
+   * 表里的行是**物品**行（水折成水桶、门只算下半），而替换规则在后端按方块名
+   * 精确相等匹配（见 replace.rs 的 matches）。因此替换源取这一行的代表状态
+   * 所属的方块名，而不是行名：行名可能是这个投影里根本不存在的物品——库里
+   * 只有墙上的告示牌时，行名是告示牌物品，填进去一条都匹配不上。
    *
-   *   - 只有该行只对应一个方块名、且只有一条状态记录时，才把状态串里的属性
-   *     填进源属性限定；
-   *   - 跨了多个方块名时必须说清只覆盖了哪一个，否则用户会以为「替换整种物品」
-   *     而实际上另一个形态原样不动——这种「看不出来的漏替换」比多替换更难发现。
+   * 两种情况必须说清覆盖范围，否则用户以为「替换整行」而实际只替换了一部分：
+   * 跨多个方块名时（火把与墙上的火把）只覆盖其中一个；合计了多条状态记录时
+   * 不带属性限定。
    */
   function onBlockRowClick(raw: TableData) {
     const rec = raw as unknown as BlockRow;
-    activeBlock.value = { name: rec.name };
-    replaceForm.value.fromName = rec.name;
-    // 状态串形如 minecraft:oak_stairs[facing=east,half=top]，
-    // 方括号内的部分正好可以直接作为源属性限定
+    // 状态串形如 minecraft:oak_stairs[facing=east,half=top]
+    const m = /^([^[\]]+)\[([^\]]*)\]\s*$/.exec(rec.state ?? "");
+    const blockName = m ? m[1] : rec.state;
+    activeBlock.value = { name: blockName };
+    replaceForm.value.fromName = blockName;
     const single = rec.forms.length === 1 && rec.stateCount === 1;
-    const m = single ? /\[(.+)\]$/.exec(rec.state ?? "") : null;
-    replaceForm.value.fromPropsText = m ? m[1] : "";
+    replaceForm.value.fromPropsText = single && m ? m[2] : "";
     if (rec.forms.length > 1) {
-      const others = rec.forms.filter((f) => f !== rec.name);
+      const others = rec.forms.filter((f) => f !== blockName);
       Message.warning(
-        `已设为替换源：${rec.name}。这一行合计了 ${rec.forms.length} 种形态，` +
-          `本条规则只替换 ${rec.name}，不包括 ${others.join("、")}`,
+        `已设为替换源：${blockName}。这一行合计了 ${rec.forms.length} 种形态，` +
+          `本条规则只替换 ${blockName}，不包括 ${others.join("、")}`,
       );
       return;
     }
     Message.info(
-      `已设为替换源：${rec.name}` + (single ? "" : "（不限属性，这一行合计了多个状态）"),
+      `已设为替换源：${blockName}` +
+        (single ? "" : "（不限属性，这一行合计了多个状态）"),
     );
   }
 
@@ -340,8 +342,8 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
     // 而源方块多半是从「方块」页签点行带过来的
     replacePickField.value = "to";
     // 中文名缓存每次打开都作废：方块库可能在本程序运行期间被换掉
-    // （导入资源包后后端每条命令都会重新读库），留着旧结果会让明明能查到的
-    // 方块一直显示「未找到」。顺带清掉还没落地的查询，免得它们写进刚清空的表。
+    // （到「版本库」里补齐或重建版本后，后端每条命令都会重新读库），
+    // 留着旧结果会让明明能查到的方块一直显示「未找到」。
     for (const t of blockZhTimers.values()) clearTimeout(t);
     blockZhTimers.clear();
     blockZh.value = {};
