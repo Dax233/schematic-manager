@@ -516,6 +516,10 @@ pub struct UpdateInfoDto {
     pub published_at: String,
     /// 检测目标仓库，界面直接展示
     pub repo: String,
+    /// 当前版本是否为预览版（版本号带 `-` 后缀）
+    pub current_prerelease: bool,
+    /// 最新发布是否为预览版。界面据此标出性质，由用户自己决定要不要更新
+    pub latest_prerelease: bool,
 }
 
 #[cfg(test)]
@@ -602,13 +606,17 @@ mod tests {
             release_url: "https://github.com/x/y/releases/tag/v0.0.2-dev.6".into(),
             published_at: "2026-10-16T18:27:53Z".into(),
             repo: "heiheids/schematic-manager".into(),
+            current_prerelease: false,
+            latest_prerelease: true,
         };
         let v = serde_json::to_value(&info).unwrap();
         assert_keys(
             &v,
             &[
                 "current",
+                "currentPrerelease",
                 "latest",
+                "latestPrerelease",
                 "tag",
                 "hasUpdate",
                 "releaseUrl",

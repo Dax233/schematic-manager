@@ -2074,10 +2074,15 @@ pub fn check_update() -> Result<UpdateInfoDto, String> {
     let newest = outcome.newest.clone();
     Ok(UpdateInfoDto {
         current: outcome.current.to_string(),
+        current_prerelease: outcome.current.is_prerelease(),
         latest: newest
             .as_ref()
             .map(|r| r.version.to_string())
             .unwrap_or_default(),
+        latest_prerelease: newest
+            .as_ref()
+            .map(|r| r.version.is_prerelease())
+            .unwrap_or(false),
         tag: newest.as_ref().map(|r| r.tag.clone()).unwrap_or_default(),
         has_update: outcome.has_update(),
         release_url: newest.as_ref().map(|r| r.url.clone()).unwrap_or_default(),

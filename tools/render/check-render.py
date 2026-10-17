@@ -344,7 +344,9 @@ SHIM = r"""
       case "app_version": return Promise.resolve("0.0.2");
       case "check_update": return Promise.resolve({
         current: "0.0.2",
+        currentPrerelease: false,
         latest: "0.0.3-dev.1",
+        latestPrerelease: true,
         tag: "v0.0.3-dev.1",
         hasUpdate: true,
         releaseUrl: "https://github.com/heiheids/schematic-manager/releases/tag/v0.0.3-dev.1",

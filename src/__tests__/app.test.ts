@@ -3691,6 +3691,8 @@ describe("更新窗口", () => {
     releaseUrl: "https://github.com/heiheids/schematic-manager/releases/tag/v0.0.3",
     publishedAt: "2026-10-20T10:00:00Z",
     repo: "heiheids/schematic-manager",
+    currentPrerelease: false,
+    latestPrerelease: false,
     ...over,
   });
 
@@ -3744,6 +3746,32 @@ describe("更新窗口", () => {
     const text = document.body.textContent ?? "";
     expect(text).toContain("已是最新");
     expect(text, "不能同时出现「发现新版本」").not.toContain("发现新版本");
+    w.unmount();
+  });
+
+  /** 检测逻辑只取最新，不因性质而跳过；但界面必须把性质说清楚，
+   *  让用户自己决定要不要从正式版跟到预览版。 */
+  it("标出版本性质，交用户自己决定要不要更新", async () => {
+    stubInvoke({
+      app_version: "0.1.0-dev.13",
+      check_update: info({
+        current: "0.1.0-dev.13",
+        currentPrerelease: true,
+        latest: "0.1.0",
+        latestPrerelease: false,
+        tag: "v0.1.0",
+      }),
+    });
+    const w = mountApp();
+    await flushPromises();
+    await openUpdate(w);
+    toolbarButton("检测更新")!.click();
+    await flushPromises();
+
+    const text = document.body.textContent ?? "";
+    expect(text, "当前版本是开发构建，应标为预览版").toContain("预览版");
+    expect(text, "最新发布是正式版，应标为正式版").toContain("正式版");
+    expect(text, "应讲清两者差别并说明由用户决定").toContain("由你决定");
     w.unmount();
   });
 

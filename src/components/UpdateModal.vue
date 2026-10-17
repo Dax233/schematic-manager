@@ -7,6 +7,10 @@
  * 检测结果分四种，分别用不同措辞，避免把「没查到」说成「已是最新」：
  * 有更新 / 已是最新 / 仓库里没有可解析的发布 / 检测失败（附原因）。
  *
+ * 版本性质（正式版／预览版）由后端给出——用的是发布链路判定 GitHub
+ * `prerelease` 标记的同一条规则，界面不自己解析版本号，免得两处各说各话。
+ * 只标出来、不改变检测逻辑：要不要跨性质更新由用户自己决定。
+ *
  * 下载地址与作者主页都交给系统浏览器打开（后端 open_url）。下载地址框点击
  * 即复制——地址通常用来贴给别人，选中再按 Ctrl+C 是多一步。
  */
@@ -29,6 +33,10 @@ const {
 
 /** 作者信息：按用户要求展示 */
 const AUTHOR = "bilibili黑山大叔";
+
+/** 版本性质标签。橙色预览版、绿色正式版，与发布页上的性质一致。 */
+const kindLabel = (prerelease: boolean) => (prerelease ? "预览版" : "正式版");
+const kindColor = (prerelease: boolean) => (prerelease ? "orange" : "green");
 </script>
 
 <template>
@@ -41,7 +49,18 @@ const AUTHOR = "bilibili黑山大叔";
   >
     <div class="about-row">
       <span class="about-row__label">当前版本</span>
-      <span class="about-row__value">{{ currentVersion || "未知" }}</span>
+      <span class="about-row__value">
+        {{ currentVersion || "未知" }}
+        <!-- 检测过才知道当前版本的性质；没检测时不猜 -->
+        <a-tag
+          v-if="updateInfo"
+          :color="kindColor(updateInfo.currentPrerelease)"
+          size="small"
+          style="margin-left: 6px"
+        >
+          {{ kindLabel(updateInfo.currentPrerelease) }}
+        </a-tag>
+      </span>
     </div>
     <div class="about-row">
       <span class="about-row__label">作者</span>
@@ -73,10 +92,27 @@ const AUTHOR = "bilibili黑山大叔";
 
     <template v-else-if="updateInfo">
       <a-alert v-if="updateInfo.hasUpdate" type="success" style="margin-bottom: 8px">
-        发现新版本 {{ updateInfo.latest }}
+        发现新版本
+        <span style="font-weight: 600">{{ updateInfo.latest }}</span>
+        <a-tag
+          :color="kindColor(updateInfo.latestPrerelease)"
+          size="small"
+          style="margin-left: 6px"
+        >
+          {{ kindLabel(updateInfo.latestPrerelease) }}
+        </a-tag>
       </a-alert>
       <a-alert v-else-if="updateInfo.latest" type="info" style="margin-bottom: 8px">
-        已是最新版本（最新发布 {{ updateInfo.latest }}）
+        已是最新版本（最新发布
+        <span style="font-weight: 600">{{ updateInfo.latest }}</span>
+        <a-tag
+          :color="kindColor(updateInfo.latestPrerelease)"
+          size="small"
+          style="margin-left: 6px"
+        >
+          {{ kindLabel(updateInfo.latestPrerelease) }}
+        </a-tag>
+        ）
       </a-alert>
       <!-- 查到了接口、但里面没有可解析的发布，这与「最新」是两回事 -->
       <a-alert v-else type="warning" style="margin-bottom: 8px">
@@ -105,5 +141,11 @@ const AUTHOR = "bilibili黑山大叔";
       <a-button size="small" @click="openReleaseUrl">打开下载地址</a-button>
     </div>
     <div class="hint-dim">点击地址即复制；「打开下载地址」用浏览器打开该页面。</div>
+    <!-- 两种版本的差别只影响「要不要更新」，程序不会自己下载或替换文件；
+         页面上所有版本都能从发布页取到，由用户自行选择。 -->
+    <div class="hint-dim">
+      正式版是发布过的稳定版本；预览版是每次提交后自动构建的开发版本，可能不稳定。
+      要不要更新由你决定，程序不会自动下载。
+    </div>
   </a-modal>
 </template>

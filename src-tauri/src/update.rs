@@ -118,6 +118,14 @@ impl Version {
 
         Some(Version { core, pre })
     }
+
+    /// 是否预览版（带 `-` 后缀，如 `0.1.1-dev.13`）。
+    ///
+    /// 发布链路判定 GitHub 上 `prerelease` 标记用的就是同一条规则，所以界面
+    /// 据此标注「预览版」，与发布页上显示的性质一致，不会各说各话。
+    pub fn is_prerelease(&self) -> bool {
+        self.pre.is_some()
+    }
 }
 
 impl Ord for Version {
@@ -294,6 +302,19 @@ mod tests {
         assert!(v("1.0.0-alpha.beta") < v("1.0.0-beta"));
         assert!(v("1.0.0-beta.2") < v("1.0.0-beta.11"));
         assert!(v("1.0.0-rc.1") < v("1.0.0"));
+    }
+
+    /// 版本性质：带 `-` 后缀的是预览版，纯 x.y.z 的是正式版。
+    ///
+    /// 界面据此标注「预览版／正式版」，让用户自己决定要不要跨性质更新，
+    /// 因此这条判定必须与发布链路一致。
+    #[test]
+    fn prerelease_kind_follows_the_dash_suffix() {
+        assert!(v("0.1.1-dev.13").is_prerelease());
+        assert!(v("v0.0.2-rc.1").is_prerelease());
+        assert!(!v("0.1.0").is_prerelease(), "纯版本号是正式版");
+        assert!(!v("v1.2.3").is_prerelease(), "前导 v 不影响性质");
+        assert!(!v("1.2.3+build.9").is_prerelease(), "构建元数据不是预发布标识");
     }
 
     /// 不合规范的 tag 解析失败，而不是被当成 0.0.0

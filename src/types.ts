@@ -373,4 +373,8 @@ export interface UpdateInfo {
   publishedAt: string;
   /** 检测目标仓库，如 heiheids/schematic-manager */
   repo: string;
+  /** 当前版本是否为预览版（版本号带 `-` 后缀） */
+  currentPrerelease: boolean;
+  /** 最新发布是否为预览版。界面据此标出性质，由用户自己决定要不要更新 */
+  latestPrerelease: boolean;
 }
