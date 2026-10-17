@@ -45,12 +45,12 @@ body,
     width: 18px;
     height: 18px;
     border-radius: 4px;
-    background: rgb(var(--primary-6));
+    // 与程序图标同源的深底。标识不跟随主题主色（品牌标识换了色就不成标识），
+    // 但纯深底在深色主题下会与标题栏背景糊在一起，所以在块外另给一档亮底色。
+    background: #1e293b;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--color-white);
-    font-size: 11px;
   }
 
   &__title {
@@ -81,6 +81,12 @@ body,
       color: var(--color-white);
     }
   }
+}
+
+// 标题栏标识的深色主题底色。必须写在顶层：嵌进 .titlebar 会编译成
+// `.titlebar body[arco-theme='dark'] ...`，永远匹配不到。
+body[arco-theme='dark'] .titlebar__logo {
+  background: #334155;
 }
 
 .workbench {
