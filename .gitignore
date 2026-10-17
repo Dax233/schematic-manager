@@ -59,6 +59,10 @@ build_out.log
 # 其中是测试运行产生的临时文件，不应入库。
 _temp/
 
+# tools/gen_icon.py 输出的图标主图、候选与各档预览：属于生成物，
+# 可由该脚本随时重画。真正进程序的是 src-tauri/icons 下的那一套。
+tools/icons/
+
 
 # Python 编译产物：产生自 legacy-cpp/tools 下的脚本，
 # 属于生成物而非参考源码。
