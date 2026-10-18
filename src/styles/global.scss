@@ -545,10 +545,12 @@ $preview-row-h: $preview-stage-h + 16px;
 
   // 可滚动区：基本信息 + 输入框。内容比行高高时在这里滚，
   // 而不是把下面的控制条顶开（保存按钮因此固定可见，见 &__actions）。
+  // 滚动交给里面的 Arco 无轨道滚动条（见 DetailPanel.vue），这里只给尺寸。
   &__info-body {
     flex: 1 1 auto;
     min-height: 0;
-    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
   }
 
   // 描述框：用户要求「文本框大一些方便多行」，因此给它一个高度下限。
@@ -729,9 +731,10 @@ $preview-row-h: $preview-stage-h + 16px;
 // 说明里可能塞几十个文件名，于是一整块糊在一起，逐条阅读很吃力。
 // 现在时间单独占一列（等宽、固定宽度），动作成标签，细节另起一段正常换行；
 // 条目之间用边框与留白分开。
+//
+// 这里不设 max-height、也不自己滚：两处宿主（备份抽屉的日志页签、日志管理
+// 窗口）都已经把内容包在 Arco 无轨道滚动条里，自带原生滚动条会多出一条。
 .log-list {
-  max-height: 520px;
-  overflow-y: auto;
 
   &__row {
     display: flex;
@@ -862,9 +865,11 @@ $preview-row-h: $preview-stage-h + 16px;
 
   // 覆盖 Arco 的 height:100%：百分比在这条链路上不可靠（见上），
   // 统一交给 flex 决定，否则又会按内容撑开。
+  //
+  // 不再自己滚：方块/实体页签里的表格由 Arco 的滚动容器负责，信息页签的内容
+  // 由 DetailPanel 包在 Arco 无轨道滚动条里，这里留着原生滚动条只会多出一条。
   .arco-tabs-pane {
     height: auto;
-    overflow-y: auto;
   }
 
   // 表格本体：占满剩余高度，滚动交给 Arco 的滚动容器
@@ -1086,11 +1091,13 @@ body[arco-theme='dark'] .dup-chip--suspect {
   min-width: 0;
 }
 
-// 左栏整体可滚：表格不给固定高度，行数多时由这一层滚，
+// 左栏整体可滚：表格不给固定高度，行数多时由 Arco 无轨道滚动条负责滚动，
 // 免得内容被裁掉（表头随之滚走可以接受，行数是分页限定的）
 .conv-split__pane--main {
   flex: 1 1 auto;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .conv-split__pane--pick {
@@ -1098,9 +1105,8 @@ body[arco-theme='dark'] .dup-chip--suspect {
   overflow: hidden;
 }
 
+// 滚动条自己会填满父元素（见上），尺寸写在它的 outer-style 上
 .conv-pick {
-  flex: 1 1 auto;
-  overflow-y: auto;
   border: 1px solid var(--color-border-2);
   border-radius: 2px;
 }

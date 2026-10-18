@@ -81,8 +81,10 @@ const {
         </div>
         <div class="preview__info" v-if="selected">
           <!-- 可编辑区：文件名、投影名称、作者、描述。操作行在它外面，
-               因此内容再长也不会把保存按钮挤出可视范围。 -->
+               因此内容再长也不会把保存按钮挤出可视范围。
+               这一段自己用 Arco 无轨道滚动条滚（见 .preview__info-body 的尺寸）。 -->
           <div class="preview__info-body">
+          <a-scrollbar type="embed" :outer-style="{ flex: '1 1 auto', minHeight: 0 }">
           <!-- 这一栏只放四件事：文件名、投影名称、作者、描述。四者都可编辑。
                前三项按用户要求「名称在左、控件在右」横排；描述是长文本，
                标签留在上方、输入框占满整行。
@@ -133,6 +135,7 @@ const {
               />
             </a-form-item>
             </a-form>
+          </a-scrollbar>
           </div>
           <!-- 操作行钉在面板底部，不随内容一起滚。
                面板高度是固定的（$preview-row-h），不钉住的话保存按钮会
@@ -228,7 +231,9 @@ const {
         <!-- 只读明细。可编辑的元数据（文件名/投影名称/作者/描述）在预览区
              右侧，这里集中放**其余**的详细信息，避免两处重复同一字段。
              制作版本与数据版本分成两项：用户明确列了这两项，
-             合并成「1.20.1（数据版本 3465）」会少一个可扫的标签。 -->
+             合并成「1.20.1（数据版本 3465）」会少一个可扫的标签。
+             明细比页签高时用 Arco 无轨道滚动条滚。 -->
+        <a-scrollbar type="embed" :outer-style="{ flex: '1 1 auto', minHeight: 0 }">
         <a-descriptions
           v-if="selected"
           :column="1"
@@ -277,6 +282,7 @@ const {
           </a-descriptions-item>
         </a-descriptions>
         <a-empty v-else :description="t('detail.empty')" />
+        </a-scrollbar>
 
       </a-tab-pane>
 
