@@ -16,7 +16,7 @@ import { Message } from "@arco-design/web-vue";
 import type { TableColumnData } from "@arco-design/web-vue";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
-import { t } from "../i18n";
+import { displayName, t } from "../i18n";
 import { buildScene, renderBlockIcons } from "../api";
 import type SceneViewer from "../components/SceneViewer.vue";
 import { OffscreenRenderer } from "../render/scene3d";
@@ -106,8 +106,10 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   const sceneInfo = computed(() => {
     if (!scene.value) return "";
     const cur = scene.value;
-    const parts = [`${cur.totalTriangles.toLocaleString()} 个三角形`];
-    if (cur.unresolvedBlocks > 0) parts.push(`${cur.unresolvedBlocks} 种方块无贴图`);
+    const parts = [t("export.triangles", { count: cur.totalTriangles.toLocaleString() })];
+    if (cur.unresolvedBlocks > 0) {
+      parts.push(t("export.unresolved", { count: cur.unresolvedBlocks }));
+    }
     return parts.join("　");
   });
 
@@ -127,12 +129,12 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     let target: unknown;
     try {
       target = await save({
-        title: "导出预览图",
+        title: t("export.previewTitle"),
         defaultPath: `${stem}_preview_${size}.png`,
-        filters: [{ name: "PNG 图片", extensions: ["png"] }],
+        filters: [{ name: t("export.pngFilter"), extensions: ["png"] }],
       });
     } catch (e) {
-      Message.error(`打开保存对话框失败：${e}`);
+      Message.error(t("export.saveDialogFailed", { error: String(e) }));
       return;
     }
     if (typeof target !== "string") return;
@@ -140,11 +142,11 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     exporting.value = true;
     try {
       const bytes = await viewer.value?.exportPng(size);
-      if (!bytes) throw new Error("3D 视图尚未就绪");
+      if (!bytes) throw new Error(t("export.notReady"));
       await writeFile(target, bytes);
-      Message.success(`已导出 ${size}×${size} 预览图`);
+      Message.success(t("export.previewExported", { size }));
     } catch (e) {
-      Message.error(`导出失败：${e}`);
+      Message.error(t("export.failed", { error: String(e) }));
     } finally {
       exporting.value = false;
     }
@@ -153,11 +155,15 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   /** 选择批量导出的目标目录 */
   async function pickExportDir(): Promise<string | null> {
     try {
-      const dir = await open({ directory: true, multiple: false, title: "选择导出目录" });
+      const dir = await open({
+        directory: true,
+        multiple: false,
+        title: t("export.chooseDir"),
+      });
       return typeof dir === "string" ? dir : null;
     } catch (e) {
       // 同其它对话框：失败必须提示，否则用户点了没反应
-      Message.error(`打开目录选择框失败：${e}`);
+      Message.error(t("export.pickDirFailed", { error: String(e) }));
       return null;
     }
   }
@@ -174,7 +180,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   async function exportBatch() {
     const list = s.checkedFiles.value.filter((f) => !f.error);
     if (list.length === 0) {
-      Message.warning("请先勾选要导出的投影文件");
+      Message.warning(t("export.noChecked"));
       return;
     }
     const dir = await pickExportDir();
@@ -207,7 +213,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
       }
     } catch (e) {
       // 离屏渲染器都建不起来（例如 WebGL 上下文耗尽），整批无法进行
-      Message.error(`批量导出失败：${e}`);
+      Message.error(t("export.batchFailed", { error: String(e) }));
       return;
     } finally {
       renderer?.dispose();
@@ -216,10 +222,14 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     }
 
     if (failures.length === 0) {
-      Message.success(`已导出 ${ok} 张 ${size}×${size} 预览图到 ${dir}`);
+      Message.success(t("export.batchDone", { count: ok, size, dir }));
     } else {
       Message.warning({
-        content: `成功 ${ok} 张，失败 ${failures.length} 张：\n${failures.join("\n")}`,
+        content: t("export.batchPartial", {
+          ok,
+          fail: failures.length,
+          list: failures.join("\n"),
+        }),
         duration: 8000,
       });
     }
@@ -419,7 +429,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
         if (gen !== iconGeneration) return;
         // 整批失败通常是方块库出了问题。把这一批标记成已处理，
         // 否则每次翻回这一页都会重试并再弹一次同样的错误。
-        const reason = `渲染方块图失败：${e}`;
+        const reason = t("export.iconRenderFailed", { error: String(e) });
         for (const st of chunk) iconErrors.set(st, reason);
         iconVersion.value += 1;
         Message.error(reason);
@@ -458,9 +468,19 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
    */
   function blockTableText(): string {
     const rows: string[] = [];
-    rows.push(["中文名", "方块ID", "状态", "数量", "堆叠"].join("\t"));
+    rows.push(
+      [
+        t("export.tableName"),
+        t("export.tableId"),
+        t("export.tableState"),
+        t("export.tableCount"),
+        t("export.tableStacks"),
+      ].join("\t"),
+    );
     for (const b of blockRows.value) {
-      const name = (b.zhName || b.enName || "").replace(/[\t\r\n]/g, " ");
+      // 导出的是当前界面语言看得懂的表格，但截断/落盘后语言不会再变，
+      // 所以按导出时的语言取名字
+      const name = displayName(b).replace(/[\t\r\n]/g, " ");
       const state = blockStateText(b).replace(/[\t\r\n]/g, " ");
       rows.push([name, b.name, state, String(b.count), formatStacks(b.count)].join("\t"));
     }
@@ -471,19 +491,21 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   async function exportBlockTable() {
     const blocks = blockRows.value;
     if (blocks.length === 0) {
-      Message.warning("当前没有方块统计可导出");
+      Message.warning(t("export.tableEmpty"));
       return;
     }
+    const stem =
+      s.selected.value?.fileName?.replace(/\.litematic$/i, "") || t("export.tableStem");
     const target = await save({
-      defaultPath: `${s.selected.value?.fileName?.replace(/\.litematic$/i, "") ?? "方块统计"}-方块表.txt`,
-      filters: [{ name: "文本文件", extensions: ["txt"] }],
+      defaultPath: `${stem}${t("export.tableSuffix")}`,
+      filters: [{ name: t("export.textFilter"), extensions: ["txt"] }],
     });
     if (!target) return; // 用户取消
     try {
       await writeFile(target, new TextEncoder().encode(blockTableText()));
-      Message.success(`已导出 ${blocks.length} 行到 ${target}`);
+      Message.success(t("export.tableExported", { count: blocks.length, path: target }));
     } catch (e) {
-      Message.error(`导出失败：${e}`);
+      Message.error(t("export.failed", { error: String(e) }));
     }
   }
 
@@ -491,14 +513,14 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   async function copyBlockTable() {
     const blocks = blockRows.value;
     if (blocks.length === 0) {
-      Message.warning("当前没有方块统计可复制");
+      Message.warning(t("export.tableCopyEmpty"));
       return;
     }
     try {
       await navigator.clipboard.writeText(blockTableText());
-      Message.success(`已复制 ${blocks.length} 行`);
+      Message.success(t("export.tableCopied", { count: blocks.length }));
     } catch (e) {
-      Message.error(`复制失败：${e}`);
+      Message.error(t("export.copyFailed", { error: String(e) }));
     }
   }
 

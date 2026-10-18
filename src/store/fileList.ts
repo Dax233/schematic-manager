@@ -436,7 +436,7 @@ export function createFileListSlice(s: FileListDeps) {
 
   const statusText = computed(() => {
     const n = files.value.length;
-    return n === 0 ? status.value : `${status.value}　共 ${n} 个投影文件`;
+    return n === 0 ? status.value : t("files.statusWithTotal", { status: status.value, count: n });
   });
 
   /// 列表被新的扫描结果替换后，让选中项与新列表保持一致。

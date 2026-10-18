@@ -6,6 +6,8 @@
  * （同步、返回布尔值）。两条都失败就抛出，由调用方如实提示——绝不能悄悄
  * 当成复制成功，那样用户会以为地址已经在剪贴板里了。
  */
+import { t } from "../i18n";
+
 export async function copyText(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
     try {
@@ -16,7 +18,7 @@ export async function copyText(text: string): Promise<void> {
     }
   }
   if (fallbackCopy(text)) return;
-  throw new Error("浏览器拒绝了剪贴板写入");
+  throw new Error(t("common.clipboardDenied"));
 }
 
 /** 兜底方案：临时文本框 + execCommand。 */
