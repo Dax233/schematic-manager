@@ -13,6 +13,7 @@
 import { computed, onMounted, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { open } from "@tauri-apps/plugin-dialog";
+import { t } from "../i18n";
 import {
   baseDbStatus,
   defaultMinecraftDir,
@@ -107,13 +108,14 @@ export function createSetupSlice() {
     return list.sort((a, b) => stateRank[a.state] - stateRank[b.state]);
   });
 
-  const setupColumns = [
+  /** 列定义随界面语言变化，用 computed 包住，切语言后表头跟着变 */
+  const setupColumns = computed(() => [
     { title: "", slotName: "check", width: 44 },
-    { title: "版本", dataIndex: "name", width: 110 },
-    { title: "数据版本", dataIndex: "dataVersion", width: 90 },
-    { title: "状态", slotName: "state", width: 110 },
-    { title: "进度 / 结果", slotName: "result" },
-  ];
+    { title: t("setup.version"), dataIndex: "name", width: 110 },
+    { title: t("setup.dataVersion"), dataIndex: "dataVersion", width: 90 },
+    { title: t("setup.state"), slotName: "state", width: 110 },
+    { title: t("setup.result"), slotName: "result" },
+  ]);
 
   /** 状态刷新后把勾选重置为「本机已装的版本」。
    *
@@ -132,6 +134,19 @@ export function createSetupSlice() {
     if (on) next.add(name);
     else next.delete(name);
     checked.value = next;
+  }
+
+  /** 是否已经全选（列表为空时不算全选，否则按钮一开始就写着「全不选」） */
+  const allChecked = computed(
+    () => rows.value.length > 0 && rows.value.every((r) => checked.value.has(r.name)),
+  );
+
+  /** 全选 / 全不选。
+   *
+   * 全选会把需要联网下载的版本也勾上——那是几十 MB 到 GB 级的任务，因此只在
+   * 用户明确点这个按钮时这么做（默认勾选仍只含本机已装的版本）。 */
+  function setAllChecked(on: boolean) {
+    checked.value = on ? new Set(rows.value.map((r) => r.name)) : new Set();
   }
 
   async function refreshStatus() {
@@ -386,6 +401,8 @@ export function createSetupSlice() {
     rows,
     setupColumns,
     toggleChecked,
+    allChecked,
+    setAllChecked,
     rescan,
     pickMcDir,
     selectSource,

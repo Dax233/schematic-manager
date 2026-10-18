@@ -1,0 +1,72 @@
+/** 界面文案（简体中文）。
+ *
+ * 这里是文案的唯一来源：`en-US.ts` 用 `typeof` 它来声明，少一个键就编译不过，
+ * 因此新增文案必须先加在这里。键按界面分区归组，与组件一一对应，同一个词不
+ * 在多处各写一遍。
+ *
+ * 只有「界面本身的文字」放这里。方块名、实体名这类**显示名称**来自 Minecraft
+ * 客户端 jar 的语言表，不能写死在这里。
+ */
+export default {
+  lang: {
+    label: "语言",
+    zhCN: "简体中文",
+    enUS: "English",
+  },
+  titleBar: {
+    appName: "投影文件管理器",
+  },
+  toolbar: {
+    addDir: "添加目录",
+    loadedDirs: "已加载目录（{count}）",
+    noDirs: "尚未加载任何目录",
+    fileCount: "{count} 个",
+    remove: "移除",
+    removeTitle: "从列表移除该目录（不会删除磁盘上的文件）",
+    searchPlaceholder: "搜索名称/作者/文件名…",
+    replace: "方块替换",
+    convert: "版本转换",
+    duplicates: "重复文件筛查",
+    backups: "备份与日志",
+    setup: "版本库",
+    update: "更新",
+    rmc: "RMC投影站",
+    rmcTitle: "RMC投影站（入口已预留，附加程序接入后可用）",
+    totalFiles: "共 {total} 个投影",
+    matchedFiles: "，匹配 {matched} 个",
+  },
+  app: {
+    splitterAria: "调整目录栏宽度",
+    splitterTitle: "拖动调整宽度，双击复位",
+    selectedFile: "已选：{name}",
+  },
+  setup: {
+    title: "版本库",
+    hint: "扫描本机该目录下所有可能的资源文件自动导入。也可选择官方接口或BMCL镜像联网下载。",
+    entityMissing: "当前实体贴图库还没建起来，实体预览会缺贴图——重新准备任一版本即可补上。",
+    dirPlaceholder: "目录路径（含子目录）",
+    browse: "浏览…",
+    scan: "扫描并导入",
+    sourceOfficial: "官方接口",
+    sourceBmcl: "BMCL 镜像",
+    startSetup: "准备勾选的版本（{count}）",
+    sourceHint:
+      "「官方接口」从 Mojang 下载，国内网络常不通；连不上时换「BMCL 镜像」。本机扫到的版本直接导入、不消耗下载流量；勾选框用于清单里没有、要联网下载的版本。",
+    scanWarnings: "扫描时有 {count} 项读不出版本信息，已跳过",
+    loadingStatus: "正在读取版本库状态…",
+    checkAll: "全选",
+    uncheckAll: "全不选",
+    version: "版本",
+    dataVersion: "数据版本",
+    state: "状态",
+    result: "进度 / 结果",
+    ready: "已就绪",
+    local: "本机已装",
+    missing: "需下载",
+    progressUnknown: "下载中…",
+    progressBuilding: "构建中…",
+  },
+  displayName: {
+    missing: "语言表中没有这一项",
+  },
+};

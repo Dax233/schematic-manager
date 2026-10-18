@@ -9,6 +9,8 @@
  * 2. 跟随系统主题（composables/useTheme）；
  * 3. 目录栏与详情面板之间的拖动条——它同时依赖两侧布局，不属于任何一侧。
  */
+import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import AppToolbar from "./components/AppToolbar.vue";
 import BackupDrawer from "./components/BackupDrawer.vue";
 import ConvertModal from "./components/ConvertModal.vue";
@@ -21,10 +23,16 @@ import TitleBar from "./components/TitleBar.vue";
 import UpdateModal from "./components/UpdateModal.vue";
 import { useTheme } from "./composables/useTheme";
 import { SIDEBAR_MAX_W, SIDEBAR_MIN_W } from "./composables/useSidebarResize";
+import { arcoLocaleOf, currentLocale } from "./i18n";
 import { provideAppStore } from "./store";
 
 // 主题跟随在挂载前启动：它异步读取并订阅系统主题，与状态装配无关
 const { followSystemTheme } = useTheme();
+
+// 语言切换要连 Arco 自己的内置文案（分页、空数据、弹窗按钮）一起换
+const arcoLocale = computed(() => arcoLocaleOf(currentLocale()));
+
+const { t } = useI18n();
 
 const s = provideAppStore();
 
@@ -39,49 +47,51 @@ void followSystemTheme();
 </script>
 
 <template>
-  <div class="app-shell">
-    <TitleBar />
+  <a-config-provider :locale="arcoLocale">
+    <div class="app-shell">
+      <TitleBar />
 
-    <AppToolbar />
+      <AppToolbar />
 
-    <div class="workbench" :class="{ 'is-resizing': resizing }">
-      <DirSidebar />
+      <div class="workbench" :class="{ 'is-resizing': resizing }">
+        <DirSidebar />
 
-      <!-- 拖动条：调整左侧目录栏宽度 -->
-      <div
-        class="splitter"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="调整目录栏宽度"
-        :aria-valuenow="sidebarWidth"
-        :aria-valuemin="SIDEBAR_MIN_W"
-        :aria-valuemax="SIDEBAR_MAX_W"
-        tabindex="0"
-        title="拖动调整宽度，双击复位"
-        @pointerdown="startResize"
-        @dblclick="toggleSidebarWidth"
-        @keydown="onSplitterKey"
-      />
+        <!-- 拖动条：调整左侧目录栏宽度 -->
+        <div
+          class="splitter"
+          role="separator"
+          aria-orientation="vertical"
+          :aria-label="t('app.splitterAria')"
+          :aria-valuenow="sidebarWidth"
+          :aria-valuemin="SIDEBAR_MIN_W"
+          :aria-valuemax="SIDEBAR_MAX_W"
+          tabindex="0"
+          :title="t('app.splitterTitle')"
+          @pointerdown="startResize"
+          @dblclick="toggleSidebarWidth"
+          @keydown="onSplitterKey"
+        />
 
-      <DetailPanel />
+        <DetailPanel />
+      </div>
+
+      <ConvertModal />
+
+      <SetupModal />
+
+      <LogModal />
+
+      <ReplaceModal />
+
+      <UpdateModal />
+
+      <BackupDrawer />
+
+      <div class="statusbar">
+        <span>{{ statusText }}</span>
+        <span class="statusbar__spacer" />
+        <span v-if="selected">{{ t("app.selectedFile", { name: selected.fileName }) }}</span>
+      </div>
     </div>
-
-    <ConvertModal />
-
-    <SetupModal />
-
-    <LogModal />
-
-    <ReplaceModal />
-
-    <UpdateModal />
-
-    <BackupDrawer />
-
-    <div class="statusbar">
-      <span>{{ statusText }}</span>
-      <span class="statusbar__spacer" />
-      <span v-if="selected">已选：{{ selected.fileName }}</span>
-    </div>
-  </div>
+  </a-config-provider>
 </template>

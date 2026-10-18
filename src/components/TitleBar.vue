@@ -10,6 +10,9 @@
  */
 <script setup lang="ts">
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useI18n } from "vue-i18n";
+
+const { t } = useI18n();
 
 const appWindow = getCurrentWindow();
 const minimize = () => appWindow.minimize();
@@ -36,7 +39,7 @@ const close = () => appWindow.close();
         </g>
       </svg>
     </div>
-    <div class="titlebar__title">投影文件管理器</div>
+    <div class="titlebar__title">{{ t("titleBar.appName") }}</div>
     <div class="titlebar__spacer" data-tauri-drag-region />
     <div class="titlebar__btn" @click="minimize">&#x2500;</div>
     <div class="titlebar__btn" @click="toggleMaximize">&#x25A1;</div>

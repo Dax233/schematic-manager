@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import ArcoVue, { Message } from "@arco-design/web-vue";
+import ArcoVueIcon from "@arco-design/web-vue/es/icon";
 
 // Tauri 的全部出口都换掉：测试跑在 jsdom 里，没有 Tauri 运行时。
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -55,6 +56,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "../App.vue";
+import i18n from "../i18n";
 import type { SchematicSummary, SceneData, DuplicateGroup, ConvertItem, BlockCount } from "../types";
 
 const mockInvoke = vi.mocked(invoke);
@@ -116,7 +118,13 @@ const summary: SchematicSummary = {
 
 /** 挂载外壳界面 */
 function mountApp() {
-  return mount(App, { global: { plugins: [ArcoVue] }, attachTo: document.body });
+  // i18n 与图标都是应用级的：main.ts 里一并装上。缺 i18n 时组件里的
+  // useI18n() 会直接抛「Need to install with app.use」；缺图标则只出警告，
+  // 但界面里那些 icon-* 会渲染成空标签，测不到真实结构。
+  return mount(App, {
+    global: { plugins: [ArcoVue, ArcoVueIcon, i18n] },
+    attachTo: document.body,
+  });
 }
 
 /** 一个可用的场景数据，字段与后端 SceneData 对齐 */
@@ -3580,13 +3588,22 @@ describe("版本库", () => {
     const row = [...document.querySelectorAll(".setup-table tbody tr")].find((r) =>
       (r.textContent ?? "").includes("1.21"),
     )!;
-    expect(row.textContent, "文案里的百分比应是真实值").toContain("下载中 9%");
-    // Arco 的 percent 是 0～1 的比例，内部自己乘 100：传成百分数会让条宽变成
-    // 900%、被轨道裁成一整条，文案那边却还是 9%（就是 900% 配 9% 的来源）
+    // 百分比只由进度条自己显示：Arco 的 percent 是 0～1 的比例，内部乘 100
+    const pct = row.querySelector<HTMLElement>(".arco-progress-line-text");
+    expect(pct?.textContent?.trim(), "进度条应显示真实百分比").toBe("9%");
+    // 传成百分数会让条宽变成 900%、被轨道裁成一整条
     const bar = row.querySelector<HTMLElement>(".arco-progress-line-bar");
     expect(bar, "下载阶段应画出进度条").toBeTruthy();
     expect(parseFloat(bar!.style.width), "条宽应等于真实比例").toBeCloseTo(9, 3);
     expect(row.textContent, "不应出现被放大一百倍的百分比").not.toContain("900%");
+
+    // 服务器没给长度时画不出进度条，这时才由文案补一句状态
+    listener!.handler({
+      payload: { id: "1.21", stage: "download", received: 0, total: 0, error: "" },
+    });
+    await flushPromises();
+    expect(row.textContent, "没有总量时说明正在下载").toContain("下载中…");
+    expect(row.querySelector(".arco-progress-line-bar"), "没有总量时不画进度条").toBeNull();
 
     settle({ outcomes: [] });
     await flushPromises();

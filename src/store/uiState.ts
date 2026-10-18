@@ -11,6 +11,7 @@ import { onBeforeUnmount, onMounted, watch } from "vue";
 import type { ComputedRef, Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { loadUiState, saveUiState, scanLitematics } from "../api";
+import { currentLocale, isLocale, locale, setLocale } from "../i18n";
 import { EXPORT_SIZES, VIEW_PRESETS } from "../render/scene3d";
 import type { SchematicSummary } from "../types";
 
@@ -32,6 +33,8 @@ interface UiState {
   brightness: number;
   exportSize: number;
   searchText: string;
+  /** 界面语言；认不出来的值按默认语言处理 */
+  locale?: string;
 }
 
 const UI_STATE_VERSION = 1;
@@ -78,6 +81,7 @@ export function createUiStateSlice(s: UiStateDeps) {
       brightness: s.brightness.value,
       exportSize: s.exportSize.value,
       searchText: s.searchText.value,
+      locale: currentLocale(),
     };
   }
 
@@ -163,6 +167,10 @@ export function createUiStateSlice(s: UiStateDeps) {
     if (typeof st.searchText === "string") {
       s.searchText.value = st.searchText;
     }
+    // 语言先恢复：后面那些提示文案要用它来出
+    if (isLocale(st.locale)) {
+      setLocale(st.locale);
+    }
     // 恢复列宽。只接受正数：0 或负数会让列不可见，损坏的值不该让界面变形
     if (st.columnWidths && typeof st.columnWidths === "object") {
       const clean: Record<string, number> = {};
@@ -212,6 +220,8 @@ export function createUiStateSlice(s: UiStateDeps) {
   watch(s.brightness, persistUiState);
   watch(s.exportSize, persistUiState);
   watch(s.searchText, persistUiState);
+  // 语言也是要记住的界面形态
+  watch(locale, persistUiState);
   // 目录集合变化（添加/移除/勾选）同样要记住
   watch(s.dirItems, persistUiState, { deep: false });
   watch(s.enabledDirs, persistUiState, { deep: false });
