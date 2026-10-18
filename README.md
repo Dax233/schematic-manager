@@ -29,7 +29,7 @@
 方块库与实体贴图库不随安装包分发：首次启动时如果库里一个版本都没有，
 程序会弹出「版本库」引导补齐。它按数据版本逐个构建单版本包，存放在
 应用数据目录的 `base/` 下（Windows 为
-`%APPDATA%\com.heiheids.schematic-manager\base`）。
+`%APPDATA%\io.github.heiheids.schematic-manager\base`）。
 
 补库有两条来源：**本机扫描**（选任意目录，含子目录一起递归搜索其中的客户端
 jar，扫到即自动导入并标为已就绪，不耗流量）与**在线下载**（官方接口或
@@ -66,7 +66,7 @@ BMCLAPI，供清单里没有、本机也没装的版本）。支持补齐的正�
 
 程序启动失败时会在两个位置留一份 `启动失败.log`，并弹出提示窗口：
 
-1. 程序所在目录（例如 `C:\Program Files\投影文件管理器\`）
+1. 程序所在目录（默认 `%LOCALAPPDATA%\schematic-manager\`）
 2. 若上处不可写，则退到系统临时目录
 
 日志里含失败原因、出错位置与程序路径。
@@ -77,7 +77,7 @@ BMCLAPI，供清单里没有、本机也没装的版本）。支持补齐的正�
 遇到这类错误时，多为其用户数据目录损坏，可删除后重试：
 
 ```
-%LOCALAPPDATA%\com.heiheids.schematic-manager
+%LOCALAPPDATA%\io.github.heiheids.schematic-manager
 ```
 
 若仍无法启动，请安装 WebView2 运行时：
@@ -104,6 +104,30 @@ BMCLAPI，供清单里没有、本机也没装的版本）。支持补齐的正�
 - `tools/render/` —— 用无头浏览器渲染构建产物、核对界面确实画得出来
 - `.github/workflows/ci.yml` —— 多平台质量检查、自动构建与发布
 
+## 命名
+
+安装包名、安装目录、可执行文件名与包标识符统一用 ASCII 的
+`schematic-manager`（见 `src-tauri/tauri.conf.json` 的 `productName` 与
+`identifier`）；面向用户的显示名 **投影文件管理器** 由各处单独指定：
+
+- 窗口标题：`tauri.conf.json` 的 `app.windows[0].title`，标题栏另有一份
+- macOS 的 Finder 名称与菜单栏名称：`src-tauri/Info.plist`、
+  `bundle.macOS.bundleName`
+- Linux 桌面项名称：`src-tauri/linux/main.desktop`
+- 启动失败提示：`src-tauri/src/startup.rs`
+
+Windows 上不额外指定：安装器把开始菜单与桌面快捷方式、以及「应用和功能」
+里的名称全部取自 `productName`，Tauri 没有把它们与其分开的配置项，因此这些
+位置显示的是 `schematic-manager`；窗口标题与界面里的文字仍是中文。
+
+Linux 上 deb 与 rpm 都用 `src-tauri/linux/main.desktop` 作为桌面项模板；
+AppImage 没有对应的模板配置项，若打出 AppImage，应用菜单里显示的是
+`schematic-manager`。
+
+包标识符与 `productName` 同时变更会让系统把新版本视为另一个应用：Windows 上
+旧的安装不再被识别为可升级（卸载项与安装目录都换了名字），升级前需要先卸载
+旧版本；应用数据目录由程序在启动时自动搬迁。
+
 ## 构建
 
 需要 Node.js（含 pnpm）与 Rust 工具链。
@@ -122,10 +146,11 @@ pnpm tauri build      # 按 tauri.conf.json 的 targets 打包
 它会在编译前先跑 `beforeBuildCommand`（`pnpm build`）并把 `frontendDist`
 打进二进制。这是我实际踩过的坑。
 
-另外 `pnpm tauri build` 会按 `targets: "all"` 试所有格式，其中 **MSI 在
-中文 `productName` 下必然失败**：MSI 数据库代码页默认 1252（en-US），
-写不进中文，WiX 报 `LGHT0311`。CI 只用 `nsis`，因此正式发布不受影响；
-本地要出包就走 `pnpm app:build`（等价于 `tauri build --bundles nsis`）。
+另外 `pnpm tauri build` 会按 `targets: "all"` 试所有格式。MSI 曾经必然失败：
+productName 是中文时，WiX 的 light.exe 按 `SummaryCodepage`（en-US，1252）
+编码 `Product/@Name`，报 `LGHT0311`。productName 改成 ASCII 之后 MSI 实测能
+产出，但发布链路还没把 `.msi` 纳入产物分类，所以 CI 仍只用 `nsis`；本地要出
+与 CI 一致的包就走 `pnpm app:build`（等价于 `tauri build --bundles nsis`）。
 
 前端类型检查、单元测试与构建：
 

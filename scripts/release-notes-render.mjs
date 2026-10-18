@@ -5,12 +5,12 @@
  * scripts/release-notes-render.test.mjs（测试）共用。
  *
  * 产物名由 tauri-action 按 Tauri 原生命名直传，形如：
- *   投影文件管理器_0.0.1-dev.42_x64-setup.exe   （Windows NSIS）
- *   schematic-manager_0.0.1_amd64.deb           （Linux deb）
- *   投影文件管理器_0.0.1_aarch64.dmg            （macOS dmg）
- * 前缀因打包器而异（NSIS/dmg 用 productName，deb 用 Cargo 包名），
- * 且 productName 是中文，因此分类只按**后缀**匹配，不依赖前缀。
- * 下载链接必须 encodeURIComponent：资产名含中文，不转义会拼出非法 URL。
+ *   schematic-manager_0.1.1-dev.42_x64-setup.exe   （Windows NSIS）
+ *   schematic-manager_0.1.1_amd64.deb              （Linux deb）
+ *   schematic-manager_0.1.1_aarch64.dmg            （macOS dmg）
+ * 前缀取自 tauri.conf.json 的 productName，改名字时前缀跟着变，
+ * 因此分类只按**后缀**匹配，不依赖前缀。
+ * 下载地址用 encodeURIComponent 转义资产名，保证拼出的是合法 URL。
  */
 
 /**
