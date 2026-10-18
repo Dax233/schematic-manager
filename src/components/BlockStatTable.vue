@@ -4,10 +4,17 @@
  * 列宽拖动、分页图标懒加载、点行填入替换规则这三件事都只服务于这张表，
  * 独立成组件后详情面板不用背这些细节。状态在 store/scenePreview.ts，
  * 点行的回填动作在 store/blockReplace.ts（onBlockRowClick）。
+ *
+ * 名字列显示的是「显示名称」：后端同时给出中英两套（取自 Minecraft 语言表），
+ * 这里按当前界面语言取一套，缺那套就退另一套并标灰说明。
  */
 <script setup lang="ts">
+import { useI18n } from "vue-i18n";
+import { displayName, isFallbackName } from "../i18n";
 import { useAppStore } from "../store";
 import { formatStacks } from "../utils/format";
+
+const { t } = useI18n();
 
 const {
   analysis,
@@ -33,26 +40,32 @@ const {
     <template v-if="analysis">
       <div class="block-head">
         <a-space :size="16">
-          <span>非空气方块：<b>{{ analysis.nonAirTotal }}</b></span>
-          <span>空气方块：<b>{{ analysis.airTotal }}</b></span>
-          <span>方块种类：<b>{{ analysis.distinctBlockTypes }}</b></span>
-          <span>状态种类：<b>{{ analysis.distinctStates }}</b></span>
+          <!-- 统计数字要加粗，而冒号在两种语言里宽度不同，因此整句走 i18n-t -->
+          <i18n-t keypath="stats.nonAir" tag="span">
+            <template #value><b>{{ analysis.nonAirTotal }}</b></template>
+          </i18n-t>
+          <i18n-t keypath="stats.air" tag="span">
+            <template #value><b>{{ analysis.airTotal }}</b></template>
+          </i18n-t>
+          <i18n-t keypath="stats.blockKinds" tag="span">
+            <template #value><b>{{ analysis.distinctBlockTypes }}</b></template>
+          </i18n-t>
+          <i18n-t keypath="stats.stateKinds" tag="span">
+            <template #value><b>{{ analysis.distinctStates }}</b></template>
+          </i18n-t>
         </a-space>
         <span class="preview__spacer" />
-        <a-button size="mini" @click="copyBlockTable">复制表格</a-button>
-        <a-button size="mini" @click="exportBlockTable">导出表格</a-button>
+        <a-button size="mini" @click="copyBlockTable">{{ t("stats.copyTable") }}</a-button>
+        <a-button size="mini" @click="exportBlockTable">{{ t("stats.exportTable") }}</a-button>
         <a-button
           size="mini"
-          title="把各列宽度恢复为默认"
+          :title="t('stats.resetWidthsTitle')"
           @click="resetBlockColumnWidths"
         >
-          列宽复位
+          {{ t("stats.resetWidths") }}
         </a-button>
       </div>
-      <div class="hint-dim" style="margin-bottom: 6px">
-        数量按建造所需的物品折算：水与岩浆只算源头一个桶、门与床只算一次、双层台阶算两个，
-        摆法差异（墙上的火把等）与同一物品合为一行；点击任意行可以把它设为方块替换的源方块，表头可拖动调整列宽
-      </div>
+      <div class="hint-dim" style="margin-bottom: 6px">{{ t("stats.hint") }}</div>
       <a-table
         :key="blockTableKey"
         class="block-table"
@@ -72,29 +85,33 @@ const {
             v-if="iconOf(record.state)"
             class="block-icon"
             :src="iconOf(record.state)"
-            :alt="record.zhName || record.name"
-            :title="record.zhName || record.name"
+            :alt="displayName(record) || record.name"
+            :title="displayName(record) || record.name"
           />
           <!-- 画不出来时说清楚原因，而不是留一个让人以为是加载慢的空位 -->
           <span
             v-else-if="iconErrorOf(record.state)"
             class="block-icon block-icon--failed"
             :title="iconErrorOf(record.state)"
-            >无图</span
+            >{{ t("stats.noIcon") }}</span
           >
         </template>
-        <template #zhName="{ record }">
-          <span v-if="record.zhName">{{ record.zhName }}</span>
-          <span v-else class="hint-dim" :title="record.enName || '语言表中没有这一项'">
-            {{ record.enName || "—" }}
+        <template #display="{ record }">
+          <span
+            v-if="displayName(record)"
+            :class="{ 'hint-dim': isFallbackName(record) }"
+            :title="isFallbackName(record) ? t('displayName.missing') : undefined"
+          >
+            {{ displayName(record) }}
           </span>
+          <span v-else class="hint-dim" :title="t('displayName.missing')">—</span>
         </template>
         <template #stacks="{ record }">{{ formatStacks(record.count) }}</template>
         <!-- 合并显示的行写明合并了多少种状态：那一行的数量是所有状态的总和，
-             只写一个代表状态会让人以为「只有这么多是那个状态的」 -->
+              只写一个代表状态会让人以为「只有这么多是那个状态的」 -->
         <template #state="{ record }">{{ blockStateText(record) }}</template>
       </a-table>
     </template>
-    <a-empty v-else description="选择投影文件后显示方块统计" />
+    <a-empty v-else :description="t('stats.noBlocks')" />
   </a-spin>
 </template>

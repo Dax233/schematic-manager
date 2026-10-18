@@ -4047,3 +4047,76 @@ describe("界面语言", () => {
     w.unmount();
   });
 });
+
+/** 显示名称：方块名分中英两套（取自 Minecraft 语言表），界面用哪种语言就显示哪一套 */
+describe("方块显示名称", () => {
+  // 语言是全局单例，用例跑完必须还原
+  afterEach(() => {
+    setLocale("zh-CN");
+  });
+
+  async function selectWithBlocks(blocks: BlockCount[]) {
+    stubInvoke({
+      analyze_schematic: {
+        blocks,
+        entities: [],
+        tileEntities: [],
+        entityInstances: [],
+        nonAirTotal: 0,
+        airTotal: 0,
+        distinctBlockTypes: 1,
+        distinctStates: blocks.length,
+      },
+    });
+    mockOpen.mockResolvedValue("/p");
+    const w = mountApp();
+    await flushPromises();
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+    return w;
+  }
+
+  /** 方块表第 1 列（0 是渲染图）的名字 */
+  function nameCells(w: ReturnType<typeof mountApp>) {
+    return w
+      .findAll(".block-table tbody tr")
+      .map((r) => (r.findAll("td")[1]?.text() ?? "").trim());
+  }
+
+  it("中文界面显示中文名，切到英语后改显示英文名", async () => {
+    const w = await selectWithBlocks([
+      { name: "minecraft:stone", state: "minecraft:stone", count: 10, zhName: "石头", enName: "Stone" },
+      {
+        name: "minecraft:oak_log",
+        state: "minecraft:oak_log[axis=y]",
+        count: 3,
+        zhName: "橡木原木",
+        enName: "Oak Log",
+      },
+    ]);
+    expect(nameCells(w), "中文界面应显示中文名").toEqual(["石头", "橡木原木"]);
+
+    setLocale("en-US");
+    await flushPromises();
+    expect(nameCells(w), "英语界面应改显示英文名").toEqual(["Stone", "Oak Log"]);
+    w.unmount();
+  });
+
+  it("当前语言缺这套名字时退回另一套并标灰", async () => {
+    const w = await selectWithBlocks([
+      {
+        name: "minecraft:mystery",
+        state: "minecraft:mystery",
+        count: 1,
+        zhName: "",
+        enName: "Mystery Block",
+      },
+    ]);
+    const cell = w.findAll(".block-table tbody tr")[0].findAll("td")[1];
+    expect(cell.text(), "缺中文名时退回英文名").toContain("Mystery Block");
+    expect(cell.find(".hint-dim").exists(), "退回的名字要标灰说明").toBe(true);
+    w.unmount();
+  });
+});

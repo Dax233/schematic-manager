@@ -16,6 +16,7 @@ import { Message } from "@arco-design/web-vue";
 import type { TableColumnData } from "@arco-design/web-vue";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
+import { t } from "../i18n";
 import { buildScene, renderBlockIcons } from "../api";
 import type SceneViewer from "../components/SceneViewer.vue";
 import { OffscreenRenderer } from "../render/scene3d";
@@ -236,14 +237,16 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
    * Arco 判定 resizable 要求 `index2 < row.length - 1`（table.js:1247），
    * 否则最后一列永远没有拖动手柄。这里同样补一个 1px 占位列。
    */
-  const blockColumns: TableColumnData[] = [
-    { title: "渲染图", slotName: "icon", width: 60 },
-    { title: "中文名", slotName: "zhName", width: 150, ellipsis: true, tooltip: true },
-    { title: "方块", dataIndex: "name", ellipsis: true, tooltip: true },
+  /** 列定义随界面语言变化，用 computed 包住，切语言后表头跟着变。
+   *  名字列走展示插槽：显示哪一套名字由界面语言决定，后端两套都给了。 */
+  const blockColumns = computed<TableColumnData[]>(() => [
+    { title: t("stats.icon"), slotName: "icon", width: 60 },
+    { title: t("displayName.column"), slotName: "display", width: 150, ellipsis: true, tooltip: true },
+    { title: t("stats.block"), dataIndex: "name", ellipsis: true, tooltip: true },
     // 状态走插槽：合并显示的行要写「含 N 种状态」而不是某一个代表状态
-    { title: "状态", dataIndex: "state", slotName: "state", ellipsis: true, tooltip: true },
-    { title: "数量", dataIndex: "count", width: 90 },
-    { title: "堆叠", slotName: "stacks", width: 110 },
+    { title: t("stats.state"), dataIndex: "state", slotName: "state", ellipsis: true, tooltip: true },
+    { title: t("stats.count"), dataIndex: "count", width: 90 },
+    { title: t("stats.stacks"), slotName: "stacks", width: 110 },
     {
       title: "",
       dataIndex: "__block_filler",
@@ -251,7 +254,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
       headerCellClass: "block__filler-col",
       bodyCellClass: "block__filler-col",
     },
-  ];
+  ]);
 
   /** 方块栏列宽：由用户拖动表头调整，与侧栏同一套做法。
    *
@@ -269,7 +272,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
 
   /** 实际渲染用的方块栏列：把用户调整过的宽度套回去，并让最后一列可拖 */
   const blockTableColumns = computed<TableColumnData[]>(() =>
-    blockColumns.map((c) => {
+    blockColumns.value.map((c) => {
       const key = String(c.dataIndex ?? "");
       const w = key ? blockColWidths.value[key] : undefined;
       return w ? { ...c, width: w } : c;
@@ -367,9 +370,11 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
    */
   function blockStateText(row: BlockRow): string {
     if (row.forms.length > 1) {
-      return `（含 ${row.forms.length} 种形态、共 ${row.stateCount} 种状态）`;
+      return t("stats.mergedForms", { forms: row.forms.length, states: row.stateCount });
     }
-    return row.stateCount > 1 ? `（含 ${row.stateCount} 种状态）` : row.state;
+    return row.stateCount > 1
+      ? t("stats.mergedStates", { states: row.stateCount })
+      : row.state;
   }
 
   /** 状态键 → data URL。用普通 Map 而不是 reactive：
@@ -497,12 +502,18 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     }
   }
 
-  /** 实体栏列。与方块栏同理：中文名在前，ID 保留。 */
-  const entityColumns: TableColumnData[] = [
-    { title: "中文名", slotName: "zhName", width: 150, ellipsis: true, tooltip: true },
-    { title: "实体ID", dataIndex: "id" },
-    { title: "数量", dataIndex: "count", width: 90 },
-  ];
+  /** 实体栏列。与方块栏同理：名字列在前，ID 保留。 */
+  const entityColumns = computed<TableColumnData[]>(() => [
+    {
+      title: t("displayName.column"),
+      slotName: "display",
+      width: 150,
+      ellipsis: true,
+      tooltip: true,
+    },
+    { title: t("stats.entityId"), dataIndex: "id" },
+    { title: t("stats.count"), dataIndex: "count", width: 90 },
+  ]);
 
   return {
     viewer,
