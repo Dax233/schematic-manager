@@ -2,11 +2,18 @@
  * 备份与日志抽屉：备份清单（还原/删除）与全局操作日志两个页签。
  *
  * 状态与动作都在 store/backups.ts，这里只做展示与触发。
+ *
+ * 抽屉本身仍然贴满右侧整高——它是从边缘滑出的面板，收窄上下边距反而不像抽屉；
+ * 需要滚动的是内容区：操作日志可以很长，放在 Arco 的无轨道滚动条里。
  */
 <script setup lang="ts">
+import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { useAppStore } from "../store";
 import OperationLogList from "./OperationLogList.vue";
 import { formatSize } from "../utils/format";
+
+const { t } = useI18n();
 
 const {
   selected,
@@ -22,31 +29,34 @@ const {
   onRestore,
   onDelete,
 } = useAppStore();
+
+/** 列定义随语言变化，写在这里而不是常量里 */
+const columns = computed(() => [
+  { title: t("backup.colTime"), slotName: "time", width: 170 },
+  { title: t("backup.colOp"), dataIndex: "op", width: 110 },
+  { title: t("backup.colSize"), slotName: "size", width: 90 },
+  { title: t("backup.colAct"), slotName: "act", width: 150 },
+]);
 </script>
 
 <template>
   <a-drawer
     v-model:visible="backupOpen"
-    title="备份与日志"
+    :title="t('backup.title')"
     :width="620"
     :footer="false"
     unmount-on-close
   >
     <a-tabs default-active-key="backups">
-      <a-tab-pane key="backups" :title="`备份（${backups.length}）`">
+      <a-tab-pane key="backups" :title="t('backup.tabBackups', { count: backups.length })">
         <a-space style="margin-bottom: 8px">
-          <a-button size="small" @click="refreshBackups">刷新</a-button>
+          <a-button size="small" @click="refreshBackups">{{ t("backup.refresh") }}</a-button>
           <span v-if="selected" class="hint-dim">
-            仅显示「{{ selected.fileName }}」的备份
+            {{ t("backup.onlyFor", { name: selected.fileName }) }}
           </span>
         </a-space>
         <a-table
-          :columns="[
-            { title: '时间', slotName: 'time', width: 170 },
-            { title: '操作', dataIndex: 'op', width: 110 },
-            { title: '大小', slotName: 'size', width: 90 },
-            { title: '操作', slotName: 'act', width: 150 },
-          ]"
+          :columns="columns"
           :data="backups"
           :loading="backupLoading"
           :pagination="{ pageSize: 12 }"
@@ -57,30 +67,35 @@ const {
           <template #size="{ record }">{{ formatSize(record.size) }}</template>
           <template #act="{ record }">
             <a-space>
-              <a-link :disabled="!selected" @click="onRestore(record)">还原</a-link>
-              <a-popconfirm content="删除后无法恢复，确认删除？" @ok="onDelete(record)">
-                <a-link status="danger">删除</a-link>
+              <a-link :disabled="!selected" @click="onRestore(record)">
+                {{ t("backup.restore") }}
+              </a-link>
+              <a-popconfirm :content="t('backup.deleteConfirm')" @ok="onDelete(record)">
+                <a-link status="danger">{{ t("backup.delete") }}</a-link>
               </a-popconfirm>
             </a-space>
           </template>
           <template #empty>
-            <a-empty :description="selected ? '该文件暂无备份' : '请先选择一个投影文件'" />
+            <a-empty :description="selected ? t('backup.noBackups') : t('backup.pickFile')" />
           </template>
         </a-table>
       </a-tab-pane>
 
-      <a-tab-pane key="logs" title="操作日志">
+      <a-tab-pane key="logs" :title="t('backup.tabLogs')">
         <a-space style="margin-bottom: 8px">
-          <a-button size="small" @click="refreshLogs">刷新</a-button>
+          <a-button size="small" @click="refreshLogs">{{ t("backup.refresh") }}</a-button>
           <!-- 日志管理窗口（清空、打开日志目录）从这里进：它原先挂在资源包
                管理窗口上，那个窗口已移除；日志属于备份与运维这条线，放在
                同一条操作日志页签里最顺手 -->
-          <a-button size="small" @click="openLogs">日志管理</a-button>
+          <a-button size="small" @click="openLogs">{{ t("backup.logManage") }}</a-button>
         </a-space>
-        <a-spin :loading="logLoading" style="width: 100%">
-          <a-empty v-if="logs.length === 0" description="暂无日志" />
-          <OperationLogList v-else :lines="logs" />
-        </a-spin>
+        <!-- 日志可能很长：内容区自己滚（Arco 无轨道滚动条） -->
+        <a-scrollbar type="embed" style="max-height: calc(100vh - 220px); overflow: auto">
+          <a-spin :loading="logLoading" style="width: 100%">
+            <a-empty v-if="logs.length === 0" :description="t('log.empty')" />
+            <OperationLogList v-else :lines="logs" />
+          </a-spin>
+        </a-scrollbar>
       </a-tab-pane>
     </a-tabs>
   </a-drawer>
