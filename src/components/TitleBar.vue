@@ -1,8 +1,11 @@
 /**
- * 自定义标题栏：应用标识 + 窗口控制按钮（最小化/最大化/关闭）。
+ * 自定义标题栏：应用标识 + 界面语言切换 + 窗口控制按钮（最小化/最大化/关闭）。
  *
  * 窗口外壳行为，与业务状态无关，因此直接在这里调 Tauri 窗口 API，
  * 不进 store。拖动区由 data-tauri-drag-region 标记，交给系统处理。
+ *
+ * 语言切换放在这里而不是工具条：工具条有十来个按钮，实测约需 1650px，
+ * 窗口最小宽度却是 1400，放最右侧会被挤出可视范围；标题栏右侧始终有空位。
  *
  * 左上角的标识与程序图标同源：深色圆角方块 + 青色等轴测立方体 + 四角选中括号。
  * 用内联 SVG 而不是图片，是为了任意缩放都清晰、也不额外引入资源文件；坐标按
@@ -11,6 +14,7 @@
 <script setup lang="ts">
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useI18n } from "vue-i18n";
+import { LOCALES, currentLocale, setLocale } from "../i18n";
 
 const { t } = useI18n();
 
@@ -18,6 +22,11 @@ const appWindow = getCurrentWindow();
 const minimize = () => appWindow.minimize();
 const toggleMaximize = () => appWindow.toggleMaximize();
 const close = () => appWindow.close();
+
+/** 当前语言的按钮文字：认不出来的语言取清单里第一项，与 i18n 的回落一致 */
+function currentLabelKey(): string {
+  return LOCALES.find((item) => item.locale === currentLocale())!.labelKey;
+}
 </script>
 
 <template>
@@ -41,6 +50,24 @@ const close = () => appWindow.close();
     </div>
     <div class="titlebar__title">{{ t("titleBar.appName") }}</div>
     <div class="titlebar__spacer" data-tauri-drag-region />
+    <!-- 语言切换：界面右上角。按钮不带 data-tauri-drag-region，
+         因此点它不会变成拖动窗口 -->
+    <a-dropdown class="titlebar__lang" trigger="click" position="br">
+      <a-button size="mini" type="text" :title="t('lang.label')">
+        <icon-language />
+        {{ t(currentLabelKey()) }}
+      </a-button>
+      <template #content>
+        <a-doption
+          v-for="item in LOCALES"
+          :key="item.locale"
+          :value="item.locale"
+          @click="setLocale(item.locale)"
+        >
+          {{ t(item.labelKey) }}
+        </a-doption>
+      </template>
+    </a-dropdown>
     <div class="titlebar__btn" @click="minimize">&#x2500;</div>
     <div class="titlebar__btn" @click="toggleMaximize">&#x25A1;</div>
     <div class="titlebar__btn is-close" @click="close">&#x2715;</div>

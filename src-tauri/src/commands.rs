@@ -747,12 +747,15 @@ fn convert_items_with_zh(
 
 /// 按给定顺序在各语言表里查名字，全都没查到时退回不带命名空间的方块名。
 ///
-/// 中英两套都要给：界面按当前语言取一套，只给一套会让另一种语言的界面
-/// 显示错语言的名字。`want_en` 决定先取哪一套，缺了就退另一套。
+/// 中英两套都要给：界面按当前语言取一套，缺哪套就退回另一套并标注
+/// 「语言表中没有这一项」，与方块表、实体表的行为一致——两边不一致时，
+/// 同一个方块在「方块」页签标灰、在版本转换窗口却不标，用户无从判断。
 ///
-/// 顺序表而不是单个表：源方块在两个版本的语言表里可能只有一边有条目。
-/// 最后那次回退不能省——查不到时返回空串会让界面上的名字一栏莫名留白，
-/// 用户分不清是「这个方块没有名字」还是「界面坏了」。
+/// 顺序表而不是单个表：源方块在两个版本的语言表里可能只有一边有条目，
+/// 因此**必须把表找完**再决定要不要退回空串。
+///
+/// 只有整张表里都没有这个方块时才退回不带命名空间的方块名：那种情况下
+/// 界面无从判断它是缺名字还是坏了，给一个能认的 ID 比留白有用。
 fn name_from_tables(
     name: &str,
     tables: &[&std::collections::HashMap<String, (String, String)>],
@@ -761,6 +764,8 @@ fn name_from_tables(
     if name.is_empty() {
         return String::new();
     }
+    // 认得出这个方块、但缺想要的那种语言的名字
+    let mut known_without_wanted = false;
     for t in tables {
         if let Some((zh, en)) = t.get(name) {
             let (first, second) = if want_en { (en, zh) } else { (zh, en) };
@@ -768,9 +773,12 @@ fn name_from_tables(
                 return first.clone();
             }
             if !second.is_empty() {
-                return second.clone();
+                known_without_wanted = true;
             }
         }
+    }
+    if known_without_wanted {
+        return String::new();
     }
     name.split_once(':').map(|(_, n)| n.to_string()).unwrap_or_else(|| name.to_string())
 }
@@ -1302,8 +1310,11 @@ mod tests {
         assert_eq!(out[0].name_en, "Oak Stairs", "英文名也要一并给出，供英语界面用");
         assert_eq!(out[0].suggested_zh, "苍白橡木楼梯");
         assert_eq!(out[0].suggested_en, "Pale Oak Stairs");
-        assert_eq!(out[1].name_zh, "Old Block", "缺中文名应退回英文名");
-        assert_eq!(out[1].name_en, "Old Block", "缺英文名时两套取到的是同一个值");
+        assert_eq!(
+            out[1].name_zh, "",
+            "缺中文名时留空，由界面退回英文名并标注缺项，与方块表一致"
+        );
+        assert_eq!(out[1].name_en, "Old Block", "这一套名字本身是有的");
         assert_eq!(out[1].suggested_zh, "", "没有推荐时中文名必须为空");
         assert_eq!(out[1].suggested_en, "", "没有推荐时英文名必须为空");
         assert_eq!(out[2].name_zh, "unknown_thing", "查不到应退回方块名而不是空串");

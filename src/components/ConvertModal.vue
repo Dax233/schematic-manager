@@ -17,7 +17,7 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { TableData } from "@arco-design/web-vue";
 import { Message } from "@arco-design/web-vue";
-import { displayName } from "../i18n";
+import { displayName, isFallbackName } from "../i18n";
 import { useAppStore } from "../store";
 import type { ConvertItem } from "../types";
 
@@ -189,6 +189,11 @@ function sourceName(rec: ConvertItem): string {
   return displayName({ zhName: rec.nameZh, enName: rec.nameEn }) || rec.name;
 }
 
+/** 这一项缺当前语言那一套名字（显示名称是退回另一种语言来的） */
+function nameIsFallback(rec: ConvertItem): boolean {
+  return isFallbackName({ zhName: rec.nameZh, enName: rec.nameEn });
+}
+
 /** 替代品那一栏要显示的显示名称。
  *
  * 三种情况必须分开：查到名字、查过但库里没有、还没查完。
@@ -275,9 +280,15 @@ function replName(rec: ConvertItem): string {
             >
               <template #from="{ record }">
                 <div class="conv-block">
-                  <!-- 名字由后端随分析结果给出，正常不会有空值（查不到时
-                       退回去命名空间的方块名），因此不再写「没有这个名字」的兜底 -->
-                  <span class="conv-block__zh">{{ sourceName(record) }}</span>
+                  <!-- 名字由后端随分析结果给出。当前语言缺这一项时退回另一种语言，
+                       并标灰说明——与「方块」页签里的处理一致，否则同一个方块
+                       在页签里标灰、在这里不标，用户无从判断 -->
+                  <span
+                    :class="{ 'hint-dim': nameIsFallback(record) }"
+                    :title="nameIsFallback(record) ? t('displayName.missing') : undefined"
+                  >
+                    {{ sourceName(record) }}
+                  </span>
                   <span class="conv-block__id">{{ record.name }}</span>
                 </div>
               </template>

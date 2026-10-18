@@ -1,12 +1,15 @@
 /**
  * 顶部工具条：目录管理（添加/已加载下拉/移除）、搜索、
- * 以及各功能弹窗的入口按钮；最右侧是界面语言切换。
+ * 以及各功能弹窗的入口按钮。
  *
  * 只负责把操作转发给 store 各域；按钮的禁用/加载态也从 store 读。
+ *
+ * 语言切换不在这里：这一行有十来个按钮，实测按内容排下来约需 1650px，
+ * 而窗口最小宽度是 1400（默认 1640），放在最右侧会被挤出可视范围。
+ * 它改放在标题栏右上角（见 TitleBar.vue），那里始终有空位。
  */
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import { LOCALES, currentLocale, setLocale } from "../i18n";
 import { useAppStore } from "../store";
 
 const { t } = useI18n();
@@ -31,11 +34,6 @@ const {
   openSetup,
   openUpdate,
 } = useAppStore();
-
-/** 当前语言的按钮文字：认不出来的语言取清单里第一项，与 i18n 的回落一致 */
-function currentLabelKey(): string {
-  return LOCALES.find((item) => item.locale === currentLocale())!.labelKey;
-}
 </script>
 
 <template>
@@ -86,7 +84,7 @@ function currentLabelKey(): string {
       v-model="searchText"
       size="small"
       :placeholder="t('toolbar.searchPlaceholder')"
-      style="width: 240px"
+      class="toolbar__search"
       allow-clear
     />
     <a-button size="small" :disabled="!selected" @click="openReplace">
@@ -111,27 +109,10 @@ function currentLabelKey(): string {
          跟踪方式：随附加程序的开发进度一并处理，仓库内暂无对应任务号。 -->
     <a-button size="small" :title="t('toolbar.rmcTitle')">{{ t("toolbar.rmc") }}</a-button>
     <span class="preview__spacer" />
-    <span class="hint-dim">
+    <span class="hint-dim toolbar__count">
       {{ t("toolbar.totalFiles", { total: files.length }) }}<span v-if="searchText">{{
         t("toolbar.matchedFiles", { matched: filteredFiles.length })
       }}</span>
     </span>
-    <!-- 语言切换：放最右侧，与标题栏、状态栏同一条视觉轴 -->
-    <a-dropdown trigger="click" position="br">
-      <a-button size="small" :title="t('lang.label')">
-        <icon-language />
-        {{ t(currentLabelKey()) }}
-      </a-button>
-      <template #content>
-        <a-doption
-          v-for="item in LOCALES"
-          :key="item.locale"
-          :value="item.locale"
-          @click="setLocale(item.locale)"
-        >
-          {{ t(item.labelKey) }}
-        </a-doption>
-      </template>
-    </a-dropdown>
   </div>
 </template>
