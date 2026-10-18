@@ -53,7 +53,7 @@ const kindColor = (prerelease: boolean) => (prerelease ? "orange" : "green");
     unmount-on-close
   >
     <!-- 版本信息与检测结果都可以比窗口高：内容区自己滚，标题留在视野里 -->
-    <a-scrollbar type="embed" style="flex: 1 1 auto; min-height: 0; overflow: auto">
+    <a-scrollbar type="embed" :outer-style="{ flex: '1 1 auto', minHeight: 0 }">
       <div class="about-row">
         <span class="about-row__label">{{ t("update.currentVersion") }}</span>
         <span class="about-row__value">

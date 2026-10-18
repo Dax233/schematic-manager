@@ -133,7 +133,7 @@ function resultText(name: string): string {
     <div class="hint-dim" style="margin-bottom: 10px">{{ t("setup.sourceHint") }}</div>
 
     <!-- 内容区自己滚：弹窗高度不铺满整屏，版本多的时候在这里滚 -->
-    <a-scrollbar type="embed" style="flex: 1 1 auto; min-height: 0; overflow: auto">
+    <a-scrollbar type="embed" :outer-style="{ flex: '1 1 auto', minHeight: 0 }">
       <a-alert v-if="scanWarnings.length > 0" type="warning" style="margin-bottom: 10px">
         <template #title>
           {{ t("setup.scanWarnings", { count: scanWarnings.length }) }}

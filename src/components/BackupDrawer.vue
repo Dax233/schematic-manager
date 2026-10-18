@@ -90,7 +90,7 @@ const columns = computed(() => [
           <a-button size="small" @click="openLogs">{{ t("backup.logManage") }}</a-button>
         </a-space>
         <!-- 日志可能很长：内容区自己滚（Arco 无轨道滚动条） -->
-        <a-scrollbar type="embed" style="max-height: calc(100vh - 220px); overflow: auto">
+        <a-scrollbar type="embed" :outer-style="{ maxHeight: 'calc(100vh - 220px)' }">
           <a-spin :loading="logLoading" style="width: 100%">
             <a-empty v-if="logs.length === 0" :description="t('log.empty')" />
             <OperationLogList v-else :lines="logs" />
