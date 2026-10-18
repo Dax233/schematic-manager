@@ -13,6 +13,8 @@ import { onBeforeUnmount, ref, watch } from "vue";
 import type { ComputedRef, Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import type { TableData } from "@arco-design/web-vue";
+import { displayName, t } from "../i18n";
+import type { NamedRecord } from "../i18n";
 import {
   applyReplace,
   listBlockVersions,
@@ -66,28 +68,31 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
    */
   const replacePickField = ref<"from" | "to">("to");
 
-  /** 方块 ID -> 中文名。
+  /** 方块 ID -> 显示名称的两套名字（中文、英文，取自 Minecraft 语言表）。
    *
-   * 源方块与目标方块共用一份：两个输入框都要显示中文名，而来源有三处
+   * 源方块与目标方块共用一份：两个输入框都要显示名字，而来源有三处
    * （手输、右侧列表点选、从「方块」页签点行填入），汇总到一处才不会
    * 出现同一个方块在两个框里显示不同名字。
+   *
+   * 两套都留着、而不是只存当前语言那一套：切语言后输入框要立刻改用另一套，
+   * 只存一套会让它继续显示旧语言的名字。
    */
-  const blockZh = ref<Record<string, string>>({});
+  const blockNames = ref<Record<string, NamedRecord>>({});
 
   /** 已经查过的方块 ID。
    *
-   * 与 blockZh 分开是为了区分「还没查」与「库里没有这个名字」：
-   * 只看有没有中文名的话，两种情况的界面表现一样，用户分不清是自己
-   * 还没查还是这个方块本来就没有中文名。
+   * 与 blockNames 分开是为了区分「还没查」与「库里没有这个名字」：
+   * 只看有没有名字的话，两种情况的界面表现一样，用户分不清是自己
+   * 还没查还是这个方块本来就没有名字。
    */
-  const blockZhChecked = ref<Set<string>>(new Set());
+  const blockNamesQueried = ref<Set<string>>(new Set());
 
   /** 待触发的查询，按方块 ID 分开存。
    *
    * 不能共用一个计时器：在两个输入框之间快速输入时，后一次输入会把前一个
-   * 还没落地的查询取消掉，那一栏的中文名就再也不显示了。
+   * 还没落地的查询取消掉，那一栏的名字就再也不显示了。
    */
-  const blockZhTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const blockNameTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   /** 从「方块 ID 或 带属性的状态串」里取出纯 ID。
    *
@@ -114,54 +119,54 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
     return { name: m[1].trim(), props: m[2].trim() };
   }
 
-  function rememberBlockZh(id: string, zh: string) {
-    const checked = new Set(blockZhChecked.value);
+  function rememberBlockName(id: string, names: NamedRecord) {
+    const checked = new Set(blockNamesQueried.value);
     checked.add(id);
-    blockZh.value = { ...blockZh.value, [id]: zh };
-    blockZhChecked.value = checked;
+    blockNames.value = { ...blockNames.value, [id]: names };
+    blockNamesQueried.value = checked;
   }
 
-  /** 查一个方块的中文名。查不到时记为空串（界面据此说明库里没有） */
-  async function lookupBlockZh(raw: string) {
+  /** 查一个方块的显示名称。查不到时记为空（界面据此说明库里没有） */
+  async function lookupBlockName(raw: string) {
     const id = bareBlockId(raw);
-    if (!id || blockZhQueried(id)) return;
+    if (!id || blockNameQueried(id)) return;
     try {
       const hits = await searchBlocks(id, 50);
       // 只认名字完全一致的命中：搜索是模糊匹配，取自第一项会把
-      // minecraft:oak_stairs 显示成 minecraft:oak_planks 这类近邻的中文名
+      // minecraft:oak_stairs 显示成 minecraft:oak_planks 这类近邻的名字
       const exact = hits.find((h) => h.name === id);
-      rememberBlockZh(id, exact ? exact.zh || exact.en || "" : "");
+      rememberBlockName(id, { zhName: exact?.zh, enName: exact?.en });
     } catch (e) {
       // 查不到名字不该打断替换流程，但也不能悄悄当成「库里没有」：
       // 记为未查过，下次改动会再试一遍
-      Message.error(`查询方块中文名失败：${e}`);
+      Message.error(t("replace.lookupFailed", { error: String(e) }));
     }
   }
 
   /** 输入框每敲一个字符都会触发，用防抖；逐字符查库既无必要也拖慢输入 */
-  function scheduleBlockZh(raw: string) {
+  function scheduleBlockName(raw: string) {
     const id = bareBlockId(raw);
     if (!id) return;
-    const pending = blockZhTimers.get(id);
+    const pending = blockNameTimers.get(id);
     if (pending !== undefined) clearTimeout(pending);
-    blockZhTimers.set(
+    blockNameTimers.set(
       id,
       setTimeout(() => {
-        blockZhTimers.delete(id);
-        void lookupBlockZh(id);
+        blockNameTimers.delete(id);
+        void lookupBlockName(id);
       }, 200),
     );
   }
 
-  /** 方块中文名；没有记录时返回空串 */
-  function blockZhOf(raw: string): string {
+  /** 方块的显示名称（按当前界面语言取）；没有记录时返回空串 */
+  function blockNameOf(raw: string): string {
     const id = bareBlockId(raw);
-    return id ? blockZh.value[id] ?? "" : "";
+    return id ? displayName(blockNames.value[id] ?? {}) : "";
   }
 
   /** 这个方块是否已经查过名字（用于区分「没查」与「库里没有」） */
-  function blockZhQueried(raw: string): boolean {
-    return blockZhChecked.value.has(bareBlockId(raw));
+  function blockNameQueried(raw: string): boolean {
+    return blockNamesQueried.value.has(bareBlockId(raw));
   }
 
   /** 让右侧列表接下来填到指定的输入框 */
@@ -186,7 +191,7 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
       }
       return;
     }
-    scheduleBlockZh(raw);
+    scheduleBlockName(raw);
   }
 
   watch(() => replaceForm.value.fromName, (v) => onNameChanged(v, "from"));
@@ -208,8 +213,8 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
 
   // 卸载时清掉待触发的查询：否则组件已销毁仍会发一次无意义的请求
   onBeforeUnmount(() => {
-    for (const t of blockZhTimers.values()) clearTimeout(t);
-    blockZhTimers.clear();
+    for (const timer of blockNameTimers.values()) clearTimeout(timer);
+    blockNameTimers.clear();
   });
 
   /** 解析 "key=value,key2=value2" 形式的属性限定；空串表示不限定 */
@@ -256,18 +261,18 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
       const hits = await searchBlocks(q, 200);
       if (seq !== blockSearchSeq) return; // 已有更新的查询，丢弃这份过期结果
       blockHits.value = hits;
-      // 顺手把结果里的中文名记下来（并标记为已查过），点选时就不必再查
-      const zh = { ...blockZh.value };
-      const checked = new Set(blockZhChecked.value);
+      // 顺手把结果里的名字记下来（并标记为已查过），点选时就不必再查
+      const names = { ...blockNames.value };
+      const checked = new Set(blockNamesQueried.value);
       for (const h of hits) {
-        zh[h.name] = h.zh || h.en || "";
+        names[h.name] = { zhName: h.zh, enName: h.en };
         checked.add(h.name);
       }
-      blockZh.value = zh;
-      blockZhChecked.value = checked;
+      blockNames.value = names;
+      blockNamesQueried.value = checked;
     } catch (e) {
       if (seq !== blockSearchSeq) return;
-      Message.error(`检索方块失败：${e}`);
+      Message.error(t("replace.searchFailed", { error: String(e) }));
     } finally {
       if (seq === blockSearchSeq) blockSearching.value = false;
     }
@@ -276,7 +281,9 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
   /** 点选右侧列表里的方块，填到当前选定的那个输入框 */
   function pickBlock(hit: BlockHit) {
     const f = replaceForm.value;
-    rememberBlockZh(hit.name, hit.zh || hit.en || "");
+    rememberBlockName(hit.name, { zhName: hit.zh, enName: hit.en });
+    // 提示里报出用户当前语言看得懂的名字，而不是方块 ID
+    const shown = displayName({ zhName: hit.zh, enName: hit.en }) || hit.name;
     if (replacePickField.value === "from") {
       // 换源方块必须同时清掉属性限定：属性是上一个方块特有的，留着它
       // 会让这条规则一个都匹配不上，而界面看上去「明明填好了」
@@ -284,7 +291,8 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
       f.fromName = hit.name;
       f.fromPropsText = "";
       Message.success(
-        `已设为替换源：${hit.zh || hit.name}` + (hadProps ? "（属性限定已清空）" : ""),
+        t("replace.setSource", { name: shown }) +
+          (hadProps ? t("replace.sourcePropsCleared") : ""),
       );
     } else {
       // 目标属性覆盖同理：它是无条件写上去的（replace.rs 里 to_props 最后
@@ -293,8 +301,8 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
       f.toName = hit.name;
       f.toPropsText = "";
       Message.success(
-        `已设为替换目标：${hit.zh || hit.name}` +
-          (hadProps ? "（目标属性覆盖已清空）" : ""),
+        t("replace.setTarget", { name: shown }) +
+          (hadProps ? t("replace.targetPropsCleared") : ""),
       );
     }
   }
@@ -322,14 +330,16 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
     if (rec.forms.length > 1) {
       const others = rec.forms.filter((f) => f !== blockName);
       Message.warning(
-        `已设为替换源：${blockName}。这一行合计了 ${rec.forms.length} 种形态，` +
-          `本条规则只替换 ${blockName}，不包括 ${others.join("、")}`,
+        t("replace.rowMergedForms", {
+          name: blockName,
+          forms: rec.forms.length,
+          others: others.join(t("common.listSeparator")),
+        }),
       );
       return;
     }
     Message.info(
-      `已设为替换源：${blockName}` +
-        (single ? "" : "（不限属性，这一行合计了多个状态）"),
+      t("replace.setSource", { name: blockName }) + (single ? "" : t("replace.rowMultiState")),
     );
   }
 
@@ -341,26 +351,26 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
     // 列表默认填「替换目标」：替换时更常选的是「换成什么」，
     // 而源方块多半是从「方块」页签点行带过来的
     replacePickField.value = "to";
-    // 中文名缓存每次打开都作废：方块库可能在本程序运行期间被换掉
+    // 名字缓存每次打开都作废：方块库可能在本程序运行期间被换掉
     // （到「版本库」里补齐或重建版本后，后端每条命令都会重新读库），
     // 留着旧结果会让明明能查到的方块一直显示「未找到」。
-    for (const t of blockZhTimers.values()) clearTimeout(t);
-    blockZhTimers.clear();
-    blockZh.value = {};
-    blockZhChecked.value = new Set();
+    for (const timer of blockNameTimers.values()) clearTimeout(timer);
+    blockNameTimers.clear();
+    blockNames.value = {};
+    blockNamesQueried.value = new Set();
     // 源方块默认取当前选中的方块，省去用户重打一遍
     if (!replaceForm.value.fromName && activeBlock.value) {
       replaceForm.value.fromName = activeBlock.value.name;
     }
-    // 本次打开时就查一次中文名：值可能来自上次的填写而没有发生变化，
+    // 本次打开时就查一次名字：值可能来自上次的填写而没有发生变化，
     // 只靠 watch 不会触发，那一栏就会空着
-    void lookupBlockZh(replaceForm.value.fromName);
-    void lookupBlockZh(replaceForm.value.toName);
+    void lookupBlockName(replaceForm.value.fromName);
+    void lookupBlockName(replaceForm.value.toName);
     if (blockVersions.value.length === 0) {
       try {
         blockVersions.value = await listBlockVersions();
       } catch (e) {
-        Message.error(`读取版本列表失败：${e}`);
+        Message.error(t("replace.loadVersionsFailed", { error: String(e) }));
       }
     }
   }
@@ -370,7 +380,7 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
     if (!cur) return;
     const rule = currentRule();
     if (!rule.fromName || !rule.toName) {
-      Message.warning("源方块与目标方块都不能为空");
+      Message.warning(t("replace.emptyFromTo"));
       return;
     }
     // 记下这次预览的序号：等待期间用户可能改了规则（那时结果已经不作数），
@@ -383,7 +393,7 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
       replacePreview.value = r.replaced;
     } catch (e) {
       if (seq !== previewSeq) return;
-      Message.error(`预览失败：${e}`);
+      Message.error(t("replace.previewFailed", { error: String(e) }));
     } finally {
       if (seq === previewSeq) replaceBusy.value = false;
     }
@@ -394,16 +404,16 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
     if (!cur) return;
     const rule = currentRule();
     if (!rule.fromName || !rule.toName) {
-      Message.warning("源方块与目标方块都不能为空");
+      Message.warning(t("replace.emptyFromTo"));
       return;
     }
     replaceBusy.value = true;
     try {
       const r = await applyReplace(cur.path, rule);
       if (r.replaced === 0) {
-        Message.info("没有方块需要替换");
+        Message.info(t("replace.nothingToReplace"));
       } else {
-        Message.success(`已替换 ${r.replaced} 个方块（改动前已备份）`);
+        Message.success(t("replace.replaced", { count: r.replaced }));
         replaceOpen.value = false;
         await s.rescanAll();
         const hit = s.files.value.find((f) => f.path === cur.path);
@@ -416,7 +426,7 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
         }
       }
     } catch (e) {
-      Message.error(`替换失败：${e}`);
+      Message.error(t("replace.replaceFailed", { error: String(e) }));
     } finally {
       replaceBusy.value = false;
     }
@@ -433,8 +443,8 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
     replacePickField,
     replaceForm,
     replacePreview,
-    blockZhOf,
-    blockZhQueried,
+    blockNameOf,
+    blockNameQueried,
     onBlockSearch,
     onBlockRowClick,
     setPickField,

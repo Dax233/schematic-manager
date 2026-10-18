@@ -750,7 +750,7 @@ describe("方块替换窗口（方块列表与中文名）", () => {
     expect(byPlaceholder("例如 minecraft:stone")!.value, "应填入目标方块").toBe(
       "minecraft:stone",
     );
-    expect(document.body.textContent, "目标方块要显示中文名").toContain("中文名：石头");
+    expect(document.body.textContent, "目标方块应给出显示名称").toContain("显示名称：石头");
     w.unmount();
   });
 

@@ -15,6 +15,7 @@
 import { computed, ref } from "vue";
 import type { TableData } from "@arco-design/web-vue";
 import { Message } from "@arco-design/web-vue";
+import { displayName } from "../i18n";
 import { useAppStore } from "../store";
 import type { ConvertItem } from "../types";
 
@@ -343,12 +344,12 @@ function replZh(rec: ConvertItem): string {
                 @click="pickConvBlock(h)"
               >
                 <span class="conv-block__zh">
-                  {{ h.zh || h.en || h.name }}
+                  {{ displayName({ zhName: h.zh, enName: h.en }) || h.name }}
                   <span v-if="!convHitInTarget(h)" class="conv-pick__warn">
                     目标版本没有
                   </span>
                 </span>
-                <!-- 英文名与方块 ID 一并给出，中文名在上方 -->
+                <!-- 英文名与方块 ID 一并给出，显示名称在上方 -->
                 <span class="conv-block__id">
                   {{ h.name }}<template v-if="h.en"> · {{ h.en }}</template>
                 </span>
