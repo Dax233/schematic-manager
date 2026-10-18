@@ -13,7 +13,6 @@ use crate::error::{AppError, AppResult};
 use crate::jar_index::{self, JarIndex};
 use crate::blockstate_chain::{build_chain, Chain};
 use crate::pool::{model_key, ContentPool};
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 /// jar 内容来源
@@ -106,7 +105,7 @@ impl StringPool {
 /// 方块键与物品键同名时（例如 `oak_slab`）以方块键为准，两个键的译名一致，
 /// 但方块键更贴合「方块统计」的语境。
 fn load_lang_table<S: JarSource>(src: &S) -> Vec<LangEntry> {
-    // BTreeMap 已在模块顶部引入
+    use std::collections::BTreeMap;
 
     // 语言文件按命名空间分目录，先收集「哪些命名空间提供了哪种语言」。
     // jar 内与 jar 外（.minecraft/assets 的对象库）都要看：官方客户端 jar
@@ -179,56 +178,10 @@ fn load_lang_table<S: JarSource>(src: &S) -> Vec<LangEntry> {
         }
     }
 
-    // 内置中文表兜底：本机资源取不到中文时（只装了别的版本、清理过资源、
-    // 或用第三方启动器），整张表会只剩英文名，界面上一列英文。
-    //
-    // 内置的只是「方块代码 → 中文名」这份对照，不含任何贴图、模型或语言
-    // 文件本体——游戏资源仍然一律从用户自己的客户端 jar 现取。名字属于
-    // 可自由使用的命名信息，体积也只有几十 KB。
-    fill_zh_from_builtin(&mut table);
-
     table
         .into_iter()
         .map(|(block_name, (en, zh))| LangEntry { block_name, en, zh })
         .collect()
-}
-
-/// 内置的中文名对照表：`block.minecraft.<短名>` → 中文名。
-///
-/// 编译进二进制，不落盘、不联网。用 `include_str!` 而不是运行时读文件：
-/// 程序是免安装形态，运行目录里没有 data 目录可读。
-const BUILTIN_ZH: &str = include_str!("../data/zh_names.json");
-
-/// 用内置表补齐缺失的中文名。
-///
-/// 只遍历**已有的条目**、按名字去内置表里取值，而不是反过来把所有内置条目
-/// 都灌进来：后者会把该版本根本没有的方块名也塞进语言表，白白撑大每个包，
-/// 语义上也不对——语言表应当是「这个版本有哪些名字」。
-///
-/// 只补空位，已有中文的一律保留：本机资源来自该版本自己的语言文件，比内置
-/// 表准（部分译名随版本改过）。解析失败时什么都不做：名字少总比整个版本
-/// 建不出来好。
-fn fill_zh_from_builtin(table: &mut BTreeMap<String, (String, String)>) {
-    let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(BUILTIN_ZH)
-    else {
-        return;
-    };
-    for (name, entry) in table.iter_mut() {
-        if !entry.1.is_empty() {
-            continue;
-        }
-        // minecraft:oak_stairs -> block.minecraft.oak_stairs
-        let Some((ns, path)) = name.split_once(':') else { continue };
-        if path.is_empty() {
-            continue;
-        }
-        let key = format!("block.{ns}.{path}");
-        if let Some(zh) = map.get(&key).and_then(|v| v.as_str()) {
-            if !zh.is_empty() {
-                entry.1 = zh.to_string();
-            }
-        }
-    }
 }
 
 /// 从 jar 构建资源包。
@@ -1065,14 +1018,14 @@ mod tests {
             .expect("台阶应有语言条目");
         assert_eq!(slab.en, "Oak Slab");
 
-        // 中文文件里没有的名字仍要保留英文（不能整条丢掉、也不能让英文跟着消失）。
-        // 中文由内置表兜底补上——本机资源取不到中文时，界面不该整列英文。
+        // 中文文件里没有的名字仍要保留英文：查询侧会从别的版本表补中文，
+        // 这里若整条丢掉，连英文名都会跟着消失
         let dirt = table
             .iter()
             .find(|e| e.block_name == "minecraft:dirt")
             .expect("只有英文的名字也要收进来");
         assert_eq!(dirt.en, "Dirt");
-        assert_eq!(dirt.zh, "泥土", "缺中文时应由内置表兜底");
+        assert_eq!(dirt.zh, "");
 
         // 余下部分带点号的是图案名
         assert!(
@@ -1081,44 +1034,14 @@ mod tests {
         );
     }
 
-    /// 本机资源给的中文优先，内置表只补空位。
-    ///
-    /// 这条守的是优先级：本机那份来自该版本自己的语言文件，部分译名随版本
-    /// 改过，比内置表准。若被内置表覆盖，用户装了正确资源反而看到旧译名。
-    #[test]
-    fn local_chinese_wins_over_the_builtin_table() {
-        let mut jar = minimal_jar();
-        jar.add(
-            "assets/minecraft/lang/en_us.json",
-            r#"{"block.minecraft.stone":"Stone"}"#,
-        );
-        // 故意给一个与内置表不同的译名，用来区分哪一边生效
-        jar.add(
-            "assets/minecraft/lang/zh_cn.json",
-            r#"{"block.minecraft.stone":"本机给的石头名"}"#,
-        );
-
-        let built = build(&jar, "test", 0, false, no_texture).unwrap();
-        let db = BlockDb::load_from_bytes(&built.data, false).unwrap();
-        let table = db.langs.first().expect("应带一张语言表");
-        let stone = table
-            .iter()
-            .find(|e| e.block_name == "minecraft:stone")
-            .expect("石头应有语言条目");
-        assert_eq!(
-            stone.zh, "本机给的石头名",
-            "本机资源的中文不能被内置表覆盖"
-        );
-    }
-
     #[test]
     fn empty_language_files_do_not_break_the_build() {
-        // 语言文件缺失或坏掉时，方块与贴图仍应建出来。名字不会因此消失：
-        // 内置中文表会兜底补上；这里只要求构建过程本身不失败。
+        // 语言文件缺失或坏掉时，方块与贴图仍应建出来，只是没有名字
         let jar = minimal_jar();
         let built = build(&jar, "test", 0, false, no_texture).unwrap();
         let db = BlockDb::load_from_bytes(&built.data, false).unwrap();
-        assert_eq!(db.langs.len(), 1, "仍应带一张语言表");
+        assert_eq!(db.langs.len(), 1, "仍应带一张（空的）语言表");
+        assert!(db.langs[0].is_empty());
         assert_eq!(db.versions[0].blocks.len(), 1, "方块不受影响");
     }
 

@@ -10,6 +10,7 @@ mod blockdb;
 mod blockdb_write;
 mod commands;
 mod convert;
+mod data_dir;
 mod dto;
 mod duplicate;
 mod entitydb;
@@ -52,11 +53,24 @@ mod zip;
 ///   - `run()` 返回 Err 时的处理：覆盖不 panic 的失败路径
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    startup::install_panic_hook();
+    // 先取配置：标识符要交给 panic 钩子与失败报告，好让提示里的数据目录与
+    // 实际使用的一致，不必在别处再写死一份。代价是钩子不再最先安装，
+    // generate_context!() 自身若 panic 就无人兜底；配置错误在 cargo build 时
+    // 就被 tauri-codegen 拦下，这里判断风险可接受。
+    let context = tauri::generate_context!();
+    let identifier = context.config().identifier.clone();
+    startup::install_panic_hook(identifier.clone());
 
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .setup(|app| {
+            // 应用数据被读写前最早的时机：窗口已由 Tauri 建好（webview 的数据
+            // 目录那时也建了），但前端命令要等事件循环才开始，界面状态与方块库
+            // 都还没被碰过
+            data_dir::migrate_legacy_data(app.handle())?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::peek_schematic,
             commands::scan_litematics,
@@ -98,9 +112,9 @@ pub fn run() {
             commands::check_update,
             commands::open_url,
         ])
-        .run(tauri::generate_context!());
+        .run(context);
 
     if let Err(e) = result {
-        startup::report(&e.to_string());
+        startup::report(&e.to_string(), &identifier);
     }
 }

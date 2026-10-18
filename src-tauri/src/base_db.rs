@@ -100,15 +100,6 @@ pub fn base_jars_dir(app: &tauri::AppHandle) -> AppResult<PathBuf> {
     Ok(base_dir(app)?.join("jars"))
 }
 
-/// 已下载的方块名语言文件缓存目录。
-///
-/// 语言文件不在客户端 jar 里（jar 只有 `en_us.json`），本机资源库又未必有，
-/// 因此建库时缺中文就联网取一份放这里。按版本分开存：语言文件随版本更新，
-/// 跨版本复用会把旧名字装进新版本的库；同一版本重建则直接复用，不再联网。
-pub fn base_langs_dir(app: &tauri::AppHandle) -> AppResult<PathBuf> {
-    Ok(base_dir(app)?.join("langs"))
-}
-
 /// 把目录里的单版本包合成一个基础方块库。
 ///
 /// 目录里每个 `<数据版本>-<版本号>.dat.z` 是一个单版本包（补版本时由
@@ -394,89 +385,6 @@ fn asset_index_id(mc_dir: &Path, version_id: &str) -> Option<String> {
         .get("id")?
         .as_str()
         .map(|s| s.to_string())
-}
-
-/// 取某版本的中文语言文件：本机资源库优先，取不到就联网下载。
-///
-/// 客户端 jar 里只有 `en_us.json`，简体中文随资源索引单独分发。用户机器上
-/// 未必有——只装过别的版本、清理过资源、或用第三方启动器时就没有，表现为
-/// 方块名整列英文。这里负责把它补齐：
-///
-///   1. 本机 `.minecraft/assets` 里按索引找（[`find_lang_files`]，不耗流量）
-///   2. 应用数据目录里上次下载留下的缓存（重复重建不再联网）
-///   3. 联网下载：先读该版本的 version.json 拿资源索引地址，从索引里查出
-///      `zh_cn.json` 的内容哈希，再按 `resources.download.minecraft.net/
-///      <前两位>/<后 38 位>` 取文件（内容寻址，地址可直接拼）
-///
-/// 失败不阻断建库：没有中文只是名字显示成英文，比整个版本建不出来好。
-/// 因此这里返回 `Option`，把原因交给调用方记日志。
-///
-/// `version_json_url` 为 None 时只查本地与缓存，不联网——调用方用它区分
-/// 「本机扫描」（可以联网补中文）与纯离线场景。
-pub fn resolve_lang_files(
-    mc_dir: Option<&Path>,
-    version_id: &str,
-    lang_cache_dir: Option<&Path>,
-    version_json_url: Option<&str>,
-) -> (Vec<(String, Vec<u8>)>, Option<String>) {
-    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut problems: Vec<String> = Vec::new();
-
-    // 1) 本机资源库
-    if let Some(dir) = mc_dir {
-        out = find_lang_files(dir, version_id);
-    }
-    let has_zh = |v: &Vec<(String, Vec<u8>)>| v.iter().any(|(p, _)| p.ends_with("zh_cn.json"));
-    if has_zh(&out) {
-        return (out, None);
-    }
-
-    // 本地没有中文，往后走的都是「补中文」，en_us 已经由 jar 自带，不必再取
-    let Some(cache) = lang_cache_dir else {
-        return (out, Some("本机没有中文语言文件，且没有可用的缓存目录".into()));
-    };
-
-    // 2) 缓存：按版本分开存，语言文件随版本更新，跨版本复用会取到旧名字
-    let cached = cache.join(format!("{version_id}-zh_cn.json"));
-    if let Ok(bytes) = std::fs::read(&cached) {
-        if !bytes.is_empty() {
-            out.push(("assets/minecraft/lang/zh_cn.json".into(), bytes));
-            return (out, None);
-        }
-    }
-
-    // 3) 联网下载
-    let Some(json_url) = version_json_url else {
-        return (out, Some("本机没有中文语言文件，且当前来源不支持联网补齐".into()));
-    };
-    match crate::mc_download::fetch_text(json_url)
-        .and_then(|vj| crate::mc_download::asset_index_url_from_version_json(&vj))
-        .and_then(|idx_url| crate::mc_download::fetch_text(&idx_url))
-        .and_then(|idx| {
-            crate::mc_download::lang_hash_from_index(&idx, "zh_cn")
-                .ok_or_else(|| AppError::Parse("资源索引里没有 zh_cn".into()))
-        }) {
-        Ok(hash) => {
-            let mut last = String::new();
-            for url in crate::mc_download::object_url_candidates(&hash) {
-                match crate::mc_download::fetch_bytes(&url) {
-                    Ok(bytes) if !bytes.is_empty() => {
-                        if let Err(e) = std::fs::create_dir_all(cache) {
-                            problems.push(format!("缓存目录建不出来：{e}"));
-                        } else if let Err(e) = std::fs::write(&cached, &bytes) {
-                            problems.push(format!("中文语言文件写缓存失败：{e}"));
-                        }
-                        out.push(("assets/minecraft/lang/zh_cn.json".into(), bytes));
-                        return (out, if problems.is_empty() { None } else { Some(problems.join("；")) });
-                    }
-                    Ok(_) => last = format!("{url} 返回空内容"),
-                    Err(e) => last = format!("{url}：{e}"),
-                }
-            }
-            (out, Some(format!("中文语言文件下载失败：{last}")))
-        }
-        Err(e) => (out, Some(format!("定位中文语言文件失败：{e}"))),
-    }
 }
 
 /// 官方启动器的默认 .minecraft 位置；环境变量缺失时返回 None。
@@ -776,63 +684,5 @@ mod tests {
             SUPPORTED_RELEASES.windows(2).all(|w| w[0].0 < w[1].0),
             "SUPPORTED_RELEASES 必须按数据版本严格升序"
         );
-    }
-
-    /// 本机没有中文、又不允许联网时，只能原样返回已有语言并说明原因，
-    /// 不能报错——否则整个版本会因为「取不到中文」而建不出来。
-    #[test]
-    fn lang_resolution_without_network_reports_instead_of_failing() {
-        let dir = test_dir("lang_offline");
-        let cache = dir.join("langs");
-        let empty_mc = dir.join("mc");
-        std::fs::create_dir_all(&empty_mc).unwrap();
-
-        let (langs, problem) =
-            resolve_lang_files(Some(&empty_mc), "1.20.1", Some(&cache), None);
-        assert!(langs.is_empty(), "本机没有、又不联网时不该凭空变出语言文件");
-        let reason = problem.expect("应说明为什么没有中文");
-        assert!(
-            reason.contains("不支持联网") || reason.contains("没有中文"),
-            "原因要说清是取不到而不是别的：{reason}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 缓存里已有该版本的中文时直接用，不再联网——这是「重复重建不重复下载」的依据。
-    #[test]
-    fn lang_resolution_prefers_the_cached_download() {
-        let dir = test_dir("lang_cache");
-        let cache = dir.join("langs");
-        std::fs::create_dir_all(&cache).unwrap();
-        let empty_mc = dir.join("mc");
-        std::fs::create_dir_all(&empty_mc).unwrap();
-        std::fs::write(
-            cache.join("1.20.1-zh_cn.json"),
-            br#"{"block.minecraft.stone":"\u77f3\u5934"}"#,
-        )
-        .unwrap();
-
-        // 故意给一个必定失败的地址：走了缓存就不该去碰它
-        let (langs, problem) = resolve_lang_files(
-            Some(&empty_mc),
-            "1.20.1",
-            Some(&cache),
-            Some("http://127.0.0.1:9/never.json"),
-        );
-        assert!(problem.is_none(), "命中缓存不该报问题：{problem:?}");
-        let (path, bytes) = langs
-            .iter()
-            .find(|(p, _)| p.ends_with("zh_cn.json"))
-            .expect("应带上缓存里的中文");
-        assert_eq!(path, "assets/minecraft/lang/zh_cn.json");
-        assert!(String::from_utf8_lossy(bytes).contains("石头") || !bytes.is_empty());
-
-        // 换个版本号不该命中：语言文件随版本更新，跨版本复用会把旧名字装进新库
-        let (other, other_problem) =
-            resolve_lang_files(Some(&empty_mc), "1.21.1", Some(&cache), None);
-        assert!(other.is_empty(), "别的版本不该拿到这个版本的缓存");
-        assert!(other_problem.is_some());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

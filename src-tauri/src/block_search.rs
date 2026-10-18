@@ -76,33 +76,6 @@ pub(crate) fn lang_index(db: &BlockDb, version_idx: usize) -> HashMap<String, (S
     map
 }
 
-/// 把库里所有版本的语言表合并成一张，作为最后一级兜底。
-///
-/// 为什么需要它：单个版本的语言表未必带中文——中文来自随资源索引分发的
-/// 语言文件，用户机器上不一定有，构建那个版本时取不到就整张表没有中文。
-/// 而方块检索是遍历全部版本的，同一个方块在别处可能就有名字；版本转换
-/// 原先只查源版本与目标版本两张表，于是在「只有一个版本带中文」的库上
-/// 整列英文，看起来像转换丢了名字。
-///
-/// 合并顺序按版本下标升序、**先入为主**：同一方块在多个版本里都有中文时
-/// 保留先遇到的那个，结果与构建顺序无关，可重复。英文名同一方块取第一个
-/// 非空的，中文缺失的版本不会把已有的中文覆盖成空。
-pub(crate) fn merged_lang_index(db: &BlockDb) -> HashMap<String, (String, String)> {
-    let mut map: HashMap<String, (String, String)> = HashMap::new();
-    for v in &db.versions {
-        for e in &v.langs {
-            let slot = map.entry(e.block_name.clone()).or_default();
-            if slot.0.is_empty() && !e.zh.is_empty() {
-                slot.0 = e.zh.clone();
-            }
-            if slot.1.is_empty() && !e.en.is_empty() {
-                slot.1 = e.en.clone();
-            }
-        }
-    }
-    map
-}
-
 /// 命中的优先级，越小越靠前
 fn rank(name: &str, short: &str, zh: &str, en: &str, q: &str) -> Option<u8> {
     if name == q || short == q {
