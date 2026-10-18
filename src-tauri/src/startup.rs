@@ -53,10 +53,7 @@ fn write_log(text: &str) -> Option<PathBuf> {
 /// 钩子里不显式写出 `PanicHookInfo` 的类型名：该类型在 Rust 1.82 才有，
 /// 而本 crate 声明的最低版本是 1.77。不写类型让闭包自行推断，
 /// 两边都能编译。
-///
-/// `identifier` 取自 tauri.conf.json，会被存进钩子闭包：panic 发生时拿不到
-/// AppHandle，而 WebView2 失败的提示里要写出用户数据目录。
-pub fn install_panic_hook(identifier: String) {
+pub fn install_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let mut msg = match info.payload().downcast_ref::<&str>() {
@@ -71,7 +68,7 @@ pub fn install_panic_hook(identifier: String) {
         }
         // 保留默认钩子：它会把信息打到 stderr，便于从终端启动时排查
         default_hook(info);
-        report(&msg, &identifier);
+        report(&msg);
     }));
 }
 
@@ -79,10 +76,7 @@ pub fn install_panic_hook(identifier: String) {
 ///
 /// 与弹窗和写日志分开，便于直接测试其内容——否则测试只能靠复现同一段
 /// 拼接逻辑，测的就不是真实代码了。
-///
-/// `identifier` 由调用方传入而不是写死在这里：它必须与 tauri.conf.json 里的
-/// 一致，写死就会在改标识符时悄悄失准，把用户指向一个不存在的目录。
-fn build_body(err: &str, exe: &str, log_path: Option<&str>, identifier: &str) -> String {
+fn build_body(err: &str, exe: &str, log_path: Option<&str>) -> String {
     let mut body = String::new();
     body.push_str("投影文件管理器启动失败\n\n");
     body.push_str(&format!("原因：{err}\n\n"));
@@ -97,8 +91,10 @@ fn build_body(err: &str, exe: &str, log_path: Option<&str>, identifier: &str) ->
              可尝试删除下面这个目录后重新启动：\n",
         );
         match std::env::var("LOCALAPPDATA") {
-            Ok(local) => body.push_str(&format!("  {local}\\{identifier}\n")),
-            Err(_) => body.push_str(&format!("  %LOCALAPPDATA%\\{identifier}\n")),
+            Ok(local) => {
+                body.push_str(&format!("  {local}\\com.heiheids.schematic-manager\n"))
+            }
+            Err(_) => body.push_str("  %LOCALAPPDATA%\\com.heiheids.schematic-manager\n"),
         }
         body.push_str(
             "\n若仍无法启动，请确认系统已安装 Microsoft Edge WebView2 运行时：\n\
@@ -138,21 +134,16 @@ fn dialog_allowed() -> bool {
 }
 
 /// 把启动失败报告给用户：写日志 + 弹窗，并返回展示过的文本。
-pub fn report(err: &str, identifier: &str) -> String {
+pub fn report(err: &str) -> String {
     let exe = std::env::current_exe()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "(未知)".into());
 
     // 先把日志写掉，再把路径写进正文——顺序不能反，否则正文里的
     // 路径与实际写入位置可能不一致
-    let probe = build_body(err, &exe, None, identifier);
+    let probe = build_body(err, &exe, None);
     let log = write_log(&probe);
-    let body = build_body(
-        err,
-        &exe,
-        log.as_ref().map(|p| p.display().to_string()).as_deref(),
-        identifier,
-    );
+    let body = build_body(err, &exe, log.as_ref().map(|p| p.display().to_string()).as_deref());
     if let Some(p) = &log {
         // 用最终正文覆盖，使日志内容与弹窗完全一致
         let _ = std::fs::write(p, &body);
@@ -222,12 +213,7 @@ mod tests {
 
     #[test]
     fn body_always_carries_the_real_error() {
-        let b = build_body(
-            "磁盘已满",
-            "C:\\app\\a.exe",
-            Some("C:\\app\\启动失败.log"),
-            "com.example.app",
-        );
+        let b = build_body("磁盘已满", "C:\\app\\a.exe", Some("C:\\app\\启动失败.log"));
         assert!(b.contains("磁盘已满"), "必须保留原始错误，否则无从排查");
         assert!(b.contains("C:\\app\\a.exe"), "应给出程序位置");
         assert!(b.contains("C:\\app\\启动失败.log"), "应给日志位置");
@@ -235,16 +221,9 @@ mod tests {
 
     #[test]
     fn webview_error_gets_actionable_hint() {
-        // 正文里的目录必须取自传入的标识符，不能是另外写死的字符串：
-        // 标识符改了而这里没跟着改，用户就会照着错的路径去删目录
-        let b = build_body(
-            "failed to create webview: WebView2 error",
-            "a.exe",
-            None,
-            "com.example.app",
-        );
+        let b = build_body("failed to create webview: WebView2 error", "a.exe", None);
         assert!(
-            b.contains("com.example.app"),
+            b.contains("com.heiheids.schematic-manager"),
             "WebView2 失败时应给出可操作的数据目录路径"
         );
         assert!(b.contains("WebView2 运行时"), "应提示安装运行库");
@@ -252,7 +231,7 @@ mod tests {
 
     #[test]
     fn unrelated_error_has_no_webview_hint() {
-        let b = build_body("磁盘写入失败：拒绝访问", "a.exe", None, "com.example.app");
+        let b = build_body("磁盘写入失败：拒绝访问", "a.exe", None);
         assert!(
             !b.contains("WebView2"),
             "与界面无关的错误不应误导用户去删数据目录"
@@ -262,7 +241,7 @@ mod tests {
 
     #[test]
     fn missing_log_path_is_stated_plainly() {
-        let b = build_body("x", "a.exe", None, "com.example.app");
+        let b = build_body("x", "a.exe", None);
         assert!(
             b.contains("无法写入日志文件"),
             "写不了日志时要如实说明，不能让用户以为有日志可查"

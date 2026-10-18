@@ -9,24 +9,25 @@ const REPO = "heiheids/schematic-manager";
 
 const COMMITS = ["feat(ui): 新增示例功能", "fix(png): 修复示例缺陷", "ci: 调整发布流程"];
 
-// 各平台的真实产物名：前缀取自 productName，dev 构建的版本号带 -dev.N 段
+// 各平台的真实产物名：NSIS/dmg 用 productName（中文），deb 用 Cargo 包名，
+// dev 构建的版本号带 -dev.N 段
 const ASSETS = [
-  "schematic-manager_0.0.1-dev.42_x64-setup.exe",
-  "schematic-manager_0.0.1-dev.42_arm64-setup.exe",
+  "投影文件管理器_0.0.1-dev.42_x64-setup.exe",
+  "投影文件管理器_0.0.1-dev.42_arm64-setup.exe",
   "schematic-manager_0.0.1-dev.42_amd64.deb",
   "schematic-manager_0.0.1-dev.42_arm64.deb",
-  "schematic-manager_0.0.1-dev.42_x64.dmg",
-  "schematic-manager_0.0.1-dev.42_aarch64.dmg",
+  "投影文件管理器_0.0.1-dev.42_x64.dmg",
+  "投影文件管理器_0.0.1-dev.42_aarch64.dmg",
 ];
 
 test("分类器能把各平台产物名映射到平台/架构/格式", () => {
   const expected = {
-    "schematic-manager_0.0.1_x64-setup.exe": { platform: "Windows", arch: "x86_64", format: "EXE (安装包)" },
-    "schematic-manager_0.0.1_arm64-setup.exe": { platform: "Windows", arch: "arm64", format: "EXE (安装包)" },
+    "投影文件管理器_0.0.1_x64-setup.exe": { platform: "Windows", arch: "x86_64", format: "EXE (安装包)" },
+    "投影文件管理器_0.0.1_arm64-setup.exe": { platform: "Windows", arch: "arm64", format: "EXE (安装包)" },
     "schematic-manager_0.0.1_amd64.deb": { platform: "Linux", arch: "x86_64", format: "deb" },
     "schematic-manager_0.0.1_arm64.deb": { platform: "Linux", arch: "arm64", format: "deb" },
-    "schematic-manager_0.0.1_x64.dmg": { platform: "macOS", arch: "x86_64", format: "DMG" },
-    "schematic-manager_0.0.1_aarch64.dmg": { platform: "macOS", arch: "arm64", format: "DMG" },
+    "投影文件管理器_0.0.1_x64.dmg": { platform: "macOS", arch: "x86_64", format: "DMG" },
+    "投影文件管理器_0.0.1_aarch64.dmg": { platform: "macOS", arch: "arm64", format: "DMG" },
   };
   for (const [name, exp] of Object.entries(expected)) {
     const c = classify(name);
@@ -40,8 +41,8 @@ test("分类器能把各平台产物名映射到平台/架构/格式", () => {
 test("分类器拒绝非产物文件", () => {
   for (const bad of [
     "README.md",
-    "schematic-manager_0.0.1_x64-setup.exe.sig",
-    "schematic-manager_0.0.1_x64.exe",
+    "投影文件管理器_0.0.1_x64-setup.exe.sig",
+    "投影文件管理器_0.0.1_x64.exe",
     "totally-unrelated.zip",
     42,
     null,
@@ -50,7 +51,7 @@ test("分类器拒绝非产物文件", () => {
   }
 });
 
-test("每个产物行都是指向资产下载地址的可点链接，资产名经过 URL 编码", () => {
+test("每个产物行都是指向资产下载地址的可点链接，中文名经过 URL 编码", () => {
   const body = render(TAG, ASSETS, COMMITS, { repo: REPO });
   for (const name of ASSETS) {
     const url = `https://github.com/${REPO}/releases/download/${TAG}/${encodeURIComponent(name)}`;

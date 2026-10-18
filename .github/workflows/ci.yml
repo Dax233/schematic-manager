@@ -199,13 +199,12 @@ jobs:
       matrix:
         include:
           # Windows 只打 NSIS，不打 MSI。
-          # 过去 MSI 必然失败：productName 是中文，而 WiX 的 light.exe 按
-          # SummaryCodepage（en-US，1252）把 Product 的 Name 写进数据库，于是报
+          # 原因：项目的 productName 与版权信息是中文，WiX 的 light.exe 会报
           #   error LGHT0311: A string was provided with characters that are not
           #   available in the specified database code page
-          # productName 已改成 ASCII 的 schematic-manager，实测 MSI 能正常产出；
-          # 但发布链路还没把 .msi 纳入产物分类（release-notes-render.mjs 只认
-          # -setup.exe / .deb / .dmg），要启用得先补上分类与文件名约定。
+          # 即 MSI 数据库代码页无法容纳中文字符，打包阶段直接失败
+          # （Rust 代码本身已编译通过）。NSIS 完整支持 Unicode，故改用 NSIS。
+          # 若日后需要 MSI，可为 wix 指定 language: "zh-CN" 后再启用。
           - { runner: windows-latest,   target: x86_64-pc-windows-msvc,    bundles: nsis }
           - { runner: windows-11-arm,   target: aarch64-pc-windows-msvc,   bundles: nsis }
           # Linux 只出 deb。

@@ -711,30 +711,41 @@ pub fn analyze_conversion(
     // target_index 来自前端、可能越界，但 lang_index 取不到版本时返回空表。
     let source_idx = db.pick_version(sc.summary().data_version).unwrap_or(target_index);
 
+    // 跨版本兜底表：库里各版本的中文名合并成一张，放在最后一级。
+    //
+    // 只有一个特定版本有中文时（例如只重建过 1.14），源版本与目标版本的表
+    // 都可能是空的，那样转换窗口整列英文——而方块检索因为遍历全部版本，
+    // 同一个方块在别处却是有中文的。两边行为不一致会让人以为转换丢了名字。
+    // 合并表只用于查名字，不参与「这个方块在目标版本存不存在」的判断。
+    let all_langs = crate::block_search::merged_lang_index(db);
+
     Ok(convert_items_with_zh(
         crate::convert::analyze(&sc, db, target_index),
         &crate::block_search::lang_index(db, source_idx),
         &crate::block_search::lang_index(db, target_index),
+        &all_langs,
     ))
 }
 
 /// 给转换条目补上中英文名。
 ///
 /// 单独成函数是为了能直接测：真正的命令要 AppHandle 才能取方块库，
-/// 而这里只依赖两张语言表，用构造出来的表就能覆盖各级回退。
+/// 而这里只依赖几张语言表，用构造出来的表就能覆盖各级回退。
 fn convert_items_with_zh(
     items: Vec<crate::convert::ConvertItem>,
     source_langs: &std::collections::HashMap<String, (String, String)>,
     target_langs: &std::collections::HashMap<String, (String, String)>,
+    all_langs: &std::collections::HashMap<String, (String, String)>,
 ) -> Vec<ConvertItemDto> {
     items
         .into_iter()
         .map(|i| ConvertItemDto {
-            // 源方块先查原版本的表，再退到目标版本的表：它在原版本里一定存在，
-            // 但投影用的版本号不一定能在库里对上，那时只能靠目标版本的表
-            name_zh: zh_from_tables(&i.name, &[source_langs, target_langs]),
-            // 替代品是目标版本里的方块，只查目标版本的表
-            suggested_zh: zh_from_tables(&i.suggested, &[target_langs]),
+            // 源方块按「原版本 → 目标版本 → 全库合并表」的顺序查。最后那一级
+            // 是关键：投影版本与库里任何版本都不完全对应时，前两张表可能都空
+            name_zh: zh_from_tables(&i.name, &[source_langs, target_langs, all_langs]),
+            // 替代品是目标版本里的方块，先查目标版本的表，缺失时也允许全库兜底——
+            // 名字只是给人看的，显示出来总比留白好
+            suggested_zh: zh_from_tables(&i.suggested, &[target_langs, all_langs]),
             name: i.name,
             count: i.count,
             suggested: i.suggested,
@@ -1244,7 +1255,6 @@ mod tests {
             "minecraft:pale_oak_stairs".to_string(),
             ("苍白橡木楼梯".to_string(), "Pale Oak Stairs".to_string()),
         );
-
         let items = vec![
             crate::convert::ConvertItem {
                 name: "minecraft:oak_stairs".into(),
@@ -1289,7 +1299,9 @@ mod tests {
             },
         ];
 
-        let out = convert_items_with_zh(items, &source, &target);
+        // 这条测试盯的是前两张表的顺序，合并兜底表留空，避免混进来
+        let all = std::collections::HashMap::new();
+        let out = convert_items_with_zh(items, &source, &target, &all);
 
         assert_eq!(out[0].name_zh, "橡木楼梯");
         assert_eq!(out[0].suggested_zh, "苍白橡木楼梯");
@@ -1308,6 +1320,44 @@ mod tests {
         assert_eq!(out[5].suggested_zh, "");
         assert_eq!(out[0].name, "minecraft:oak_stairs", "原字段不应被改动");
         assert_eq!(out[0].count, 12);
+    }
+
+    /// 源表与目标表都没有中文时，靠全库合并表兜底。
+    ///
+    /// 这是实际会遇到的形态：库里只有某一个版本构建时取到了中文（其余版本
+    /// 是 0 条），此时源版本与目标版本的表都是空的，转换窗口会整列英文，
+    /// 而同一个方块在方块检索里却是有中文的——两边不一致会让人以为转换丢了名字。
+    #[test]
+    fn convert_items_fall_back_to_the_merged_table() {
+        // 源表与目标表都空：模拟「只有别的版本带中文」的库
+        let source = std::collections::HashMap::new();
+        let target = std::collections::HashMap::new();
+        let mut all = std::collections::HashMap::new();
+        all.insert(
+            "minecraft:bamboo_trapdoor".to_string(),
+            ("竹活板门".to_string(), "Bamboo Trapdoor".to_string()),
+        );
+        all.insert(
+            "minecraft:acacia_trapdoor".to_string(),
+            ("金合欢木活板门".to_string(), "Acacia Trapdoor".to_string()),
+        );
+
+        let items = vec![crate::convert::ConvertItem {
+            name: "minecraft:bamboo_trapdoor".into(),
+            count: 100,
+            suggested: "minecraft:acacia_trapdoor".into(),
+            chosen: String::new(),
+        }];
+
+        let out = convert_items_with_zh(items, &source, &target, &all);
+        assert_eq!(
+            out[0].name_zh, "竹活板门",
+            "源表与目标表都空时应退到全库合并表，否则整列英文"
+        );
+        assert_eq!(
+            out[0].suggested_zh, "金合欢木活板门",
+            "替代品同样要能靠合并表拿到中文名"
+        );
     }
 
     /// 替换日志要带上方块中文名。
@@ -1896,9 +1946,10 @@ fn run_setup(
             crate::base_db::base_blocks_dir(app)?,
             crate::base_db::base_jars_dir(app)?,
             crate::base_db::base_entities_path(app)?,
+            crate::base_db::base_langs_dir(app)?,
         ))
     })();
-    let (blocks_dir, jars_dir, entities_path) = match dirs {
+    let (blocks_dir, jars_dir, entities_path, langs_dir) = match dirs {
         Ok(d) => d,
         Err(e) => {
             let msg = e.to_string();
@@ -1935,10 +1986,19 @@ fn run_setup(
                 &blocks_dir,
                 &jars_dir,
                 &entities_path,
+                &langs_dir,
             ),
             Err(e) if v.jar_path.is_none() => Err(AppError::Parse(e.clone())),
             // 有本地 jar 的版本不受清单失败影响
-            Err(_) => setup_one(app, v, None, &blocks_dir, &jars_dir, &entities_path),
+            Err(_) => setup_one(
+                app,
+                v,
+                None,
+                &blocks_dir,
+                &jars_dir,
+                &entities_path,
+                &langs_dir,
+            ),
         };
         outcomes.push(match r {
             Ok(()) => SetupVersionOutcomeDto {
@@ -1967,6 +2027,7 @@ fn setup_one(
     blocks_dir: &Path,
     jars_dir: &Path,
     entities_path: &Path,
+    lang_cache_dir: &Path,
 ) -> AppResult<()> {
     let jar_path = match &v.jar_path {
         Some(p) => PathBuf::from(p),
@@ -2007,17 +2068,37 @@ fn setup_one(
         },
     );
     let out = blocks_dir.join(format!("{}-{}.dat.z", v.data_version, v.id));
-    // 中文在资源库里而不在客户端 jar 里，构建时一并带上；找不到就不带，
-    // 构建侧会回落到英文名（比整列没有名字要好）
+    // 中文不在客户端 jar 里（jar 只有 en_us.json），要单独取：先看本机资源库，
+    // 没有就联网下载并缓存。整条链路失败也不阻断建库——中文名还有程序内置的
+    // 对照表兜底（见 pack_build::fill_zh_from_builtin），因此失败只记原因。
     let mc_dir = v
         .mc_dir
         .as_ref()
         .map(PathBuf::from)
         .or_else(crate::base_db::default_minecraft_dir);
-    let langs = match &mc_dir {
-        Some(dir) => crate::base_db::find_lang_files(dir, &v.id),
-        None => Vec::new(),
+    let version_json_url = match manifest {
+        Some(m) => crate::mc_download::version_json_url(m, &v.id).ok(),
+        // 镜像不用查清单，版本 JSON 直接拼
+        None => Some(format!(
+            "{}/{}/json",
+            crate::mc_download::BMCL_CLIENT_BASE, v.id
+        )),
     };
+    let (langs, lang_problem) = crate::base_db::resolve_lang_files(
+        mc_dir.as_deref(),
+        &v.id,
+        Some(&lang_cache_dir),
+        version_json_url.as_deref(),
+    );
+    if let Some(reason) = lang_problem {
+        let _ = backup::append_log(
+            &backup::backup_root(&exe_dir()),
+            &format!(
+                "版本 {} 未能取到本机中文语言文件，中文名将用内置对照表补齐：{}",
+                v.id, reason
+            ),
+        );
+    }
     crate::jar_file::build_pack_to_with_langs(
         &jar_path.to_string_lossy(),
         &out.to_string_lossy(),
