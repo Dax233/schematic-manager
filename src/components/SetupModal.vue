@@ -31,27 +31,32 @@ const {
   startSetup,
 } = useAppStore();
 
-/** 逐版本进度/结果的展示文本 */
+/** 下载进度比例（0～1）。构建阶段没有总量可报，返回 null 让进度条走不定态。
+ *
+ * 必须是比例而不是百分数：Arco 的 a-progress 内部自己会乘 100——web-vue 的
+ * progress/line.js 里文本与条宽都是 percent * 100，progress.js 又把 percent
+ * 原样透传下去，所以传百分数会显示成「900%」且条宽 900% 被轨道裁成满格。
+ *
+ * total 取自 Content-Length，服务器给的未必是正文真实长度，夹到 1 以内可以
+ * 避免条宽超过 100% 溢出轨道。 */
+function downloadProgress(name: string): number | null {
+  const p = progress.value.get(name);
+  if (!p || p.stage !== "download" || p.total <= 0) return null;
+  return Math.min(1, p.received / p.total);
+}
+
+/** 逐版本进度/结果的展示文本；百分比与进度条同源，避免两处各算一遍算出不同的数 */
 function resultText(name: string): string {
   const o = outcomes.value.find((x) => x.id === name);
   if (o) return o.ok ? "已就绪" : o.error;
   const p = progress.value.get(name);
   if (!p) return "";
   if (p.stage === "download") {
-    return p.total > 0
-      ? `下载中 ${Math.floor((p.received / p.total) * 100)}%`
-      : "下载中…";
+    const ratio = downloadProgress(name);
+    return ratio === null ? "下载中…" : `下载中 ${Math.floor(ratio * 100)}%`;
   }
   if (p.stage === "build") return "构建中…";
   return "";
-}
-
-/** 下载进度百分比（0–100，Arco 进度条用的就是这个量纲）；
- *  构建阶段没有总量可报，返回 null 让进度条走不定态 */
-function percentOf(name: string): number | null {
-  const p = progress.value.get(name);
-  if (!p || p.stage !== "download" || p.total <= 0) return null;
-  return Math.round((p.received / p.total) * 100);
 }
 </script>
 
@@ -146,9 +151,10 @@ function percentOf(name: string): number | null {
       <template #result="{ record }">
         <template v-if="progress.has(record.name) || outcomes.some((o) => o.id === record.name)">
           <a-progress
-            v-if="percentOf(record.name) !== null"
+            v-if="downloadProgress(record.name) !== null"
             size="small"
-            :percent="percentOf(record.name)!"
+            :percent="downloadProgress(record.name)!"
+            :show-text="false"
             style="width: 160px; display: inline-block; margin-right: 8px"
           />
           <span :class="{ 'hint-dim': !outcomes.some((o) => o.id === record.name && !o.ok) }">

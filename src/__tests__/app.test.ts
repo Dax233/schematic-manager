@@ -28,9 +28,18 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   save: vi.fn().mockResolvedValue(null),
 }));
 vi.mock("@tauri-apps/plugin-fs", () => ({ writeFile: vi.fn() }));
-// 版本库补库时订阅进度事件；jsdom 里没有 Tauri 事件系统，
-// 给个「订阅成功、永不推送」的替身
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
+// 版本库补库时订阅进度事件；jsdom 里没有 Tauri 事件系统，给个「订阅成功」的
+// 替身，并把回调记下来——用例要靠它推一条进度事件，才能验证进度条怎么画。
+// vi.mock 的工厂会被提升，数组得用 vi.hoisted 声明，否则工厂里取不到。
+const progressListeners = vi.hoisted(
+  () => [] as Array<{ event: string; handler: (e: { payload: unknown }) => void }>,
+);
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn((event: string, handler: (e: { payload: unknown }) => void) => {
+    progressListeners.push({ event, handler });
+    return Promise.resolve(() => {});
+  }),
+}));
 
 // SceneViewer 依赖 WebGL，jsdom 没有。挂载测试关心的是外壳界面，
 // 因此用空组件替代，避免把 WebGL 缺失误判成界面故障。
@@ -3538,6 +3547,49 @@ describe("版本库", () => {
     // 1.21 本机没有，默认不勾：勾上就是几十 MB 下载，得用户自己点头
     const btn = bodyButton("准备勾选的版本");
     expect(btn!.textContent, "要下载的版本不默认勾选").toContain("（0）");
+    w.unmount();
+  });
+
+  it("下载进度按真实比例画进度条，不把 9% 画成 900%", async () => {
+    // 让补库停在下载态：settle 之前 setup_add_versions 不结算，进度订阅才留得住
+    let settle!: (v: unknown) => void;
+    const pending = new Promise<unknown>((resolve) => {
+      settle = resolve;
+    });
+    stubInvoke({
+      base_db_status: { versions: [], entityAvailable: false, supported },
+      default_minecraft_dir: "C:/mc",
+      scan_minecraft: {
+        versions: [{ id: "1.21", dataVersion: 3953, jarPath: "C:/mc/1.21/1.21.jar" }],
+        warnings: [],
+      },
+      setup_add_versions: () => pending,
+    });
+    // 回调数组是模块级的，不清掉会拿到前面用例注册的那个
+    progressListeners.length = 0;
+    const w = mountApp();
+    await flushPromises();
+
+    const listener = progressListeners.find((l) => l.event === "base-setup-progress");
+    expect(listener, "补库时应订阅进度事件").toBeTruthy();
+    listener!.handler({
+      payload: { id: "1.21", stage: "download", received: 9, total: 100, error: "" },
+    });
+    await flushPromises();
+
+    const row = [...document.querySelectorAll(".setup-table tbody tr")].find((r) =>
+      (r.textContent ?? "").includes("1.21"),
+    )!;
+    expect(row.textContent, "文案里的百分比应是真实值").toContain("下载中 9%");
+    // Arco 的 percent 是 0～1 的比例，内部自己乘 100：传成百分数会让条宽变成
+    // 900%、被轨道裁成一整条，文案那边却还是 9%（就是 900% 配 9% 的来源）
+    const bar = row.querySelector<HTMLElement>(".arco-progress-line-bar");
+    expect(bar, "下载阶段应画出进度条").toBeTruthy();
+    expect(parseFloat(bar!.style.width), "条宽应等于真实比例").toBeCloseTo(9, 3);
+    expect(row.textContent, "不应出现被放大一百倍的百分比").not.toContain("900%");
+
+    settle({ outcomes: [] });
+    await flushPromises();
     w.unmount();
   });
 });
