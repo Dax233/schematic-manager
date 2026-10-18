@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import ArcoVue, { Message } from "@arco-design/web-vue";
 import ArcoVueIcon from "@arco-design/web-vue/es/icon";
@@ -56,7 +56,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "../App.vue";
-import i18n from "../i18n";
+import i18n, { setLocale } from "../i18n";
 import type { SchematicSummary, SceneData, DuplicateGroup, ConvertItem, BlockCount } from "../types";
 
 const mockInvoke = vi.mocked(invoke);
@@ -4007,6 +4007,43 @@ describe("更新窗口", () => {
     (document.querySelector(".about-link") as HTMLElement).click();
     await flushPromises();
     expect(shownMessages().join(" "), "应显示失败原因").toContain("打开链接失败");
+    w.unmount();
+  });
+});
+
+/** 界面语言：工具条最右的切换入口要真的把文案换掉，而不只是改一个变量 */
+describe("界面语言", () => {
+  // 语言是全局单例，用例跑完必须还原，否则后面的中文断言会连带失败
+  afterEach(() => {
+    setLocale("zh-CN");
+  });
+
+  it("在工具条上切到 English 后界面文案跟着变", async () => {
+    stubInvoke();
+    const w = mountApp();
+    await flushPromises();
+    expect(
+      w.findAll("button").some((b) => b.text().includes("添加目录")),
+      "默认应是简体中文",
+    ).toBe(true);
+
+    await w.findAll("button").find((b) => b.text().includes("简体中文"))!.trigger("click");
+    await flushPromises();
+    const option = [...document.querySelectorAll(".arco-dropdown-option")].find((o) =>
+      (o.textContent ?? "").includes("English"),
+    );
+    expect(option, "语言下拉里应有 English").toBeTruthy();
+    (option as HTMLElement).click();
+    await flushPromises();
+
+    expect(
+      w.findAll("button").some((b) => b.text().includes("Add directory")),
+      "切到英语后按钮应显示英文",
+    ).toBe(true);
+    expect(
+      w.findAll("button").some((b) => b.text().includes("添加目录")),
+      "切换后不应再留着中文按钮",
+    ).toBe(false);
     w.unmount();
   });
 });
