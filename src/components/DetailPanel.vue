@@ -84,7 +84,7 @@ const {
                因此内容再长也不会把保存按钮挤出可视范围。
                这一段自己用 Arco 无轨道滚动条滚（见 .preview__info-body 的尺寸）。 -->
           <div class="preview__info-body">
-          <a-scrollbar type="embed" :outer-style="{ flex: '1 1 auto', minHeight: 0 }">
+          <a-scrollbar type="embed" class="scroll-fill__inner" outer-class="scroll-fill">
           <!-- 这一栏只放四件事：文件名、投影名称、作者、描述。四者都可编辑。
                前三项按用户要求「名称在左、控件在右」横排；描述是长文本，
                标签留在上方、输入框占满整行。
@@ -235,7 +235,7 @@ const {
              制作版本与数据版本分成两项：用户明确列了这两项，
              合并成「1.20.1（数据版本 3465）」会少一个可扫的标签。
              明细比页签高时用 Arco 无轨道滚动条滚。 -->
-        <a-scrollbar type="embed" :outer-style="{ flex: '1 1 auto', minHeight: 0 }">
+        <a-scrollbar type="embed" class="scroll-fill__inner" outer-class="scroll-fill">
         <a-descriptions
           v-if="selected"
           :column="1"

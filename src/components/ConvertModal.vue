@@ -268,7 +268,7 @@ function replName(rec: ConvertItem): string {
         <div v-else class="conv-split">
           <!-- 左栏：缺哪些方块。红=还没定下替代品，绿=已经有了（自动推荐或已指定） -->
           <div class="conv-split__pane conv-split__pane--main">
-            <a-scrollbar type="embed" :outer-style="{ flex: '1 1 auto', minHeight: 0 }">
+            <a-scrollbar type="embed" class="scroll-fill__inner" outer-class="scroll-fill">
             <a-table
               :columns="convColumns"
               :data="convItems"
@@ -350,8 +350,8 @@ function replName(rec: ConvertItem): string {
             </div>
             <a-scrollbar
               type="embed"
-              class="conv-pick"
-              :outer-style="{ flex: '1 1 auto', minHeight: 0 }"
+              class="conv-pick scroll-fill__inner"
+              outer-class="scroll-fill"
             >
               <a-empty
                 v-if="convPickHits.length === 0"

@@ -1487,15 +1487,30 @@ body[arco-theme='dark'] .repl-block--empty .arco-input-wrapper {
   font-size: 13px;
 }
 
-// 弹出层的高度：上下都留出边距，不要铺满整屏。
-// Arco 的弹窗是 .arco-modal-wrapper 里一个 top: 100px 的 inline-block，本身不限高，
-// 内容一多就把 wrapper 撑成整屏高，标题与按钮随之滚出视野。这里给弹窗封顶并改成
-// 纵向 flex，body 于是在弹窗内部伸缩，标题栏与按钮始终留在视野里。
-// 宽度仍由各弹窗的 width 属性以内联样式给出，配合 margin: 0 auto 保持居中。
+// 弹出层的高度：上下都要与页面边缘留出距离，不要铺满整屏。
+//
+// Arco 的弹窗默认靠 `text-align: center` + `inline-block` + `vertical-align: middle`
+// 做水平与垂直居中，本身不限高：内容一多就把遮罩层撑成可滚动的，标题与按钮
+// 随之滚出视野。这里给弹窗封顶并改成纵向 flex，body 于是在弹窗内部伸缩。
+//
+// 改了 display 之后 Arco 那套 vertical-align 居中就失效了（实测弹窗贴到屏幕
+// 顶部，上方没有留白），因此**必须自己给上下外边距**，不能只靠 max-height。
+// `calc(100vh - 160px)` 的上限加上 24px 上下边距，最多占满视口也不溢出，
+// 遮罩层因此不会变成可滚动的——否则滚轮一动，整个弹窗会跟着上移。
+// 宽度仍由各弹窗的 width 属性以内联样式给出，配合 margin 的 auto 保持水平居中。
 .arco-modal {
   display: flex;
   flex-direction: column;
   max-height: calc(100vh - 160px);
+  margin: 24px auto;
+}
+
+// 遮罩层是 Arco 的滚动容器（overflow: auto）。弹窗封顶后它永远不需要滚动，
+// 但只要它还能滚，滚轮落在弹窗的非滚动区域（标题、按钮行）时就会**带着整个
+// 弹窗上移**（实测 scrollTop=300 时弹窗位移 -300）。直接关掉它的滚动：
+// 内容超出的部分由弹窗内部的滚动条负责，这里不该再出现第二条滚动路径。
+.arco-modal-wrapper {
+  overflow: hidden;
 }
 
 // body 跟着弹窗伸缩；内容区要不要用 Arco 的无轨道滚动条由各弹窗决定，
@@ -1505,10 +1520,31 @@ body[arco-theme='dark'] .repl-block--empty .arco-input-wrapper {
   min-height: 0;
 }
 
-// 可滚动区域：Arco 的滚动条自己会填满父元素（.arco-scrollbar 与它的容器都是
-// height: 100%），尺寸由外面那一层给。要让它当 flex 子项占满剩余高度，
-// 必须写在它的 outer-style 上——写普通 style 会落到内部的滚动容器上，
-// 而需要参与父级 flex 布局的是滚动条自身。
+// 可滚动区域：让 Arco 的无轨道滚动条真的在给定高度内滚动。
+//
+// Arco 的结构是 `.arco-scrollbar`（根，Arco 自己给了 height: 100%）套
+// `.arco-scrollbar-container`（真正滚动的那个，height: 100% + overflow: auto）。
+// 当根的高度由**父级 flex 布局**决定时，容器的 `height: 100%` 解析不成确定值，
+// 于是它退回按内容撑开、`overflow: auto` 形同虚设：内容溢出到弹窗遮罩层
+// （`.arco-modal-wrapper` 是 overflow: auto）上，表现为**一滚动整个弹窗往上移，
+// 列表自己不滚**。实测：根 464px、容器却 1565px。
+//
+// 修法是把高度沿 flex 传下去，不再依赖百分比：根当纵向 flex 容器，
+// 容器由 flex 拿到确定高度。
+// 用法：`<a-scrollbar type="embed" class="scroll-fill__inner" outer-class="scroll-fill">`
+// （普通 class 会落到内部容器上，根要用 outer-class）。
+.scroll-fill {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.scroll-fill__inner {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .arco-drawer {
   top: 16px;
   bottom: 16px;

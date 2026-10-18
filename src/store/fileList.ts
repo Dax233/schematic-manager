@@ -1060,6 +1060,18 @@ export function createFileListSlice(s: FileListDeps) {
     void s.loadScene(record);
   }
 
+  /** 重新解析当前选中项。
+   *
+   * 方块名与渲染图都来自基础库，库一变（版本库补/重建了版本、语言表补齐）
+   * 先前那份分析结果里存的就是旧名字。不重解析的话，用户会看到「库已经更新了、
+   * 界面还是英文名」，只能靠再点一次那一行才会变——那不该由用户去猜。
+   */
+  async function refreshSelectedAnalysis() {
+    const cur = selected.value;
+    if (!cur) return;
+    await onRowClick(cur as unknown as TableData);
+  }
+
   /** 列表行的样式类：当前选中项高亮，重复文件按组上色，疑似重复另行标出。
    *
    * 用 a-table 的 rowClass 而不是自己拼 tr：行的 DOM 由 Arco 生成，
@@ -1118,6 +1130,7 @@ export function createFileListSlice(s: FileListDeps) {
     syncSelection,
     syncRenamedPath,
     onRowClick,
+    refreshSelectedAnalysis,
     columns,
     colWidths,
     onColumnResize,

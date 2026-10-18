@@ -61,7 +61,7 @@ const {
     </a-space>
 
     <!-- 日志可以很长：内容区自己滚（Arco 无轨道滚动条），标题与按钮留在视野里 -->
-    <a-scrollbar type="embed" :outer-style="{ flex: '1 1 auto', minHeight: 0 }">
+    <a-scrollbar type="embed" class="scroll-fill__inner" outer-class="scroll-fill">
       <a-spin :loading="logLoading" style="width: 100%">
         <a-empty v-if="logs.length === 0" :description="t('log.empty')" />
         <OperationLogList v-else :lines="logs" />

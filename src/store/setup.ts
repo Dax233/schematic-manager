@@ -31,6 +31,15 @@ import type {
   SetupVersionOutcome,
 } from "../types";
 
+/** 「版本库」域用到的外部成员。
+ *
+ * 只声明本域真的用到的那些，避免和别的域互相引用成环。
+ */
+export interface SetupDeps {
+  /** 重新解析当前选中项：基础库变了之后方块名与渲染图都会过期 */
+  refreshSelectedAnalysis: () => Promise<void>;
+}
+
 /** 会被记住的「版本库」界面状态。版本号用于日后改结构时丢弃旧数据。 */
 interface SetupState {
   version: 1;
@@ -49,7 +58,7 @@ export interface SetupRow {
   jarPath: string | null;
 }
 
-export function createSetupSlice() {
+export function createSetupSlice(s: SetupDeps) {
   const setupOpen = ref(false);
   /** 打开弹窗过程中的加载态，供工具栏按钮显示 */
   const setupOnOpen = ref(false);
@@ -330,6 +339,10 @@ export function createSetupSlice() {
         Message.success(t("library.batchAllReady", { count: r.outcomes.length }));
       }
       await refreshStatus();
+      // 基础库可能刚被重建（语言表补齐、缺的版本补上），当前选中项的方块名与
+      // 渲染图都来自旧库；这里立刻重解析一次，用户关掉弹窗就能看到新的名字，
+      // 不必自己去再点一遍那一行
+      await s.refreshSelectedAnalysis();
     } catch (e) {
       Message.error(t("library.batchFailed", { error: String(e) }));
     } finally {

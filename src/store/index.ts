@@ -51,7 +51,7 @@ export function createAppStore(): AppStore {
   Object.assign(s, createBlockReplaceSlice(s));
   Object.assign(s, createVersionConvertSlice(s));
   Object.assign(s, createBackupsSlice(s));
-  Object.assign(s, createSetupSlice());
+  Object.assign(s, createSetupSlice(s));
   Object.assign(s, createUpdateSlice());
   Object.assign(s, createUiStateSlice(s));
   return s;

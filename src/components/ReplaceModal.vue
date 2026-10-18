@@ -81,7 +81,7 @@ function pickFieldLabel(): string {
     <div class="repl-split">
       <!-- 左栏：替换规则 -->
       <div class="repl-split__pane repl-split__pane--form">
-        <a-scrollbar type="embed" :outer-style="{ flex: '1 1 auto', minHeight: 0 }">
+        <a-scrollbar type="embed" class="scroll-fill__inner" outer-class="scroll-fill">
           <a-form :model="replaceForm" layout="vertical" size="small">
             <!-- 每个字段一层 .repl-field：标签、输入框、说明一律纵向排开、间距一致。
                  直接把输入框与说明并列写在表单项里时，Arco 的控制区会把它们摆成
@@ -208,8 +208,8 @@ function pickFieldLabel(): string {
         </div>
         <a-scrollbar
           type="embed"
-          class="repl-pick"
-          :outer-style="{ flex: '1 1 auto', minHeight: 0 }"
+          class="repl-pick scroll-fill__inner"
+          outer-class="scroll-fill"
         >
           <a-empty
             v-if="blockHits.length === 0"

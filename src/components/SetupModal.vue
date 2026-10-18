@@ -83,6 +83,7 @@ function warningText(code: string): string {
   if (code === "lang-unavailable") return t("setup.warnLangUnavailable");
   return code;
 }
+
 </script>
 
 <template>
@@ -148,7 +149,11 @@ function warningText(code: string): string {
     <div class="hint-dim" style="margin-bottom: 10px">{{ t("setup.sourceHint") }}</div>
 
     <!-- 内容区自己滚：弹窗高度不铺满整屏，版本多的时候在这里滚 -->
-    <a-scrollbar type="embed" :outer-style="{ flex: '1 1 auto', minHeight: 0 }">
+    <a-scrollbar
+      type="embed"
+      class="scroll-fill__inner"
+      outer-class="scroll-fill"
+    >
       <a-alert v-if="scanWarnings.length > 0" type="warning" style="margin-bottom: 10px">
         <template #title>
           {{ t("setup.scanWarnings", { count: scanWarnings.length }) }}
