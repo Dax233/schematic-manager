@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { t } from "../i18n";
 import type { SceneData } from "../types";
 import {
   applyPreset as applyPresetTo,
@@ -217,7 +218,7 @@ onMounted(() => {
     }
   } catch (e) {
     // WebGL 不可用时给出明确提示，而不是留下一块空白
-    error.value = `初始化 3D 视图失败：${String(e)}`;
+    error.value = t("scene.initFailed", { error: String(e) });
   }
 });
 
@@ -277,7 +278,7 @@ watch(
 async function exportPng(size: number): Promise<Uint8Array> {
   const r = renderer.value;
   if (!r || !camera || !threeScene) {
-    throw new Error("3D 视图尚未就绪，无法导出");
+    throw new Error(t("scene.notReady"));
   }
   const prev = new THREE.Vector2();
   r.getSize(prev);
@@ -293,7 +294,7 @@ async function exportPng(size: number): Promise<Uint8Array> {
 
     const blob: Blob = await new Promise((resolve, reject) => {
       r.domElement.toBlob(
-        (b) => (b ? resolve(b) : reject(new Error("导出图像失败"))),
+        (b) => (b ? resolve(b) : reject(new Error(t("scene.exportFailed")))),
         "image/png",
       );
     });
@@ -318,7 +319,7 @@ defineExpose({
   <div class="scene-viewer">
     <div ref="host" class="scene-viewer__canvas" />
     <div v-if="error" class="scene-viewer__error">{{ error }}</div>
-    <div v-else-if="!scene" class="scene-viewer__empty">尚无预览</div>
+    <div v-else-if="!scene" class="scene-viewer__empty">{{ t("scene.empty") }}</div>
   </div>
 </template>
 

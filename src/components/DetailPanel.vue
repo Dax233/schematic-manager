@@ -11,8 +11,12 @@ import SceneViewer from "./SceneViewer.vue";
 import BlockStatTable from "./BlockStatTable.vue";
 import EntityTable from "./EntityTable.vue";
 import { EXPORT_SIZES } from "../render/scene3d";
+import { useI18n } from "vue-i18n";
+import { displayName } from "../i18n";
 import { useAppStore } from "../store";
 import { formatDims, formatSize } from "../utils/format";
+
+const { t } = useI18n();
 
 const {
   viewer,
@@ -53,11 +57,19 @@ const {
                三万块以上的场景建几何并上传显存会明显卡顿，何时做由用户定。 -->
           <div v-if="sceneGate" class="scene-gate">
             <div class="scene-gate__text">
-              该投影里「{{ sceneGate.zhName || sceneGate.name }}」有
-              {{ sceneGate.count.toLocaleString() }} 个，超过
-              {{ sceneBlockLimit.toLocaleString() }} 个时不会自动渲染。
+              {{
+                t("detail.gateWarning", {
+                  name:
+                    displayName({ zhName: sceneGate.zhName, enName: sceneGate.enName }) ||
+                    sceneGate.name,
+                  count: sceneGate.count.toLocaleString(),
+                  limit: sceneBlockLimit.toLocaleString(),
+                })
+              }}
             </div>
-            <a-button type="primary" size="small" @click="startRender">开始渲染</a-button>
+            <a-button type="primary" size="small" @click="startRender">
+              {{ t("detail.startRender") }}
+            </a-button>
           </div>
           <a-spin v-else :loading="sceneLoading" style="width: 100%; height: 100%">
             <SceneViewer
@@ -80,7 +92,7 @@ const {
                重新链接到新名字（见后端 rename_schematic）。
                输入框只放文件名本身，不含所在目录。 -->
           <div class="preview__row">
-            <span class="preview__row-label">文件名</span>
+            <span class="preview__row-label">{{ t("detail.fileName") }}</span>
             <a-input
               class="preview__row-control"
               v-model="draft.fileName"
@@ -89,12 +101,12 @@ const {
             />
           </div>
           <div class="hint-dim" style="margin: -6px 0 10px 66px">
-            改名后保存即生效，所属目录不变
+            {{ t("detail.renameNote") }}
           </div>
 
           <a-form :model="draft" layout="vertical" size="small" class="preview__form">
             <div class="preview__row">
-              <span class="preview__row-label">投影名称</span>
+              <span class="preview__row-label">{{ t("detail.schematicName") }}</span>
               <a-input
                 class="preview__row-control"
                 v-model="draft.name"
@@ -103,7 +115,7 @@ const {
               />
             </div>
             <div class="preview__row">
-              <span class="preview__row-label">作者</span>
+              <span class="preview__row-label">{{ t("detail.author") }}</span>
               <a-input
                 class="preview__row-control"
                 v-model="draft.author"
@@ -111,11 +123,11 @@ const {
                 @input="dirty = true"
               />
             </div>
-            <a-form-item label="描述（备注）">
+            <a-form-item :label="t('detail.description')">
               <a-textarea
                 v-model="draft.description"
                 :auto-size="{ minRows: 6, maxRows: 14 }"
-                placeholder="可多行填写，保存后写入投影文件"
+                :placeholder="t('detail.descriptionPlaceholder')"
                 :disabled="!!selected.error"
                 @input="dirty = true"
               />
@@ -133,19 +145,19 @@ const {
               :disabled="!dirty || !!selected.error"
               @click="saveDraft"
             >
-              保存
+              {{ t("detail.save") }}
             </a-button>
             <a-button size="small" :disabled="!dirty" @click="resetDraft(selected)">
-              撤销
+              {{ t("detail.undo") }}
             </a-button>
-            <span v-if="dirty" class="hint-warn">有未保存的修改</span>
+            <span v-if="dirty" class="hint-warn">{{ t("detail.unsaved") }}</span>
             <span v-else-if="!selected.error" class="hint-dim">
-              保存前会自动备份原件
+              {{ t("detail.backupNote") }}
             </span>
           </div>
         </div>
         <div class="preview__info" v-else>
-          <a-empty description="选择一个投影文件以查看详情" />
+          <a-empty :description="t('detail.empty')" />
         </div>
       </div>
       <div class="preview__bar">
@@ -156,12 +168,12 @@ const {
           :disabled="!scene"
           @change="setView(String(activeView))"
         >
-          <a-radio value="front">正面</a-radio>
-          <a-radio value="left45">左侧 45°</a-radio>
-          <a-radio value="right45">右侧 45°</a-radio>
-          <a-radio value="back">背面</a-radio>
+          <a-radio value="front">{{ t("detail.viewFront") }}</a-radio>
+          <a-radio value="left45">{{ t("detail.viewLeft45") }}</a-radio>
+          <a-radio value="right45">{{ t("detail.viewRight45") }}</a-radio>
+          <a-radio value="back">{{ t("detail.viewBack") }}</a-radio>
         </a-radio-group>
-        <span class="preview__label">亮度</span>
+        <span class="preview__label">{{ t("detail.brightness") }}</span>
         <a-slider
           v-model="brightness"
           :min="0.5"
@@ -182,7 +194,7 @@ const {
           :disabled="!scene || exporting"
           @click="exportPreview"
         >
-          导出预览图
+          {{ t("detail.exportPng") }}
         </a-button>
         <!-- 批量导出：对目录栏里勾选的文件各导出一张，输出到所选目录 -->
         <a-button
@@ -191,12 +203,12 @@ const {
           :disabled="!hasChecked || exporting"
           :title="
             hasChecked
-              ? `导出勾选的 ${checkedCount} 个投影各一张预览图`
-              : '先在下方的目录栏里勾选要导出的投影'
+              ? t('detail.batchExportHint', { count: checkedCount })
+              : t('detail.batchExportEmpty')
           "
           @click="exportBatch"
         >
-          批量导出
+          {{ t("detail.exportBatch") }}
           <template v-if="exportingProgress">
             （{{ exportingProgress.done }}/{{ exportingProgress.total }}）
           </template>
@@ -212,7 +224,7 @@ const {
       default-active-key="info"
       style="padding: 0 8px"
     >
-      <a-tab-pane key="info" title="信息">
+      <a-tab-pane key="info" :title="t('detail.tabInfo')">
         <!-- 只读明细。可编辑的元数据（文件名/投影名称/作者/描述）在预览区
              右侧，这里集中放**其余**的详细信息，避免两处重复同一字段。
              制作版本与数据版本分成两项：用户明确列了这两项，
@@ -224,37 +236,55 @@ const {
           :label-style="{ width: '110px' }"
           bordered
         >
-          <a-descriptions-item label="制作版本">
-            {{ selected.mcVersionName || "未知" }}
+          <a-descriptions-item :label="t('detail.mcVersion')">
+            {{ selected.mcVersionName || t("detail.unknown") }}
           </a-descriptions-item>
-          <a-descriptions-item label="数据版本">
+          <a-descriptions-item :label="t('detail.dataVersion')">
             {{ selected.dataVersion }}
           </a-descriptions-item>
-          <a-descriptions-item label="投影格式">v{{ selected.formatVersion }}</a-descriptions-item>
-          <a-descriptions-item label="尺寸">{{ formatDims(selected.enclosing) }}</a-descriptions-item>
-          <a-descriptions-item label="区域数量">{{ selected.regionCount }}</a-descriptions-item>
-          <a-descriptions-item label="方块总数">{{ selected.totalBlocks }}</a-descriptions-item>
-          <a-descriptions-item label="实体数量">{{ selected.entityCount }}</a-descriptions-item>
-          <a-descriptions-item label="方块实体">{{ selected.tileEntityCount }}</a-descriptions-item>
-          <a-descriptions-item label="待处理刻">{{ selected.pendingTicks }}</a-descriptions-item>
-          <a-descriptions-item label="内含预览图">
-            {{ selected.hasPreview ? "是" : "否" }}
+          <a-descriptions-item :label="t('detail.formatVersion')">
+            v{{ selected.formatVersion }}
           </a-descriptions-item>
-          <a-descriptions-item label="文件大小">{{ formatSize(selected.fileSize) }}</a-descriptions-item>
-          <a-descriptions-item label="所在目录">{{ selected.dirName }}</a-descriptions-item>
-          <a-descriptions-item v-if="selected.error" label="解析错误">
+          <a-descriptions-item :label="t('detail.dims')">
+            {{ formatDims(selected.enclosing) }}
+          </a-descriptions-item>
+          <a-descriptions-item :label="t('detail.regionCount')">
+            {{ selected.regionCount }}
+          </a-descriptions-item>
+          <a-descriptions-item :label="t('detail.totalBlocks')">
+            {{ selected.totalBlocks }}
+          </a-descriptions-item>
+          <a-descriptions-item :label="t('detail.entityCount')">
+            {{ selected.entityCount }}
+          </a-descriptions-item>
+          <a-descriptions-item :label="t('detail.tileEntityCount')">
+            {{ selected.tileEntityCount }}
+          </a-descriptions-item>
+          <a-descriptions-item :label="t('detail.pendingTicks')">
+            {{ selected.pendingTicks }}
+          </a-descriptions-item>
+          <a-descriptions-item :label="t('detail.hasPreview')">
+            {{ selected.hasPreview ? t("detail.yes") : t("detail.no") }}
+          </a-descriptions-item>
+          <a-descriptions-item :label="t('detail.fileSize')">
+            {{ formatSize(selected.fileSize) }}
+          </a-descriptions-item>
+          <a-descriptions-item :label="t('detail.dirName')">
+            {{ selected.dirName }}
+          </a-descriptions-item>
+          <a-descriptions-item v-if="selected.error" :label="t('detail.parseError')">
             <span style="color: rgb(var(--danger-6))">{{ selected.error }}</span>
           </a-descriptions-item>
         </a-descriptions>
-        <a-empty v-else description="选择一个投影文件以查看详情" />
+        <a-empty v-else :description="t('detail.empty')" />
 
       </a-tab-pane>
 
-      <a-tab-pane key="blocks" title="方块">
+      <a-tab-pane key="blocks" :title="t('detail.tabBlocks')">
         <BlockStatTable />
       </a-tab-pane>
 
-      <a-tab-pane key="entities" title="实体">
+      <a-tab-pane key="entities" :title="t('detail.tabEntities')">
         <EntityTable />
       </a-tab-pane>
     </a-tabs>

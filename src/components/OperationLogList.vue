@@ -10,6 +10,7 @@
  * 一条日志里的文件名可能很长，但边界清楚，逐条阅读不再吃力。
  */
 import { computed } from "vue";
+import { t } from "../i18n";
 import { useAppStore } from "../store";
 import { parseLogLine } from "../utils/operation_log";
 
@@ -21,7 +22,7 @@ const entries = computed(() => props.lines.map(parseLogLine));
 
 /** 时间戳解析不出来时如实说明，而不是显示成 1970 年 */
 function timeText(timeNs: string): string {
-  return timeNs ? formatTime(timeNs) : "时间未知";
+  return timeNs ? formatTime(timeNs) : t("logList.timeUnknown");
 }
 </script>
 
