@@ -9,7 +9,9 @@
     python tools/gen_icon.py            # 写出最终图标主图（1024）与各档预览
     python tools/gen_icon.py --all      # 另外写出 A~F 六个候选与对照图
 
-输出的主图交给 `pnpm tauri icon <主图>` 生成全套尺寸（含 .ico / .icns）。
+输出的主图只是候选图，不生成应用图标集：当前的应用图标由
+`tools/gen_app_icons.py` 从 `docs/` 下两张母版按尺寸分档生成（见 README 的
+「应用图标」一节）。
 注意：只改图标文件时增量构建不会重跑 build.rs，exe 会继续留着旧图标资源，
 需要先清掉 target 里本 crate 的 build-script 缓存再构建。
 
