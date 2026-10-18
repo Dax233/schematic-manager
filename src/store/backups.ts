@@ -13,6 +13,7 @@
 import { ref } from "vue";
 import type { ComputedRef, Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
+import { t } from "../i18n";
 import {
   clearOperationLog,
   deleteBackup,
@@ -76,7 +77,7 @@ export function createBackupsSlice(s: BackupsDeps) {
     try {
       backups.value = await listBackups(s.selected.value?.fileName.replace(/\.litematic$/i, ""));
     } catch (e) {
-      Message.error(`读取备份失败：${e}`);
+      Message.error(t("backup.loadFailed", { error: String(e) }));
     } finally {
       backupLoading.value = false;
     }
@@ -87,7 +88,7 @@ export function createBackupsSlice(s: BackupsDeps) {
     try {
       logs.value = await readOperationLog(LOG_MAX_LINES);
     } catch (e) {
-      Message.error(`读取日志失败：${e}`);
+      Message.error(t("backup.logLoadFailed", { error: String(e) }));
     } finally {
       logLoading.value = false;
     }
@@ -98,7 +99,7 @@ export function createBackupsSlice(s: BackupsDeps) {
     if (!cur) return;
     try {
       await restoreBackup(row.path, cur.path);
-      Message.success("已还原");
+      Message.success(t("backup.restored"));
       await Promise.all([refreshBackups(), refreshLogs()]);
       // 还原后重新读取文件内容与预览，避免界面仍显示还原前的数据
       await s.rescanAll();
@@ -111,17 +112,17 @@ export function createBackupsSlice(s: BackupsDeps) {
         void s.loadScene(hit);
       }
     } catch (e) {
-      Message.error(`还原失败：${e}`);
+      Message.error(t("backup.restoreFailed", { error: String(e) }));
     }
   }
 
   async function onDelete(row: BackupEntry) {
     try {
       await deleteBackup(row.path);
-      Message.success("已删除");
+      Message.success(t("backup.deleted"));
       await Promise.all([refreshBackups(), refreshLogs()]);
     } catch (e) {
-      Message.error(`删除失败：${e}`);
+      Message.error(t("backup.deleteFailed", { error: String(e) }));
     }
   }
 
@@ -141,10 +142,10 @@ export function createBackupsSlice(s: BackupsDeps) {
   async function clearLogs() {
     try {
       await clearOperationLog();
-      Message.success("已清空操作日志");
+      Message.success(t("backup.logsCleared"));
       await refreshLogs();
     } catch (e) {
-      Message.error(`清空日志失败：${e}`);
+      Message.error(t("backup.clearFailed", { error: String(e) }));
     }
   }
 
@@ -153,7 +154,7 @@ export function createBackupsSlice(s: BackupsDeps) {
     try {
       await openOperationLogDir();
     } catch (e) {
-      Message.error(`打开日志目录失败：${e}`);
+      Message.error(t("backup.openDirFailed", { error: String(e) }));
     }
   }
 

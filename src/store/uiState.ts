@@ -11,7 +11,7 @@ import { onBeforeUnmount, onMounted, watch } from "vue";
 import type { ComputedRef, Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { loadUiState, saveUiState, scanLitematics } from "../api";
-import { currentLocale, isLocale, locale, setLocale } from "../i18n";
+import { currentLocale, isLocale, locale, setLocale, t } from "../i18n";
 import { EXPORT_SIZES, VIEW_PRESETS } from "../render/scene3d";
 import type { SchematicSummary } from "../types";
 
@@ -143,7 +143,7 @@ export function createUiStateSlice(s: UiStateDeps) {
     } catch (e) {
       // 内容损坏时不应让程序起不来，也不该静默：明确告知并按默认界面继续
       console.warn("界面状态内容无法解析，已忽略：", e);
-      Message.warning("上次的界面设置无法读取，已恢复默认界面");
+      Message.warning(t("ui.stateUnreadable"));
       return;
     }
     // 版本不匹配时丢弃：旧结构硬套会得到难以解释的界面
@@ -206,11 +206,11 @@ export function createUiStateSlice(s: UiStateDeps) {
       Object.keys(next).filter((d) => !Array.isArray(st.enabledDirs) || keep.has(d)),
     );
     if (missing.length > 0) {
-      Message.warning(`以下目录已无法读取，未恢复：\n${missing.join("\n")}`);
+      Message.warning(t("ui.dirsMissing", { dirs: missing.join("\n") }));
       // 把失效目录从记忆里清掉
       persistUiState();
     }
-    s.status.value = `已恢复 ${Object.keys(next).length} 个目录`;
+    s.status.value = t("ui.dirsRestored", { count: Object.keys(next).length });
   }
 
   // 记住界面改动。逐个监听而不是 watch 一个大对象：后者要么深比较整棵状态树，

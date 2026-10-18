@@ -14,6 +14,7 @@
  */
 import { computed, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
+import { t } from "../i18n";
 import { appVersion, checkUpdate, openUrl } from "../api";
 import { copyText } from "../utils/clipboard";
 import type { UpdateInfo } from "../types";
@@ -90,9 +91,9 @@ export function createUpdateSlice() {
   async function copyReleaseUrl() {
     try {
       await copyText(releaseUrl.value);
-      Message.success("已复制地址");
+      Message.success(t("update.copiedUrl"));
     } catch (e) {
-      Message.error(`复制失败：${e}`);
+      Message.error(t("update.copyFailed", { error: String(e) }));
     }
   }
 
@@ -105,7 +106,7 @@ export function createUpdateSlice() {
     try {
       await openUrl(url);
     } catch (e) {
-      Message.error(`打开链接失败：${e}`);
+      Message.error(t("update.openFailed", { error: String(e) }));
     }
   }
 

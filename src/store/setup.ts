@@ -223,7 +223,7 @@ export function createSetupSlice() {
   async function rescan(autoImport = true) {
     const dir = mcDir.value.trim();
     if (!dir) {
-      Message.warning("请先填写或选择目录");
+      Message.warning(t("library.needDir"));
       return;
     }
     scanning.value = true;
@@ -237,13 +237,13 @@ export function createSetupSlice() {
         (row) => row.state === "local" && !ready.value.some((x) => x.name === row.name),
       );
       if (fresh.length > 0) {
-        Message.info(`发现 ${fresh.length} 个本机版本，正在导入…`);
+        Message.info(t("library.foundLocal", { count: fresh.length }));
       }
       if (autoImport && fresh.length > 0) {
         await runFor(fresh);
       }
     } catch (e) {
-      Message.error(`扫描失败：${e}`);
+      Message.error(t("library.scanFailed", { error: String(e) }));
     } finally {
       scanning.value = false;
     }
@@ -251,7 +251,11 @@ export function createSetupSlice() {
 
   /** 手动选择目录 */
   async function pickMcDir() {
-    const dir = await open({ directory: true, multiple: false, title: "选择目录" });
+    const dir = await open({
+      directory: true,
+      multiple: false,
+      title: t("library.chooseDir"),
+    });
     if (typeof dir !== "string" || !dir) return;
     mcDir.value = dir;
     await rescan();
@@ -272,7 +276,7 @@ export function createSetupSlice() {
       await refreshStatus();
       if (mcDir.value) await rescan();
     } catch (e) {
-      Message.error(`读取版本库状态失败：${e}`);
+      Message.error(t("library.statusFailed", { error: String(e) }));
     } finally {
       setupOnOpen.value = false;
     }
@@ -316,15 +320,18 @@ export function createSetupSlice() {
       allOk = r.outcomes.length > 0 && failed.length === 0;
       if (failed.length > 0) {
         Message.warning({
-          content: `${r.outcomes.length - failed.length} 个版本已就绪，${failed.length} 个失败（详见弹窗列表）`,
+          content: t("library.batchPartial", {
+            ok: r.outcomes.length - failed.length,
+            failed: failed.length,
+          }),
           duration: 8000,
         });
       } else {
-        Message.success(`${r.outcomes.length} 个版本已全部就绪`);
+        Message.success(t("library.batchAllReady", { count: r.outcomes.length }));
       }
       await refreshStatus();
     } catch (e) {
-      Message.error(`补库任务失败：${e}`);
+      Message.error(t("library.batchFailed", { error: String(e) }));
     } finally {
       unlisten?.();
       running.value = false;
@@ -336,7 +343,7 @@ export function createSetupSlice() {
   async function startSetup() {
     const targets = rows.value.filter((r) => checked.value.has(r.name));
     if (targets.length === 0) {
-      Message.warning("没有勾选任何待补版本");
+      Message.warning(t("library.noChecked"));
       return;
     }
     await runFor(targets);
@@ -358,11 +365,11 @@ export function createSetupSlice() {
     if (mcDir.value && scanHits.value.size === 0) await rescan(false);
     const row = rows.value.find((r) => r.name === name);
     if (!row) {
-      Message.error(`版本库里没有 ${name} 这个版本`);
+      Message.error(t("library.versionUnknown", { name }));
       return false;
     }
     if (row.state === "missing") {
-      Message.info(`${name} 本机没有，开始下载并构建（进度见「版本库」）`);
+      Message.info(t("library.downloading", { name }));
     }
     return await runFor([row]);
   }
