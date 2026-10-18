@@ -180,12 +180,14 @@ export interface VersionOption {
 /** 转换中需要处理的一项 */
 export interface ConvertItem {
   name: string;
-  /** 源方块的中文名。界面上出现方块 ID 的地方都要一并显示它 */
+  /** 源方块的中英两个名字；界面按当前语言取一套 */
   nameZh: string;
+  nameEn: string;
   count: number;
   suggested: string;
-  /** 推荐替代品的中文名；没有推荐时为空 */
+  /** 推荐替代品的中英两个名字；没有推荐时为空 */
   suggestedZh: string;
+  suggestedEn: string;
   chosen: string;
 }
 

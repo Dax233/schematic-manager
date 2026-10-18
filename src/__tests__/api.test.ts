@@ -159,7 +159,16 @@ describe("替换与转换", () => {
 
   it("applyConversion 传 targetIndex 与 items", async () => {
     const items = [
-      { name: "a", nameZh: "甲", count: 1, suggested: "b", suggestedZh: "乙", chosen: "b" },
+      {
+        name: "a",
+        nameZh: "甲",
+        nameEn: "Alpha",
+        count: 1,
+        suggested: "b",
+        suggestedZh: "乙",
+        suggestedEn: "Beta",
+        chosen: "b",
+      },
     ];
     await expectCall(
       () => api.applyConversion("/a.litematic", 1, items),

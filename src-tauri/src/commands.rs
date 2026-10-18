@@ -732,9 +732,11 @@ fn convert_items_with_zh(
         .map(|i| ConvertItemDto {
             // 源方块先查原版本的表，再退到目标版本的表：它在原版本里一定存在，
             // 但投影用的版本号不一定能在库里对上，那时只能靠目标版本的表
-            name_zh: zh_from_tables(&i.name, &[source_langs, target_langs]),
+            name_zh: name_from_tables(&i.name, &[source_langs, target_langs], false),
+            name_en: name_from_tables(&i.name, &[source_langs, target_langs], true),
             // 替代品是目标版本里的方块，只查目标版本的表
-            suggested_zh: zh_from_tables(&i.suggested, &[target_langs]),
+            suggested_zh: name_from_tables(&i.suggested, &[target_langs], false),
+            suggested_en: name_from_tables(&i.suggested, &[target_langs], true),
             name: i.name,
             count: i.count,
             suggested: i.suggested,
@@ -743,25 +745,30 @@ fn convert_items_with_zh(
         .collect()
 }
 
-/// 按给定顺序在各语言表里查中文名，全都没查到时退回不带命名空间的方块名。
+/// 按给定顺序在各语言表里查名字，全都没查到时退回不带命名空间的方块名。
+///
+/// 中英两套都要给：界面按当前语言取一套，只给一套会让另一种语言的界面
+/// 显示错语言的名字。`want_en` 决定先取哪一套，缺了就退另一套。
 ///
 /// 顺序表而不是单个表：源方块在两个版本的语言表里可能只有一边有条目。
-/// 最后那次回退不能省——查不到时返回空串会让界面上的中文名一栏莫名留白，
-/// 用户分不清是「这个方块没有中文名」还是「界面坏了」。
-fn zh_from_tables(
+/// 最后那次回退不能省——查不到时返回空串会让界面上的名字一栏莫名留白，
+/// 用户分不清是「这个方块没有名字」还是「界面坏了」。
+fn name_from_tables(
     name: &str,
     tables: &[&std::collections::HashMap<String, (String, String)>],
+    want_en: bool,
 ) -> String {
     if name.is_empty() {
         return String::new();
     }
     for t in tables {
         if let Some((zh, en)) = t.get(name) {
-            if !zh.is_empty() {
-                return zh.clone();
+            let (first, second) = if want_en { (en, zh) } else { (zh, en) };
+            if !first.is_empty() {
+                return first.clone();
             }
-            if !en.is_empty() {
-                return en.clone();
+            if !second.is_empty() {
+                return second.clone();
             }
         }
     }
@@ -1292,20 +1299,29 @@ mod tests {
         let out = convert_items_with_zh(items, &source, &target);
 
         assert_eq!(out[0].name_zh, "橡木楼梯");
+        assert_eq!(out[0].name_en, "Oak Stairs", "英文名也要一并给出，供英语界面用");
         assert_eq!(out[0].suggested_zh, "苍白橡木楼梯");
+        assert_eq!(out[0].suggested_en, "Pale Oak Stairs");
         assert_eq!(out[1].name_zh, "Old Block", "缺中文名应退回英文名");
+        assert_eq!(out[1].name_en, "Old Block", "缺英文名时两套取到的是同一个值");
         assert_eq!(out[1].suggested_zh, "", "没有推荐时中文名必须为空");
+        assert_eq!(out[1].suggested_en, "", "没有推荐时英文名必须为空");
         assert_eq!(out[2].name_zh, "unknown_thing", "查不到应退回方块名而不是空串");
+        assert_eq!(out[2].name_en, "unknown_thing");
         assert_eq!(
             out[3].suggested_zh, "oak_stairs",
             "替代品只能在目标版本的表里查，不能借用源版本的名字"
         );
+        assert_eq!(out[3].suggested_en, "oak_stairs");
         assert_eq!(
             out[4].name_zh, "苍白橡木楼梯",
             "源表里没有时应退到目标表去找"
         );
+        assert_eq!(out[4].name_en, "Pale Oak Stairs");
         assert_eq!(out[5].name_zh, "", "空方块名不该拼出一个名字");
+        assert_eq!(out[5].name_en, "");
         assert_eq!(out[5].suggested_zh, "");
+        assert_eq!(out[5].suggested_en, "");
         assert_eq!(out[0].name, "minecraft:oak_stairs", "原字段不应被改动");
         assert_eq!(out[0].count, 12);
     }

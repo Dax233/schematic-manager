@@ -11,6 +11,8 @@
 import { computed, ref } from "vue";
 import type { ComputedRef, Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
+import { displayName, t } from "../i18n";
+import type { NamedRecord } from "../i18n";
 import {
   analyzeConversion,
   applyConversion,
@@ -61,27 +63,28 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
   /** 搜索请求序号：逐字符搜索会并发多个请求，只用最新那个的结果 */
   let convPickSeq = 0;
 
-  /** 方块 ID -> 中文名。查过但方块库里没有时记为空串 */
-  const convZh = ref<Record<string, string>>({});
+  /** 方块 ID -> 显示名称的两套名字（中文、英文）。查过但库里没有时记为空 */
+  const convNames = ref<Record<string, NamedRecord>>({});
   /** 已经查过的方块 ID。
    *
-   * 与 convZh 分开是为了区分「还没查」与「库里没有这个名字」：
-   * 只看有没有中文名的话，两种情况的界面表现会一样，用户分不清
-   * 是自己还没查还是这个方块本来就没有中文名。
+   * 与 convNames 分开是为了区分「还没查」与「库里没有这个名字」：
+   * 只看有没有名字的话，两种情况的界面表现会一样，用户分不清
+   * 是自己还没查还是这个方块本来就没有名字。
    */
-  const convZhChecked = ref<Set<string>>(new Set());
-  /** 手输方块 ID 后查中文名的去抖计时器，按方块名分开存。
+  const convNamesQueried = ref<Set<string>>(new Set());
+  /** 手输方块 ID 后查名字的去抖计时器，按方块名分开存。
    *
    * 不能共用一个计时器：那样在两行之间快速输入时，后一次输入会把前一行
-   * 还没落地的查询取消掉，那一行的中文名就再也不显示了。 */
-  const convZhTimers = new Map<string, ReturnType<typeof setTimeout>>();
+   * 还没落地的查询取消掉，那一行的名字就再也不显示了。 */
+  const convNameTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  const convColumns = [
-    { title: "原方块（目标版本里没有）", slotName: "from" },
-    { title: "数量", dataIndex: "count", width: 80 },
-    { title: "替代为", slotName: "repl" },
-    { title: "状态", slotName: "state", width: 96 },
-  ];
+  /** 列定义随界面语言变化，用 computed 包住，切语言后表头跟着变 */
+  const convColumns = computed(() => [
+    { title: t("convert.colFrom"), slotName: "from" },
+    { title: t("convert.colCount"), dataIndex: "count", width: 80 },
+    { title: t("convert.colRepl"), slotName: "repl" },
+    { title: t("convert.colState"), slotName: "state", width: 96 },
+  ]);
 
   /** 这一项最终会用到的替代品：已指定优先，其次自动推荐 */
   function convReplacementOf(i: ConvertItem): string {
@@ -111,22 +114,22 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
     return convIsAuto(i) ? "auto" : "set";
   }
 
-  /** 方块中文名；没有记录时返回空串 */
-  function convZhOf(id: string): string {
-    return id ? convZh.value[id] ?? "" : "";
+  /** 方块的显示名称（按当前界面语言取）；没有记录时返回空串 */
+  function convNameOf(id: string): string {
+    return id ? displayName(convNames.value[id] ?? {}) : "";
   }
 
   /** 这个方块是否已经查过名字（用于区分「没查」与「库里没有」） */
-  function convZhQueried(id: string): boolean {
-    return convZhChecked.value.has(id);
+  function convNameQueried(id: string): boolean {
+    return convNamesQueried.value.has(id);
   }
 
-  function rememberZh(id: string, zh: string) {
-    const next = { ...convZh.value, [id]: zh };
-    const checked = new Set(convZhChecked.value);
+  function rememberName(id: string, names: NamedRecord) {
+    const next = { ...convNames.value, [id]: names };
+    const checked = new Set(convNamesQueried.value);
     checked.add(id);
-    convZh.value = next;
-    convZhChecked.value = checked;
+    convNames.value = next;
+    convNamesQueried.value = checked;
   }
 
   /** 点左侧某一行：右侧列表接下来填的就是它 */
@@ -177,17 +180,17 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
         (a, b) => Number(convHitInTarget(b)) - Number(convHitInTarget(a)),
       );
       // 顺手把结果里的中文名记下来（并标记为已查过），点选时就不必再查
-      const zh = { ...convZh.value };
-      const checked = new Set(convZhChecked.value);
+      const names = { ...convNames.value };
+      const checked = new Set(convNamesQueried.value);
       for (const h of hits) {
-        zh[h.name] = h.zh || h.en || "";
+        names[h.name] = { zhName: h.zh, enName: h.en };
         checked.add(h.name);
       }
-      convZh.value = zh;
-      convZhChecked.value = checked;
+      convNames.value = names;
+      convNamesQueried.value = checked;
     } catch (e) {
       if (seq !== convPickSeq) return;
-      Message.error(`检索方块失败：${e}`);
+      Message.error(t("convert.searchFailed", { error: String(e) }));
     } finally {
       if (seq === convPickSeq) convPickBusy.value = false;
     }
@@ -197,54 +200,58 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
   function pickConvBlock(hit: BlockHit) {
     const target = convItems.value.find((i) => i.name === convActiveName.value);
     if (!target) {
-      Message.warning("请先在左侧点选要替换的方块，再点这里添加");
+      Message.warning(t("convert.pickNoRow"));
       return;
     }
+    const hitName = displayName({ zhName: hit.zh, enName: hit.en }) || hit.name;
     if (!convHitInTarget(hit)) {
-      Message.warning(
-        `目标版本里没有「${hit.zh || hit.name}」，不能作为替代品`,
-      );
+      Message.warning(t("convert.pickNotInTarget", { name: hitName }));
       return;
     }
     target.chosen = hit.name;
-    rememberZh(hit.name, hit.zh || hit.en || "");
+    rememberName(hit.name, { zhName: hit.zh, enName: hit.en });
     Message.success(
-      `已把「${hit.zh || hit.name}」指定为 ${target.nameZh || target.name} 的替代品`,
+      t("convert.assigned", {
+        source: hitName,
+        target: displayName({ zhName: target.nameZh, enName: target.nameEn }) || target.name,
+      }),
     );
   }
 
-  /** 手输的方块 ID 也要显示中文名：改动后延迟查一次（逐字符查太费） */
-  function scheduleConvZhLookup(item: ConvertItem) {
+  /** 手输的方块 ID 也要显示名字：改动后延迟查一次（逐字符查太费） */
+  function scheduleConvNameLookup(item: ConvertItem) {
     const key = item.name;
-    const pending = convZhTimers.get(key);
+    const pending = convNameTimers.get(key);
     if (pending !== undefined) clearTimeout(pending);
-    convZhTimers.set(
+    convNameTimers.set(
       key,
       setTimeout(() => {
-        convZhTimers.delete(key);
-        void lookupConvZh(item.chosen.trim());
+        convNameTimers.delete(key);
+        void lookupConvName(item.chosen.trim());
       }, 300),
     );
   }
 
-  /** 查一个方块 ID 的中文名。查不到时记为空串（界面据此说明库里没有） */
-  async function lookupConvZh(id: string) {
-    if (!id || convZhQueried(id)) return;
+  /** 查一个方块 ID 的显示名称。查不到时记为空（界面据此说明库里没有） */
+  async function lookupConvName(id: string) {
+    if (!id || convNameQueried(id)) return;
     try {
       const hits = await searchBlocks(id, 50);
       const exact = hits.find((h) => h.name.toLowerCase() === id.toLowerCase());
-      rememberZh(id, exact ? exact.zh || exact.en || "" : "");
+      rememberName(id, { zhName: exact?.zh, enName: exact?.en });
       // 方块库认识这个 ID、但它不在目标版本里：如实提醒一句。
       // 库里完全不认识（模组方块）时不作判断——那种情况下没依据，也不该拦。
       if (exact && !convHitInTarget(exact)) {
         Message.warning(
-          `目标版本里没有「${exact.zh || exact.name}」，转换后仍会指向它`,
+          t("convert.notInTargetWarn", {
+            name: displayName({ zhName: exact.zh, enName: exact.en }) || exact.name,
+          }),
         );
       }
     } catch (e) {
       // 查不到名字不该拦住填写，但也不能悄悄当成「库里没有」：
       // 记为未查过，下次改动会再试一遍
-      Message.error(`查询方块中文名失败：${e}`);
+      Message.error(t("convert.lookupFailed", { error: String(e) }));
     }
   }
 
@@ -261,7 +268,7 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
     try {
       convTargets.value = await convertTargets(s.selected.value.path);
     } catch (e) {
-      Message.error(`读取可转换版本失败：${e}`);
+      Message.error(t("convert.loadTargetsFailed", { error: String(e) }));
       convTargets.value = [];
     }
   }
@@ -271,15 +278,15 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
     convItems.value = [];
     convAnalyzed.value = false;
     convTargetIdx.value = undefined;
-    // 上一次的搜索结果与中文名缓存都属于上一个投影，不能带过来
+    // 上一次的搜索结果与名字缓存都属于上一个投影，不能带过来
     convPickQuery.value = "";
     convPickHits.value = [];
     convActiveName.value = "";
-    convZh.value = {};
-    convZhChecked.value = new Set();
-    // 上一次没落地的中文名查询也要取消：否则它会在新会话里写进刚清空的缓存
-    for (const t of convZhTimers.values()) clearTimeout(t);
-    convZhTimers.clear();
+    convNames.value = {};
+    convNamesQueried.value = new Set();
+    // 上一次没落地的名字查询也要取消：否则它会在新会话里写进刚清空的缓存
+    for (const timer of convNameTimers.values()) clearTimeout(timer);
+    convNameTimers.clear();
     if (!s.selected.value) return;
     await reloadConvTargets();
   }
@@ -287,38 +294,40 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
   async function runConvertAnalyze() {
     const cur = s.selected.value;
     if (!cur || convTargetIdx.value === undefined) {
-      Message.warning("请先选择目标版本");
+      Message.warning(t("convert.pickTargetFirst"));
       return;
     }
     convBusy.value = true;
     try {
       convItems.value = await analyzeConversion(cur.path, convTargetIdx.value);
       convAnalyzed.value = true;
-      // 分析结果自带源方块与自动推荐的中文名，一次收进缓存：
-      // 界面上凡出现方块 ID 的地方都要显示中文名，逐条回查既慢又没必要
-      const zh: Record<string, string> = { ...convZh.value };
-      const checked = new Set(convZhChecked.value);
+      // 分析结果自带源方块与自动推荐的两个名字，一次收进缓存：
+      // 界面上凡出现方块 ID 的地方都要显示名字，逐条回查既慢又没必要
+      const names: Record<string, NamedRecord> = { ...convNames.value };
+      const checked = new Set(convNamesQueried.value);
       for (const i of convItems.value) {
-        zh[i.name] = i.nameZh || "";
+        names[i.name] = { zhName: i.nameZh, enName: i.nameEn };
         checked.add(i.name);
         if (i.suggested) {
-          zh[i.suggested] = i.suggestedZh || "";
+          names[i.suggested] = { zhName: i.suggestedZh, enName: i.suggestedEn };
           checked.add(i.suggested);
         }
       }
-      convZh.value = zh;
-      convZhChecked.value = checked;
+      convNames.value = names;
+      convNamesQueried.value = checked;
       // 刻意不预选第一行：预选之后用户在右侧随手点一个方块就会改掉第一行，
       // 而那一行未必是他想改的。让他先明确点一行，右侧提示也才有的放矢。
       convActiveName.value = "";
       const missing = convItems.value.filter(convNeedsPick).length;
       if (convItems.value.length === 0) {
-        Message.success("该投影用到的方块在目标版本中都存在，可以直接转换");
+        Message.success(t("convert.allExist"));
       } else {
-        Message.info(`目标版本缺少 ${convItems.value.length} 种方块，其中 ${missing} 种没有自动推荐`);
+        Message.info(
+          t("convert.missingSummary", { total: convItems.value.length, missing }),
+        );
       }
     } catch (e) {
-      Message.error(`分析失败：${e}`);
+      Message.error(t("convert.analyzeFailed", { error: String(e) }));
       convItems.value = [];
       // 必须复位分析标志。否则模板里「convAnalyzed 且条目为空」这一组合
       // 会被判成「方块都存在、可以直接转换」，向用户展示绿色的成功提示，
@@ -336,9 +345,18 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
     try {
       const r = await applyConversion(cur.path, convTargetIdx.value, convItems.value);
       Message.success(
-        `已转换：替换 ${r.replacedKinds} 种（${r.replacedBlocks} 个）方块` +
-          (r.skippedKinds > 0 ? `，${r.skippedKinds} 种未指定已保持原样` : "") +
-          `。新文件：${r.outputPath}`,
+        (r.skippedKinds > 0
+          ? t("convert.convertedSkipped", {
+              kinds: r.replacedKinds,
+              blocks: r.replacedBlocks,
+              skipped: r.skippedKinds,
+              path: r.outputPath,
+            })
+          : t("convert.converted", {
+              kinds: r.replacedKinds,
+              blocks: r.replacedBlocks,
+              path: r.outputPath,
+            })) as string,
       );
       convOpen.value = false;
       // 转换会生成新文件并可能改动原文件；重扫全部已加载目录后再定位选中项
@@ -346,7 +364,7 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
       s.syncSelection(s.files.value);
       s.pruneChecks(s.files.value);
     } catch (e) {
-      Message.error(`转换失败：${e}`);
+      Message.error(t("convert.convertFailed", { error: String(e) }));
     } finally {
       convBusy.value = false;
     }
@@ -369,12 +387,12 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
     convIsAuto,
     convReplState,
     convHitInTarget,
-    convZhOf,
-    convZhQueried,
+    convNameOf,
+    convNameQueried,
     selectConvRow,
     onConvPickSearch,
     pickConvBlock,
-    scheduleConvZhLookup,
+    scheduleConvNameLookup,
     openConvert,
     reloadConvTargets,
     runConvertAnalyze,

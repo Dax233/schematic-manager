@@ -192,7 +192,7 @@ function pickFieldLabel(): string {
       <div class="repl-split__pane repl-split__pane--pick">
         <a-input-search
           v-model="blockPickQuery"
-          :placeholder="t('replace.searchPlaceholder')"
+          :placeholder="t('common.searchBlocks')"
           size="small"
           :loading="blockSearching"
           allow-clear
@@ -213,7 +213,7 @@ function pickFieldLabel(): string {
           <a-empty
             v-if="blockHits.length === 0"
             :description="
-              blockPickQuery.trim() ? t('replace.noMatch') : t('replace.typeToSearch')
+              blockPickQuery.trim() ? t('common.noMatch') : t('common.typeToSearch')
             "
           />
           <button

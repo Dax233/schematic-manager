@@ -191,16 +191,20 @@ pub struct VersionOptionDto {
 #[serde(rename_all = "camelCase")]
 pub struct ConvertItemDto {
     pub name: String,
-    /// 源方块的中文名。界面上凡是出现方块 ID 的地方都要一并给出中文名，
-    /// 只给 ID 时用户无法确认自己要替换的到底是哪一个方块。
+    /// 源方块的中英两个名字。界面上凡是出现方块 ID 的地方都要一并给出名字，
+    /// 只给 ID 时用户无法确认自己要替换的到底是哪一个方块；而界面语言可以切换，
+    /// 所以两套都给，由界面按当前语言取一套、缺哪套退另一套。
     ///
     /// 由后端给出而不是前端逐个回查：方块库就在手里，一次会话里几十条
     /// 逐个走 IPC 查询既慢又没必要。
     pub name_zh: String,
+    pub name_en: String,
     pub count: u64,
     pub suggested: String,
     /// 推荐替代品的中文名；没有推荐时为空
     pub suggested_zh: String,
+    /// 推荐替代品的英文名；没有推荐时为空
+    pub suggested_en: String,
     pub chosen: String,
 }
 
