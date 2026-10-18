@@ -15,6 +15,7 @@ import type { Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import type { TableColumnData, TableData } from "@arco-design/web-vue";
 import { open } from "@tauri-apps/plugin-dialog";
+import { t } from "../i18n";
 import {
   analyzeSchematic,
   copyFilesToClipboard,
@@ -187,7 +188,7 @@ export function createFileListSlice(s: FileListDeps) {
   async function scanDuplicatesInline() {
     const dirs = loadedDirs.value.filter((d) => enabledDirs.value.has(d));
     if (dirs.length === 0) {
-      Message.warning("请先添加并勾选要筛查的目录");
+      Message.warning(t("files.dupNoDir"));
       return;
     }
     dupBusy.value = true;
@@ -197,7 +198,7 @@ export function createFileListSlice(s: FileListDeps) {
     try {
       const r = await scanDuplicates(dirs);
       if (epoch !== dupEpoch) {
-        Message.info("筛查期间目录有变化，结果已作废，请重新筛查");
+        Message.info(t("files.dupStale"));
         return;
       }
       dupResult.value = r;
@@ -206,7 +207,7 @@ export function createFileListSlice(s: FileListDeps) {
       applyDefaultDupChecks();
       reportDupScan(r);
     } catch (e) {
-      Message.error(`筛查失败：${e}`);
+      Message.error(t("files.dupFailed", { error: String(e) }));
       clearDuplicateScan();
     } finally {
       dupBusy.value = false;
@@ -221,19 +222,19 @@ export function createFileListSlice(s: FileListDeps) {
    */
   function reportDupScan(r: DuplicateScan) {
     if (r.scanned === 0) {
-      Message.warning("所选目录下没有可筛查的投影文件");
+      Message.warning(t("files.dupNothing"));
       return;
     }
-    const parts = [`已筛查 ${r.scanned} 个投影文件`];
+    const parts = [t("files.dupScanned", { count: r.scanned })];
     if (r.groups.length > 0) {
-      parts.push(`发现 ${r.groups.length} 组内容相同的重复，多余的副本已勾上`);
+      parts.push(t("files.dupGroupsFound", { count: r.groups.length }));
     } else {
-      parts.push("没有内容相同的重复");
+      parts.push(t("files.dupNoneFound"));
     }
     if (dupSuspects.value.length > 0) {
-      parts.push(`另有 ${dupSuspects.value.length} 组疑似重复待确认`);
+      parts.push(t("files.dupSuspectsPending", { count: dupSuspects.value.length }));
     }
-    const text = parts.join("，");
+    const text = parts.join(t("common.listSeparator"));
     if (r.groups.length > 0) Message.success(text);
     else Message.info(text);
   }
@@ -400,18 +401,18 @@ export function createFileListSlice(s: FileListDeps) {
     // 盒级 flex 子项的宽度永远不超过它，于是长文件名反而不弹提示。
     // 提示改由插槽自己给出（见 .dup-name__text 的 title）。
     {
-      title: "名称",
+      title: t("files.colName"),
       dataIndex: "fileName",
       slotName: "fileName",
       width: NAME_COL_W,
       ellipsis: true,
       tooltip: false,
     },
-    { title: "制作版本", dataIndex: "mcVersionName", width: 90 },
+    { title: t("files.colMcVersion"), dataIndex: "mcVersionName", width: 90 },
     // 110 是实测值：`16 × 12 × 16` 在 100px 下会折成两行
-    { title: "尺寸", dataIndex: "dims", slotName: "dims", width: 110 },
+    { title: t("files.colDims"), dataIndex: "dims", slotName: "dims", width: 110 },
     // 方块总数收窄到参考图的 73px：这几列加起来正好等于参考里的目录栏宽度 666
-    { title: "方块总数", dataIndex: "totalBlocks", width: 73 },
+    { title: t("files.colBlocks"), dataIndex: "totalBlocks", width: 73 },
     // 1px 占位列，只为让最后一列（方块总数）也能拖动。
     //
     // Arco 判定可拖动时要求 `index2 < row.length - 1`（table.js:1247）：
@@ -431,7 +432,7 @@ export function createFileListSlice(s: FileListDeps) {
     },
   ]);
 
-  const status = ref("就绪");
+  const status = ref(t("files.statusReady"));
 
   const statusText = computed(() => {
     const n = files.value.length;
@@ -575,7 +576,7 @@ export function createFileListSlice(s: FileListDeps) {
 
   /** 统一的文件操作错误提示：把后端给的原因原样带出来 */
   function reportFileOpError(action: string, e: unknown) {
-    Message.error(`${action}失败：${e}`);
+    Message.error(t("files.failed", { action, error: String(e) }));
   }
 
   function formatBytes(n: number): string {
@@ -591,7 +592,9 @@ export function createFileListSlice(s: FileListDeps) {
     fileBusy.value = true;
     try {
       const r = await deleteFiles(list.map((f) => f.path));
-      Message.success(`已删除 ${r.names.length} 个文件（${formatBytes(r.totalBytes)}），可从回收站还原`);
+      Message.success(
+        t("files.deleted", { count: r.names.length, size: formatBytes(r.totalBytes) }),
+      );
       // 从各个目录的结果里移除已删除的文件。
       // 按路径而不是文件名移除：不同目录下可能有同名文件，
       // 按文件名会把另一个目录里同名的文件也一并移出列表。
@@ -604,7 +607,7 @@ export function createFileListSlice(s: FileListDeps) {
       pruneChecks(files.value);
       syncSelection(files.value);
     } catch (e) {
-      reportFileOpError("删除", e);
+      reportFileOpError(t("files.delete"), e);
     } finally {
       fileBusy.value = false;
     }
@@ -618,10 +621,13 @@ export function createFileListSlice(s: FileListDeps) {
     try {
       const r = await copyFilesToClipboard(list.map((f) => f.path));
       Message.success(
-        `已复制 ${r.names.length} 个文件（${formatBytes(r.totalBytes)}）到剪贴板，可在资源管理器里粘贴`,
+        t("files.copiedToClipboard", {
+          count: r.names.length,
+          size: formatBytes(r.totalBytes),
+        }),
       );
     } catch (e) {
-      reportFileOpError("复制", e);
+      reportFileOpError(t("files.copy"), e);
     } finally {
       fileBusy.value = false;
     }
@@ -632,15 +638,23 @@ export function createFileListSlice(s: FileListDeps) {
     const list = checkedFiles.value;
     if (list.length === 0) return;
     try {
-      const dest = await open({ directory: true, multiple: false, title: "选择目标文件夹" });
+      const dest = await open({
+        directory: true,
+        multiple: false,
+        title: t("files.chooseDestDir"),
+      });
       if (typeof dest !== "string") return;
       fileBusy.value = true;
       const r = await copyFilesToDir(list.map((f) => f.path), dest);
       Message.success(
-        `已复制 ${r.names.length} 个文件（${formatBytes(r.totalBytes)}）到 ${r.destDir}`,
+        t("files.copiedToDir", {
+          count: r.names.length,
+          size: formatBytes(r.totalBytes),
+          dir: r.destDir,
+        }),
       );
     } catch (e) {
-      reportFileOpError("复制到", e);
+      reportFileOpError(t("files.copyTo"), e);
     } finally {
       fileBusy.value = false;
     }
@@ -656,9 +670,9 @@ export function createFileListSlice(s: FileListDeps) {
     if (!first) return;
     try {
       await revealInFileManager(first.path);
-      Message.success(`已在文件管理器中定位：${first.fileName}`);
+      Message.success(t("files.located", { name: first.fileName }));
     } catch (e) {
-      reportFileOpError("打开文件夹", e);
+      reportFileOpError(t("files.openFolder"), e);
     }
   }
 
@@ -696,9 +710,9 @@ export function createFileListSlice(s: FileListDeps) {
     closeRowMenu();
     try {
       await revealInFileManager(row.path);
-      Message.success(`已在文件管理器中定位：${row.name}`);
+      Message.success(t("files.located", { name: row.name }));
     } catch (e) {
-      reportFileOpError("打开文件夹", e);
+      reportFileOpError(t("files.openFolder"), e);
     }
   }
 
@@ -771,10 +785,10 @@ export function createFileListSlice(s: FileListDeps) {
       picked = await open({
         directory: true,
         multiple: true,
-        title: "选择投影所在文件夹（可多选）",
+        title: t("files.chooseSourceDir"),
       });
     } catch (e) {
-      Message.error(`打开目录选择框失败：${e}`);
+      Message.error(t("files.openPickerFailed", { error: String(e) }));
       return;
     }
 
@@ -785,7 +799,7 @@ export function createFileListSlice(s: FileListDeps) {
     );
     if (dirs.length === 0) return;
 
-    status.value = "正在扫描…";
+    status.value = t("files.statusScanning");
     const next = { ...dirItems.value };
     const parts: string[] = [];
     let bad = 0;
@@ -803,14 +817,14 @@ export function createFileListSlice(s: FileListDeps) {
         skippedPaths.push(...r.skippedPaths);
       } catch (e) {
         // 一个目录失败不应让其余目录也加载不了；如实报出是哪个目录
-        Message.error(`扫描 ${dir} 失败：${e}`);
+        Message.error(t("files.scanDirFailed", { dir, error: String(e) }));
       }
     }
 
     if (Object.keys(next).length === Object.keys(dirItems.value).length && added === 0) {
       // 一个目录都没加进来（全部失败或被取消）
-      if (skippedDirs === 0) Message.warning("没有新增任何目录");
-      status.value = "扫描完成";
+      if (skippedDirs === 0) Message.warning(t("files.noNewDirs"));
+      status.value = t("files.statusScanDone");
       return;
     }
 
@@ -826,17 +840,20 @@ export function createFileListSlice(s: FileListDeps) {
     syncSelection(files.value);
     pruneChecks(files.value);
 
-    if (added > 0) parts.push(`新增 ${added} 个目录`);
+    if (added > 0) parts.push(t("files.addedDirs", { count: added }));
     if (skippedDirs > 0) {
-      parts.push(`已跳过 ${skippedDirs} 个无法读取的目录`);
+      parts.push(t("files.skippedDirsPart", { count: skippedDirs }));
       // 列出被跳过的路径，否则用户无从判断少了哪些内容
       Message.warning({
-        content: `以下目录无法读取，已跳过：\n${skippedPaths.join("\n")}`,
+        content: t("files.skippedDirsWarning", { paths: skippedPaths.join("\n") }),
         duration: 8000,
       });
     }
-    if (bad > 0) parts.push(`${bad} 个文件解析失败`);
-    status.value = parts.length > 0 ? `扫描完成，${parts.join("，")}` : "扫描完成";
+    if (bad > 0) parts.push(t("files.parseFailedPart", { count: bad }));
+    status.value =
+      parts.length > 0
+        ? t("files.statusScanDoneWith", { parts: parts.join(t("common.listSeparator")) })
+        : t("files.statusScanDone");
   }
 
   /** 移除一个已加载目录。
@@ -857,7 +874,7 @@ export function createFileListSlice(s: FileListDeps) {
     // 否则右侧详情会停留在已移出列表的文件上
     syncSelection(files.value);
     pruneChecks(files.value);
-    Message.info(`已移除目录：${dir}`);
+    Message.info(t("files.dirRemoved", { dir }));
   }
 
   /** 重新扫描全部已加载目录，用于文件被改动之后。
@@ -908,7 +925,7 @@ export function createFileListSlice(s: FileListDeps) {
         const r = await scanLitematics(d);
         next[d] = r.items;
       } catch (e) {
-        Message.error(`重新扫描 ${d} 失败：${e}`);
+        Message.error(t("files.rescanFailed", { dir: d, error: String(e) }));
         next[d] = dirItems.value[d] ?? [];
       }
     }
@@ -949,13 +966,13 @@ export function createFileListSlice(s: FileListDeps) {
       if (fileNameChanged(cur)) {
         const renamed = await renameSchematic(cur.path, draft.value.fileName.trim());
         targetPath = renamed.path;
-        renameNote = `，已重命名为 ${renamed.fileName}`;
+        renameNote = t("files.renamedTo", { name: renamed.fileName });
         renamedOk = true;
         if (renamed.relinkError) {
           // 文件已改名成功，只是备份没接上：如实告知，不能静默
-          Message.warning(`备份未能链接到新文件名：${renamed.relinkError}`);
+          Message.warning(t("files.backupRelinkFailed", { error: renamed.relinkError }));
         } else if (renamed.relinked > 0) {
-          renameNote += `（${renamed.relinked} 组备份已跟随）`;
+          renameNote += t("files.backupsFollowed", { count: renamed.relinked });
         }
         // 改名成功后必须立刻把界面里的路径收敛到新路径。
         //
@@ -976,20 +993,22 @@ export function createFileListSlice(s: FileListDeps) {
       if (hit) {
         selected.value = hit;
         resetDraft(hit);
-        Message.success(`已保存${renameNote}，备份在：${out.backupPath}`);
+        Message.success(t("files.saved", { note: renameNote, path: out.backupPath }));
       } else {
         // 文件被移动或重命名时，界面若继续显示旧记录会误导用户
         Message.warning(
-          `已保存${renameNote}，但重新读取时未在该目录找到该文件（可能已被移动或重命名）。备份在：${out.backupPath}`,
+          t("files.savedMissing", { note: renameNote, path: out.backupPath }),
         );
       }
     } catch (e) {
       // 改名与写元数据是两步，失败原因必须分清：只报「保存失败」会让用户
       // 以为文件名也没变，而磁盘上它其实已经改了
       if (renamedOk) {
-        Message.error(`文件名已改${renameNote}，但元数据未能写入：${e}`);
+        Message.error(
+          t("files.renamedButMetaFailed", { note: renameNote, error: String(e) }),
+        );
       } else {
-        Message.error(`保存失败：${e}`);
+        Message.error(t("files.saveFailed", { error: String(e) }));
       }
       // 重新扫描，让界面回到与磁盘一致的状态（改名已生效的那部分也要体现出来）。
       // 重扫本身失败时 rescanAll 已逐目录提示过，这里只是兜底不让它打断 finally。
@@ -1014,7 +1033,7 @@ export function createFileListSlice(s: FileListDeps) {
     try {
       analysis.value = await analyzeSchematic(record.path);
     } catch (e) {
-      Message.error(`解析失败：${e}`);
+      Message.error(t("files.analyzeFailed", { error: String(e) }));
     } finally {
       analyzing.value = false;
     }

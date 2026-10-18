@@ -5,10 +5,16 @@
  * 右键菜单虽然浮在全窗口坐标上，但它只服务于这张表的行，
  * 因此跟着表格放在这里。宽度本身由 App 的分隔条控制（useSidebarResize）。
  * 状态在 store/fileList.ts。
+ *
+ * 表格的纵向滚动由 Arco Table 自带的滚动条负责（它内部就用 Arco 的
+ * Scrollbar），轨道已在全局样式里去掉，不留原生滚动条。
  */
 <script setup lang="ts">
+import { useI18n } from "vue-i18n";
 import { useAppStore } from "../store";
 import { formatDims } from "../utils/format";
+
+const { t } = useI18n();
 
 const {
   sidebarWidth,
@@ -58,19 +64,19 @@ const {
         :loading="fileBusy"
         @click="doDeleteFiles"
       >
-        删除
+        {{ t("files.delete") }}
       </a-button>
       <a-button size="mini" :disabled="!hasChecked" :loading="fileBusy" @click="doCopyFiles">
-        复制
+        {{ t("files.copy") }}
       </a-button>
       <a-button size="mini" :disabled="!hasChecked" :loading="fileBusy" @click="doCopyFilesTo">
-        复制到
+        {{ t("files.copyTo") }}
       </a-button>
       <a-button size="mini" :disabled="!hasChecked" @click="doOpenFolder">
-        打开文件夹
+        {{ t("files.openFolder") }}
       </a-button>
-      <a-button size="mini" @click="resetColumnWidths" title="把各列宽度恢复为默认">
-        列宽复位
+      <a-button size="mini" @click="resetColumnWidths" :title="t('files.resetWidthsTitle')">
+        {{ t("files.resetWidths") }}
       </a-button>
     </div>
 
@@ -80,17 +86,21 @@ const {
     <div v-if="dupResult" class="sidebar__dups">
       <span class="sidebar__dups-text">
         <template v-if="dupResult.groups.length > 0">
-          发现 <b>{{ dupResult.groups.length }}</b> 组内容相同的重复、共
-          <b>{{ dupFileCount }}</b> 个文件（已排到最前，多余的副本已勾选）
+          <i18n-t keypath="files.dupFound" tag="span">
+            <template #groups><b>{{ dupResult.groups.length }}</b></template>
+            <template #files><b>{{ dupFileCount }}</b></template>
+          </i18n-t>
         </template>
-        <template v-else>没有发现内容相同的重复</template>
+        <template v-else>{{ t("files.dupNotFound") }}</template>
         <template v-if="dupSuspects.length > 0">
-          ；另有 <b>{{ dupSuspects.length }}</b> 组疑似重复（名称/尺寸/方块数相同、
-          共 {{ suspectFileCount }} 个文件），内容并不相同，未勾选
+          <i18n-t keypath="files.dupSuspects" tag="span">
+            <template #groups><b>{{ dupSuspects.length }}</b></template>
+            <template #files>{{ suspectFileCount }}</template>
+          </i18n-t>
         </template>
       </span>
       <a-button size="mini" @click="clearDuplicateScan">
-        {{ dupResult.groups.length > 0 ? "清除标记" : "知道了" }}
+        {{ dupResult.groups.length > 0 ? t("files.clearMarks") : t("files.gotIt") }}
       </a-button>
     </div>
     <a-alert
@@ -99,11 +109,11 @@ const {
       style="margin: 0 0 4px; flex: 0 0 auto"
     >
       <template v-if="dupResult.unreadable.length > 0">
-        有 {{ dupResult.unreadable.length }} 个文件无法读取，未参与判定
+        {{ t("files.unreadableFiles", { count: dupResult.unreadable.length }) }}
       </template>
       <template v-if="dupResult.unreadable.length > 0 && dupResult.skippedDirs > 0">；</template>
       <template v-if="dupResult.skippedDirs > 0">
-        有 {{ dupResult.skippedDirs }} 个子目录无法读取，其中的文件未参与判定
+        {{ t("files.unreadableDirs", { count: dupResult.skippedDirs }) }}
       </template>
     </a-alert>
 
@@ -133,13 +143,13 @@ const {
             v-if="isDup(record.path)"
             class="dup-chip"
             :class="`dup-chip-${dupColorNo(record.path)}`"
-            :title="'重复组 ' + dupNoOf(record.path) + '：与同组文件内容完全相同'"
+            :title="t('files.dupGroupTitle', { no: dupNoOf(record.path) })"
           >{{ dupNoOf(record.path) }}</span>
           <span
             v-else-if="isSuspect(record.path)"
             class="dup-chip dup-chip--suspect"
-            title="疑似重复：名称、尺寸、方块总数相同，但内容不同，请自行核对"
-          >疑似</span>
+            :title="t('files.suspectTitle')"
+          >{{ t("files.suspectChip") }}</span>
           <!-- 名称列关掉了 Arco 的 tooltip（它量不准插槽内容），
                完整文件名只能在这里自己给出来 -->
           <span class="dup-name__text" :title="record.fileName">{{ record.fileName }}</span>
@@ -147,21 +157,25 @@ const {
       </template>
       <template #dims="{ record }">{{ formatDims(record.enclosing) }}</template>
       <template #empty>
-        <a-empty description="点击「添加目录」选择投影所在文件夹" />
+        <a-empty :description="t('files.empty')" />
       </template>
     </a-table>
 
     <!-- 目录栏底部：只放多选操作 -->
     <div class="sidebar__checks">
-      <span class="hint-dim">已选 {{ checkedCount }} / {{ filteredFiles.length }}</span>
+      <span class="hint-dim">
+        {{ t("files.checkedCount", { checked: checkedCount, total: filteredFiles.length }) }}
+      </span>
       <span class="preview__spacer" />
       <a-button size="mini" :disabled="filteredFiles.length === 0" @click="checkAll">
-        全选
+        {{ t("files.checkAll") }}
       </a-button>
       <a-button size="mini" :disabled="filteredFiles.length === 0" @click="invertChecks">
-        反选
+        {{ t("files.invert") }}
       </a-button>
-      <a-button size="mini" :disabled="!hasChecked" @click="clearChecks">清除</a-button>
+      <a-button size="mini" :disabled="!hasChecked" @click="clearChecks">
+        {{ t("files.clear") }}
+      </a-button>
     </div>
 
     <!-- 行的右键菜单：只保留「打开文件夹」 -->
@@ -179,7 +193,7 @@ const {
         @click="revealRow({ path: ctxMenu.path, name: ctxMenu.name })"
         @keydown.enter="revealRow({ path: ctxMenu.path, name: ctxMenu.name })"
       >
-        打开文件夹
+        {{ t("files.openFolder") }}
       </div>
     </div>
   </div>

@@ -1486,3 +1486,10 @@ body[arco-theme='dark'] .repl-block--empty .arco-input-wrapper {
 .arco-drawer-body {
   overflow: hidden;
 }
+
+// 表格的纵向滚动由 Arco Table 内部自带的 Scrollbar 负责，但默认会画出轨道；
+// 按规范去掉轨道，只留滑块（鼠标移上去才显现）
+.arco-table .arco-scrollbar-track {
+  background-color: transparent;
+  border: 0;
+}
