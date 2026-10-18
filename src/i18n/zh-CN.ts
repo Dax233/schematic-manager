@@ -65,6 +65,8 @@ export default {
     missing: "需下载",
     progressUnknown: "下载中…",
     progressBuilding: "构建中…",
+    warnLangUnavailable:
+      "未取到中文语言表（客户端 jar 只带英文，中文在资源库里），方块名将显示英文",
   },
   displayName: {
     missing: "语言表中没有这一项",

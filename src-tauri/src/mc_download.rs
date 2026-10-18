@@ -36,12 +36,7 @@ fn http_err(url: &str, e: ureq::Error) -> AppError {
 
 /// 拉取官方版本清单全文（几 MB 的 JSON，直接按文本处理）
 pub fn fetch_manifest() -> AppResult<String> {
-    let resp = agent()
-        .get(OFFICIAL_MANIFEST_URL)
-        .call()
-        .map_err(|e| http_err(OFFICIAL_MANIFEST_URL, e))?;
-    resp.into_string()
-        .map_err(|e| AppError::Parse(format!("读取版本清单失败：{e}")))
+    fetch_text(OFFICIAL_MANIFEST_URL)
 }
 
 /// 从官方版本清单里找某个版本的 version.json 地址。
@@ -84,13 +79,7 @@ pub fn client_url_from_version_json(json: &str) -> AppResult<String> {
 /// 官方接口里某个版本客户端 jar 的下载地址：清单 → version.json → client.url
 pub fn official_client_url(manifest: &str, id: &str) -> AppResult<String> {
     let json_url = version_json_url(manifest, id)?;
-    let resp = agent()
-        .get(&json_url)
-        .call()
-        .map_err(|e| http_err(&json_url, e))?;
-    let body = resp
-        .into_string()
-        .map_err(|e| AppError::Parse(format!("读取 version.json 失败：{e}")))?;
+    let body = fetch_text(&json_url)?;
     client_url_from_version_json(&body)
 }
 
@@ -165,6 +154,144 @@ fn write_body(
     }
     std::fs::rename(&tmp, dest)?;
     Ok(())
+}
+
+/// 语言表等资源文件的来源：与下载客户端 jar 的来源保持一致，
+/// 用户选了镜像就跟着镜像，免得明明走的是镜像却又要去连官方。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AssetSource {
+    Official,
+    Bmcl,
+}
+
+/// 官方资源对象地址前缀（`{前缀}/{hash 前两位}/{hash}`）
+pub const OFFICIAL_ASSET_BASE: &str = "https://resources.download.minecraft.net";
+
+/// BMCL 镜像的资源对象地址前缀
+pub const BMCL_ASSET_BASE: &str = "https://bmclapi2.bangbang93.com/assets";
+
+/// 下载语言表需要的信息。
+///
+/// 打包成结构体而不是一串参数：这些字段是一件事的各个侧面（哪个版本、从哪来、
+/// 本机有没有现成的），调用处传错顺序时编译器也帮不上忙。
+pub struct LangDownload<'a> {
+    /// 版本 id，用来找本机的 version.json、以及构造镜像的 version.json 地址
+    pub version_id: &'a str,
+    /// 与客户端 jar 相同的来源
+    pub source: AssetSource,
+    /// 本机 .minecraft：装了该版本时可直接读它的 version.json，省一次联网
+    pub mc_dir: Option<&'a Path>,
+    /// 官方版本清单全文（来源为官方、且需要联网取 version.json 时用）
+    pub manifest: Option<&'a str>,
+    /// 需要补齐的语言键（如 `zh_cn`）
+    pub langs: &'a [&'a str],
+}
+
+/// 拉取一个文本资源（版本清单、version.json、资源索引都是 JSON 文本）
+pub fn fetch_text(url: &str) -> AppResult<String> {
+    let resp = agent().get(url).call().map_err(|e| http_err(url, e))?;
+    resp.into_string()
+        .map_err(|e| AppError::Parse(format!("读取 {url} 失败：{e}")))
+}
+
+/// 拉取一个小的二进制资源（语言表约几百 KB，不需要落盘）
+pub fn fetch_bytes(url: &str) -> AppResult<Vec<u8>> {
+    let resp = agent().get(url).call().map_err(|e| http_err(url, e))?;
+    let mut out = Vec::new();
+    resp.into_reader()
+        .read_to_end(&mut out)
+        .map_err(|e| AppError::Parse(format!("读取 {url} 失败：{e}")))?;
+    Ok(out)
+}
+
+/// 从 version.json 里取资源索引地址（`assetIndex.url`）。
+///
+/// 索引里记录着「资源路径 -> 内容 hash」，语言表本身要靠它才能定位。
+pub fn asset_index_url_from_version_json(json: &str) -> AppResult<String> {
+    let doc: serde_json::Value = serde_json::from_str(json)
+        .map_err(|e| AppError::Parse(format!("version.json 解析失败：{e}")))?;
+    doc.get("assetIndex")
+        .and_then(|a| a.get("url"))
+        .and_then(|u| u.as_str())
+        .map(str::to_owned)
+        .ok_or_else(|| AppError::Parse("version.json 里没有 assetIndex.url".into()))
+}
+
+/// 从资源索引里取某个语言表的对象 hash；索引里没有这个语言时给 `None`。
+///
+/// 「索引里没有」与「索引坏了」必须分开：前者说明这个版本确实不带该语言，
+/// 后者说明数据不可信，混在一起会让坏索引被当成「没有中文」。
+pub fn lang_object_hash(index_json: &str, lang: &str) -> AppResult<Option<String>> {
+    let doc: serde_json::Value = serde_json::from_str(index_json)
+        .map_err(|e| AppError::Parse(format!("资源索引解析失败：{e}")))?;
+    Ok(doc
+        .get("objects")
+        .and_then(|o| o.get(format!("minecraft/lang/{lang}.json")))
+        .and_then(|v| v.get("hash"))
+        .and_then(|h| h.as_str())
+        .map(str::to_owned))
+}
+
+/// 资源对象的下载地址：`{前缀}/{hash 前两位}/{hash}`。
+///
+/// hash 短于两位时直接报错：那是索引被截断的样子，拼出一个必然 404 的地址
+/// 只会让用户看到「下载失败」，而看不出根因在索引。
+pub fn asset_object_url(base: &str, hash: &str) -> AppResult<String> {
+    if hash.len() < 2 {
+        return Err(AppError::Parse(format!("资源 hash 不合法：{hash}")));
+    }
+    Ok(format!("{base}/{}/{}", &hash[..2], hash))
+}
+
+/// 从资源索引下载指定的语言表，返回 `(包内路径, 内容)`。
+///
+/// 客户端 jar 里只有 `en_us.json`（官方从 1.6 起把多语言放进了资源库），
+/// 所以中文只能这样取。取不到时如实报错，由调用方决定是继续构建
+/// （名称回落到英文）还是提示用户——不能悄悄当成「这个方块没有中文名」。
+pub fn download_lang_files(req: &LangDownload<'_>) -> AppResult<Vec<(String, Vec<u8>)>> {
+    let version_json = read_version_json(req)?;
+    let index_url = asset_index_url_from_version_json(&version_json)?;
+    let index = fetch_text(&index_url)?;
+    let base = match req.source {
+        AssetSource::Official => OFFICIAL_ASSET_BASE,
+        AssetSource::Bmcl => BMCL_ASSET_BASE,
+    };
+    let mut out = Vec::new();
+    for lang in req.langs {
+        let Some(hash) = lang_object_hash(&index, *lang)? else {
+            continue;
+        };
+        let url = asset_object_url(base, &hash)?;
+        out.push((
+            format!("assets/minecraft/lang/{lang}.json"),
+            fetch_bytes(&url)?,
+        ));
+    }
+    Ok(out)
+}
+
+/// 取该版本的 version.json：优先用本机装好的那份，没有再联网。
+///
+/// 本机那份是离线可用的，而且装了该版本时它一定与 jar 同源；联网那份
+/// 官方走清单、镜像走 `/version/{id}/json`（镜像的 version.json 是官方原文，
+/// 因此 assetIndex.url 仍指向官方地址）。
+fn read_version_json(req: &LangDownload<'_>) -> AppResult<String> {
+    if let Some(dir) = req.mc_dir {
+        let path = dir
+            .join("versions")
+            .join(req.version_id)
+            .join(format!("{}.json", req.version_id));
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            return Ok(text);
+        }
+    }
+    match (req.source, req.manifest) {
+        (AssetSource::Official, Some(manifest)) => {
+            let url = version_json_url(manifest, req.version_id)?;
+            fetch_text(&url)
+        }
+        _ => fetch_text(&format!("{BMCL_CLIENT_BASE}/{}/json", req.version_id)),
+    }
 }
 
 #[cfg(test)]
@@ -293,5 +420,98 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn asset_index_url_comes_from_asset_index_section() {
+        let json = r#"{
+            "id": "1.21.1",
+            "assetIndex": {"id": "17", "url": "https://x/17.json", "sha1": "aa"},
+            "downloads": {"client": {"url": "https://x/client.jar"}}
+        }"#;
+        assert_eq!(
+            asset_index_url_from_version_json(json).expect("应取到索引地址"),
+            "https://x/17.json"
+        );
+
+        // 缺 assetIndex 时必须报错：地址取不到就没法定位语言表，
+        // 这时该由调用方明确降级，而不是拿去请求一个空地址
+        let no_index = r#"{"downloads": {"client": {"url": "https://x/client.jar"}}}"#;
+        let e = asset_index_url_from_version_json(no_index)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("assetIndex"), "错误要点明缺的是哪一段：{e}");
+    }
+
+    #[test]
+    fn lang_hash_is_looked_up_by_object_path() {
+        let index = r#"{
+            "objects": {
+                "minecraft/lang/zh_cn.json": {"hash": "daf8df119618b33ad7476a6be4ac2eadc802fd93", "size": 448107},
+                "minecraft/lang/en_us.json": {"hash": "aabbccddeeff00112233445566778899aabbccdd", "size": 1}
+            }
+        }"#;
+        assert_eq!(
+            lang_object_hash(index, "zh_cn").expect("索引应能解析").as_deref(),
+            Some("daf8df119618b33ad7476a6be4ac2eadc802fd93")
+        );
+        assert_eq!(
+            lang_object_hash(index, "ja_jp").expect("索引应能解析"),
+            None,
+            "索引里没有该语言时给 None，交给调用方跳过"
+        );
+
+        // 坏索引要报错而不是当作「没有这个语言」：后者会让人以为
+        // 这个版本天生不带中文，从而不再排查数据问题
+        assert!(lang_object_hash("{ 不是 JSON", "zh_cn").is_err());
+
+        // 索引条目存在但缺 hash：同样按「没有」处理（结构不完整的条项目不可用）
+        let broken_entry = r#"{"objects": {"minecraft/lang/zh_cn.json": {"size": 1}}}"#;
+        assert_eq!(lang_object_hash(broken_entry, "zh_cn").unwrap(), None);
+    }
+
+    #[test]
+    fn asset_object_url_is_content_addressed() {
+        let hash = "daf8df119618b33ad7476a6be4ac2eadc802fd93";
+        assert_eq!(
+            asset_object_url(OFFICIAL_ASSET_BASE, hash).unwrap(),
+            format!("{OFFICIAL_ASSET_BASE}/da/{hash}")
+        );
+        assert_eq!(
+            asset_object_url(BMCL_ASSET_BASE, hash).unwrap(),
+            format!("{BMCL_ASSET_BASE}/da/{hash}")
+        );
+
+        // 被截断的 hash 会拼出一个必然 404 的地址，必须当场报错
+        assert!(asset_object_url(OFFICIAL_ASSET_BASE, "d").is_err());
+    }
+
+    /// 联网验证整条链路：version.json → 资源索引 → 语言表对象。
+    ///
+    /// 默认不跑（`cargo test -- --ignored` 手动执行）：单元测试不该依赖网络。
+    /// 它验的是三处 URL 拼装与解析合起来到底能不能取到真正的中文语言表——
+    /// 只测纯函数的话，「索引地址取自哪一段」「对象路径怎么拼」都可能各自正确
+    /// 而合起来取不到东西。
+    #[test]
+    #[ignore = "需要联网，手动运行 cargo test -- --ignored"]
+    fn downloads_chinese_lang_file_end_to_end() {
+        let manifest = fetch_manifest().expect("应能取到版本清单");
+        let req = LangDownload {
+            version_id: "1.21.1",
+            source: AssetSource::Official,
+            mc_dir: None,
+            manifest: Some(&manifest),
+            langs: &["zh_cn"],
+        };
+        let got = download_lang_files(&req).expect("应能下载到中文语言表");
+        assert_eq!(got.len(), 1, "应当只下到请求的那一个语言表");
+        assert_eq!(got[0].0, "assets/minecraft/lang/zh_cn.json");
+
+        let text = String::from_utf8_lossy(&got[0].1);
+        assert!(
+            text.contains("\"block.minecraft.stone\": \"石头\""),
+            "取到的应当是中文语言表，实际开头是：{}",
+            &text.chars().take(80).collect::<String>()
+        );
     }
 }

@@ -340,6 +340,8 @@ export interface SetupVersionOutcome {
   id: string;
   ok: boolean;
   error: string;
+  /** 成功但需要提醒的事，取值为后端定义的提示码（如 `lang-unavailable`） */
+  warning?: string | null;
 }
 
 /** 一批版本的准备结果 */

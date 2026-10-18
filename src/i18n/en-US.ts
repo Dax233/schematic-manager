@@ -63,6 +63,8 @@ const enUS: typeof zhCN = {
     missing: "Download needed",
     progressUnknown: "Downloading…",
     progressBuilding: "Building…",
+    warnLangUnavailable:
+      "The Chinese language table could not be fetched (the client jar only has English; Chinese lives in the asset store), so block names will be shown in English",
   },
   displayName: {
     missing: "Not present in the language table",

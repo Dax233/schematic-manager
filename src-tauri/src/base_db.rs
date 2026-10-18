@@ -299,6 +299,13 @@ fn read_jar_version(jar: &Path) -> AppResult<Option<(String, i32)>> {
     Ok(Some((id, data_version)))
 }
 
+/// 基础库里要一并收集的语言表键（对应 `assets/minecraft/lang/<键>.json`）。
+///
+/// 界面语言只有中英两种，这两份就够；两种都要：缺中文时界面会显示英文，
+/// 缺英文时反过来。「查本机资源库」与「上网补齐」必须用同一份清单，
+/// 否则会出现「构建时想要的语言没人去找」。
+pub const LANG_KEYS: [&str; 2] = ["zh_cn", "en_us"];
+
 /// 从本机资源库里找出指定版本的语言文件（路径 -> 内容）。
 ///
 /// 客户端 jar 只带 `en_us.json`，其余语言随资源索引下载后存在
@@ -312,7 +319,7 @@ pub fn find_lang_files(
     mc_dir: &Path,
     version_id: &str,
 ) -> Vec<(String, Vec<u8>)> {
-    const LANGS: [&str; 2] = ["zh_cn", "en_us"];
+    let langs = LANG_KEYS;
 
     let indexes = mc_dir.join("assets").join("indexes");
     let objects = mc_dir.join("assets").join("objects");
@@ -344,7 +351,7 @@ pub fn find_lang_files(
         let Some(objs) = json.get("objects").and_then(|v| v.as_object()) else {
             continue;
         };
-        for lang in LANGS {
+        for lang in langs {
             let path = format!("assets/minecraft/lang/{lang}.json");
             if out.iter().any(|(p, _)| p == &path) {
                 continue;

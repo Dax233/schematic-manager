@@ -1935,6 +1935,7 @@ fn run_setup(
                     id: v.id.clone(),
                     ok: false,
                     error: msg.clone(),
+                    warning: None,
                 })
                 .collect();
         }
@@ -1959,24 +1960,27 @@ fn run_setup(
                 app,
                 v,
                 m.as_deref(),
+                source,
                 &blocks_dir,
                 &jars_dir,
                 &entities_path,
             ),
             Err(e) if v.jar_path.is_none() => Err(AppError::Parse(e.clone())),
             // 有本地 jar 的版本不受清单失败影响
-            Err(_) => setup_one(app, v, None, &blocks_dir, &jars_dir, &entities_path),
+            Err(_) => setup_one(app, v, None, source, &blocks_dir, &jars_dir, &entities_path),
         };
         outcomes.push(match r {
-            Ok(()) => SetupVersionOutcomeDto {
+            Ok(warning) => SetupVersionOutcomeDto {
                 id: v.id.clone(),
                 ok: true,
                 error: String::new(),
+                warning,
             },
             Err(e) => SetupVersionOutcomeDto {
                 id: v.id.clone(),
                 ok: false,
                 error: e.to_string(),
+                warning: None,
             },
         });
     }
@@ -1987,14 +1991,17 @@ fn run_setup(
 }
 
 /// 准备单个版本：取 jar（本地或下载）→ 构建方块包 → 并入实体贴图。
+///
+/// 返回需要提醒用户的提示码（见 [`fill_missing_langs`]）；正常的成功是 `Ok(None)`。
 fn setup_one(
     app: &tauri::AppHandle,
     v: &SetupVersionDto,
     manifest: Option<&str>,
+    source: SetupSource,
     blocks_dir: &Path,
     jars_dir: &Path,
     entities_path: &Path,
-) -> AppResult<()> {
+) -> AppResult<Option<String>> {
     let jar_path = match &v.jar_path {
         Some(p) => PathBuf::from(p),
         None => {
@@ -2034,17 +2041,18 @@ fn setup_one(
         },
     );
     let out = blocks_dir.join(format!("{}-{}.dat.z", v.data_version, v.id));
-    // 中文在资源库里而不在客户端 jar 里，构建时一并带上；找不到就不带，
-    // 构建侧会回落到英文名（比整列没有名字要好）
+    // 语言表要一并喂给构建侧：客户端 jar 里只有 en_us.json（官方从 1.6 起把
+    // 多语言放进了资源库），缺了它方块名整列没有中文，也就是界面只能显示英文。
     let mc_dir = v
         .mc_dir
         .as_ref()
         .map(PathBuf::from)
         .or_else(crate::base_db::default_minecraft_dir);
-    let langs = match &mc_dir {
+    let mut langs = match &mc_dir {
         Some(dir) => crate::base_db::find_lang_files(dir, &v.id),
         None => Vec::new(),
     };
+    let warning = fill_missing_langs(v, manifest, mc_dir.as_deref(), source, &mut langs);
     crate::jar_file::build_pack_to_with_langs(
         &jar_path.to_string_lossy(),
         &out.to_string_lossy(),
@@ -2067,7 +2075,65 @@ fn setup_one(
             error: String::new(),
         },
     );
-    Ok(())
+    Ok(warning)
+}
+
+/// 把本机资源库里没有的语言表补上；返回需要提醒用户的提示码。
+///
+/// 客户端 jar 只有 `en_us.json`，中文只在资源库里（或按资源索引下载）。
+/// 本机 `.minecraft/assets` 是空的（例如从没启动过游戏）时就得上网取；
+/// 取不到不算失败——库照样建得出来，只是名字会回落成英文，因此这里
+/// 返回提示码而不是错误，让界面如实说明原因，而不是让用户以为界面坏了。
+fn fill_missing_langs(
+    v: &SetupVersionDto,
+    manifest: Option<&str>,
+    mc_dir: Option<&Path>,
+    source: SetupSource,
+    langs: &mut Vec<(String, Vec<u8>)>,
+) -> Option<String> {
+    let missing: Vec<&str> = crate::base_db::LANG_KEYS
+        .iter()
+        .copied()
+        .filter(|lang| {
+            !langs
+                .iter()
+                .any(|(p, _)| p == &format!("assets/minecraft/lang/{lang}.json"))
+        })
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    let req = crate::mc_download::LangDownload {
+        version_id: &v.id,
+        source: match source {
+            SetupSource::Official => crate::mc_download::AssetSource::Official,
+            SetupSource::Bmcl => crate::mc_download::AssetSource::Bmcl,
+        },
+        mc_dir,
+        manifest,
+        langs: &missing,
+    };
+    match crate::mc_download::download_lang_files(&req) {
+        Ok(extra) => {
+            langs.extend(extra);
+            // 索引里没有请求的语言时也值得说一声：那说明这个版本确实不带它，
+            // 用户以后不必再重试
+            if missing.iter().all(|lang| {
+                langs
+                    .iter()
+                    .any(|(p, _)| p == &format!("assets/minecraft/lang/{lang}.json"))
+            }) {
+                None
+            } else {
+                Some("lang-unavailable".to_string())
+            }
+        }
+        Err(e) => {
+            // 不能让失败消失：用户看到英文名时，得能查到是因为没取到语言表
+            eprintln!("版本 {} 的语言表未能取得，界面将显示英文名：{e}", v.id);
+            Some("lang-unavailable".to_string())
+        }
+    }
 }
 
 /// 读取「版本库」界面状态；从未保存过时返回 None（不是错误）。

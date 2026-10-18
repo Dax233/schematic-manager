@@ -59,7 +59,11 @@ function downloadProgress(name: string): number | null {
  * 再写一遍会变成「9% 下载中 9%」。只有画不出进度条（服务器没给长度）时才补一句。 */
 function resultText(name: string): string {
   const o = outcomes.value.find((x) => x.id === name);
-  if (o) return o.ok ? t("setup.ready") : o.error;
+  if (o) {
+    if (!o.ok) return o.error;
+    const warn = o.warning ? warningText(o.warning) : "";
+    return warn ? `${t("setup.ready")} · ${warn}` : t("setup.ready");
+  }
   const p = progress.value.get(name);
   if (!p) return "";
   if (p.stage === "download") {
@@ -67,6 +71,17 @@ function resultText(name: string): string {
   }
   if (p.stage === "build") return t("setup.progressBuilding");
   return "";
+}
+
+/** 后端给的成功提示码 -> 当前语言的说明。
+ *
+ * 显式映射而不是拼键名（`setup.warn.${code}`）：拼键名时后端改了码值
+ * 只会渲染出一串键名，编译期发现不了。
+ * 认不出的码原样显示：将来后端加了提示却没同步前端时，用户至少看得见。
+ */
+function warningText(code: string): string {
+  if (code === "lang-unavailable") return t("setup.warnLangUnavailable");
+  return code;
 }
 </script>
 

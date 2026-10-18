@@ -492,6 +492,13 @@ pub struct SetupVersionOutcomeDto {
     pub ok: bool,
     /// 失败原因；成功时为空串
     pub error: String,
+    /// 成功但需要提醒用户的事，取值为稳定的提示码，由前端出对应语言的说明。
+    /// 目前只有 `lang-unavailable`：没取到语言表，界面会显示英文名。
+    ///
+    /// 给码而不是给句子：本项目的界面支持中英切换，后端出中文句子会让英文
+    /// 界面里冒出中文。
+    #[serde(default)]
+    pub warning: Option<String>,
 }
 
 /// 一批版本的准备结果

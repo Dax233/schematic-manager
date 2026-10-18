@@ -142,10 +142,14 @@ impl JarSource for JarFile {
     }
 }
 
-/// 从 jar 文件构建资源包并落盘。
+/// 从 jar 文件构建资源包并落盘（不带 jar 之外的语言表）。
 ///
 /// 返回产出信息；`out_path` 已存在时直接覆盖——导入是幂等操作，
 /// 用户重复导入同一个 jar 不应产生多份副本。
+///
+/// 只给测试用：正式流程一律走 [`build_pack_to_with_langs`]，因为客户端 jar
+/// 里只有 `en_us.json`，不额外带上中文语言表就会建出只有英文名的库。
+#[cfg(test)]
 pub fn build_pack_to(
     jar_path: &str,
     out_path: &str,
@@ -448,6 +452,75 @@ mod tests {
         assert_eq!(db.versions[0].blocks[0].name, "minecraft:stone");
         assert_eq!(db.textures.len(), 1);
         assert_eq!(db.models.len(), 1);
+    }
+
+    /// 联网验证「补齐语言表后，库里存的确实是中文名」。
+    ///
+    /// 整条链路走一遍：从资源索引下载 zh_cn → 建包 → 读回 → 取显示名称。
+    /// 只测下载或只测建包都不够：前者证明不了名字进了库，后者用的是造出来的
+    /// 语言表、证明不了真实语言表能被认出来（键名如 `block.minecraft.stone`
+    /// 必须与构建侧的查表方式对得上）。
+    ///
+    /// 默认不跑（`cargo test -- --ignored` 手动执行）：单元测试不该依赖网络。
+    #[test]
+    #[ignore = "需要联网，手动运行 cargo test -- --ignored"]
+    fn downloaded_lang_file_makes_the_pack_store_chinese_names() {
+        let manifest = crate::mc_download::fetch_manifest().expect("应能取到版本清单");
+        let req = crate::mc_download::LangDownload {
+            version_id: "1.21.1",
+            source: crate::mc_download::AssetSource::Official,
+            mc_dir: None,
+            manifest: Some(&manifest),
+            langs: &["zh_cn"],
+        };
+        let langs = crate::mc_download::download_lang_files(&req).expect("应能下载中文语言表");
+        assert_eq!(langs.len(), 1, "应当只下到请求的那一个语言表");
+
+        let png = make_png(2, 2, 255);
+        let zip = make_zip(&[
+            ("version.json", br##"{"id":"1.21.1","world_version":3955}"##),
+            (
+                "assets/minecraft/blockstates/stone.json",
+                br##"{"variants":{"":{"model":"block/stone"}}}"##,
+            ),
+            (
+                "assets/minecraft/models/block/stone.json",
+                br##"{"textures":{"all":"block/stone"},"elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"#all"}}}]}"##,
+            ),
+            ("assets/minecraft/textures/block/stone.png", &png),
+            // 真实客户端 jar 里带的就是这份英文表，中文另外从资源库补
+            (
+                "assets/minecraft/lang/en_us.json",
+                br##"{"block.minecraft.stone":"Stone"}"##,
+            ),
+        ]);
+        let d = tmp("lang_e2e");
+        let jar_path = d.join("client.jar");
+        std::fs::write(&jar_path, &zip).unwrap();
+        let out = d.join("lang.pack");
+
+        build_pack_to_with_langs(
+            jar_path.to_str().unwrap(),
+            out.to_str().unwrap(),
+            "1.21.1",
+            3955,
+            false,
+            langs,
+        )
+        .expect("构建失败");
+
+        let db = crate::blockdb::BlockDb::load(out.to_str().unwrap(), false).expect("读回失败");
+        let name = db.versions[0].display_name("minecraft:stone");
+        assert_eq!(name, "石头", "建好的库里应当存着中文名，实际是：{name}");
+
+        // 英文那套也要在：界面语言切到英语时靠它
+        let en = db.versions[0]
+            .langs
+            .iter()
+            .find(|e| e.block_name == "minecraft:stone")
+            .map(|e| e.en.clone())
+            .unwrap_or_default();
+        assert_eq!(en, "Stone", "英文名同样要留着，实际是：{en}");
     }
 
     #[test]
