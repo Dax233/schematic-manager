@@ -1,7 +1,16 @@
-# 投影文件管理器 / Schematic Manager
-<img width="1560" height="980" alt="2026-10-12_010941" src="https://github.com/user-attachments/assets/d7855b1d-78b4-4957-9537-6c146bfee77f" />
+<div align="center">
 
-跨平台的 Minecraft 投影（`.litematic`）文件管理与预览工具。
+<img src="src-tauri/icons/icon.png" width="256" height="256" alt="投影文件管理器图标">
+
+# 投影文件管理器 / Schematic Manager
+
+**跨平台的 Minecraft 投影（`.litematic`）文件管理与预览工具。**
+
+[English](README.en_US.md) | 简体中文
+
+</div>
+
+<img width="1560" height="980" alt="2026-10-12_010941" src="https://github.com/user-attachments/assets/d7855b1d-78b4-4957-9537-6c146bfee77f" />
 
 > 本程序仅限于免费分享，禁止任何销售行为。
 > 作者：黑山大叔 — https://space.bilibili.com/19428259
@@ -102,8 +111,10 @@ BMCLAPI，供清单里没有、本机也没装的版本）。支持补齐的正�
 - `legacy-cpp/` —— 原有的 Windows 专用 C++ 实现，**仅作参考**。
   其中的 `.litematic` 解析、NBT 位打包、ZIP/PNG 解码、多版本方块库烘焙等
   已通过实测验证的语义，是 Rust 重写时的对照依据。
+- `tools/gen_app_icons.py` —— 由 `docs/` 下两张母版生成整套应用图标
 - `tools/typecheck/` —— 无网络环境下的离线类型检查与单元测试脚本
 - `tools/render/` —— 用无头浏览器渲染构建产物、核对界面确实画得出来
+- `docs/` —— 技术文档与图标母版
 - `.github/workflows/ci.yml` —— 多平台质量检查、自动构建与发布
 
 ## 构建
@@ -190,6 +201,31 @@ python tools/render/check-render.py
 对话框单独验：它们打开时会各自加载数据（可转换版本、版本库清单、备份列表），
 一旦抛错，界面表现就是「点了没反应」——最难排查的一类问题。
 浏览器路径可用 `CHROME_PATH` 指定。
+
+## 应用图标
+
+图标由两张 512×512 母版生成，按显示尺寸分档：**小于等于 48 像素**用
+`docs/48x.png`（去掉了取景框那类细装饰、主图更大，缩到十几像素才不糊），
+**大于 48 像素**用 `docs/256x.png`。
+
+```bash
+python tools/gen_app_icons.py
+```
+
+它覆盖 `src-tauri/icons/` 下的全套产物，并把 `.ico`、`.icns` 这两个「一个文件装
+多档尺寸」的容器按档位分别取用对应母版——`pnpm tauri icon` 只接受一张母版，
+做不到这一点。写完脚本会读回容器逐档核对，确认每一档用的确实是该用的那张母版；
+这一步不能省，64 像素那一档归大母版这类归属最容易写错。
+
+1024 档由 512 的母版放大 2 倍（母版没有更大尺寸），边缘会比原生略软；日后拿到
+更大的母版，改脚本里的 `MASTER_LARGE` 即可。
+
+改完图标后**必须**清掉本 crate 的 build-script 缓存再构建：只动图标文件时增量
+构建不会重跑 `build.rs`，exe 会继续留着旧图标资源。
+
+```bash
+cargo clean -p schematic-manager
+```
 
 ## 版本号规则
 
