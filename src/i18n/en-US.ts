@@ -67,6 +67,42 @@ const enUS: typeof zhCN = {
   displayName: {
     missing: "Not present in the language table",
   },
+  log: {
+    title: "Log management",
+    hint: "Records changes to schematics: block replacement, version conversion, rename, copy to a directory, delete to the recycle bin, and backup restore/delete. Newest first, showing at most the latest {count} entries.",
+    refresh: "Refresh",
+    openDir: "Open log directory",
+    openDirTitle: "Open the log directory in the file manager and select the log file",
+    clear: "Clear log",
+    clearConfirm: "Clearing cannot be undone. Clear the operation log?",
+    clearOk: "Clear",
+    count: "{count} entries",
+    empty: "No log entries",
+  },
+  update: {
+    title: "Updates",
+    currentVersion: "Current version",
+    unknown: "Unknown",
+    author: "Author",
+    authorPage: "Author's homepage",
+    checkTarget: "Check target",
+    check: "Check for updates",
+    checkHint: "Requires network access; reads the release list on GitHub",
+    hasUpdate: "New version available: {version}",
+    upToDate: "Already up to date (latest release {version})",
+    noRelease: "No releases found",
+    publishedAt: "Published: {time}",
+    idle: "Press “Check for updates” to see whether a newer version exists.",
+    downloadUrl: "Download URL",
+    copyTitle: "Click to copy the URL",
+    openUrl: "Open download URL",
+    copyHint:
+      "Clicking the URL copies it; the “Open download URL” button opens the page in your browser.",
+    kindHint:
+      "Stable releases are published versions; preview builds are development builds produced automatically after every commit and may be unstable. Whether to update is your call — the program never downloads on its own.",
+    stable: "Stable",
+    prerelease: "Preview",
+  },
 };
 
 export default enUS;

@@ -1453,3 +1453,21 @@ body[arco-theme='dark'] .repl-block--empty .arco-input-wrapper {
 .conv-window .arco-input-wrapper {
   font-size: 13px;
 }
+
+// 弹出层的高度：上下都留出边距，不要铺满整屏。
+// Arco 的弹窗是 .arco-modal-wrapper 里一个 top: 100px 的 inline-block，本身不限高，
+// 内容一多就把 wrapper 撑成整屏高，标题与按钮随之滚出视野。这里给弹窗封顶并改成
+// 纵向 flex，body 于是在弹窗内部伸缩，标题栏与按钮始终留在视野里。
+// 宽度仍由各弹窗的 width 属性以内联样式给出，配合 margin: 0 auto 保持居中。
+.arco-modal {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 160px);
+}
+
+// body 跟着弹窗伸缩；内容区要不要用 Arco 的无轨道滚动条由各弹窗决定，
+// 没包滚动条的内容仍由 Arco 自带的 overflow: auto 兜底，不至于被裁掉。
+.arco-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}

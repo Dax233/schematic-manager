@@ -9,8 +9,11 @@
  * （见后端 backup::clear_log），所以「打开日志目录」在清空后仍然可用。
  */
 <script setup lang="ts">
+import { useI18n } from "vue-i18n";
 import { useAppStore } from "../store";
 import OperationLogList from "./OperationLogList.vue";
+
+const { t } = useI18n();
 
 const {
   logOpen,
@@ -26,42 +29,43 @@ const {
 <template>
   <a-modal
     v-model:visible="logOpen"
-    title="日志管理"
+    :title="t('log.title')"
     :width="760"
     :footer="false"
+    :body-style="{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }"
     unmount-on-close
   >
     <!-- 只列后端真的会写日志的操作（commands.rs 里 append_log 的调用点）：
          说多了就是错误陈述，用户会照着这句话去找一条并不存在的记录。 -->
     <div class="hint-dim" style="margin-bottom: 8px">
-      记录投影文件的改动：方块替换、版本转换、重命名、复制到目录、删除到回收站，
-      以及备份的还原与删除。最新的在最上面，最多显示最近 {{ logMaxLines }} 条。
+      {{ t("log.hint", { count: logMaxLines }) }}
     </div>
 
     <a-space style="margin-bottom: 8px">
-      <a-button size="small" :loading="logLoading" @click="refreshLogs">刷新</a-button>
-      <a-button
-        size="small"
-        title="在文件管理器里打开日志所在目录，并选中日志文件"
-        @click="openLogDir"
-      >
-        打开日志所在目录
+      <a-button size="small" :loading="logLoading" @click="refreshLogs">
+        {{ t("log.refresh") }}
+      </a-button>
+      <a-button size="small" :title="t('log.openDirTitle')" @click="openLogDir">
+        {{ t("log.openDir") }}
       </a-button>
       <a-popconfirm
-        content="清空后无法恢复，确定清空操作日志？"
-        ok-text="清空"
+        :content="t('log.clearConfirm')"
+        :ok-text="t('log.clearOk')"
         @ok="clearLogs"
       >
         <a-button size="small" status="danger" :disabled="logs.length === 0">
-          清空日志
+          {{ t("log.clear") }}
         </a-button>
       </a-popconfirm>
-      <span class="hint-dim">共 {{ logs.length }} 条</span>
+      <span class="hint-dim">{{ t("log.count", { count: logs.length }) }}</span>
     </a-space>
 
-    <a-spin :loading="logLoading" style="width: 100%">
-      <a-empty v-if="logs.length === 0" description="暂无日志" />
-      <OperationLogList v-else :lines="logs" />
-    </a-spin>
+    <!-- 日志可以很长：内容区自己滚（Arco 无轨道滚动条），标题与按钮留在视野里 -->
+    <a-scrollbar type="embed" style="flex: 1 1 auto; min-height: 0; overflow: auto">
+      <a-spin :loading="logLoading" style="width: 100%">
+        <a-empty v-if="logs.length === 0" :description="t('log.empty')" />
+        <OperationLogList v-else :lines="logs" />
+      </a-spin>
+    </a-scrollbar>
   </a-modal>
 </template>
