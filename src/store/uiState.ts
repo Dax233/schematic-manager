@@ -12,6 +12,7 @@ import type { ComputedRef, Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { loadUiState, saveUiState, scanLitematics } from "../api";
 import { currentLocale, isLocale, locale, setLocale, t } from "../i18n";
+import type { StatusText } from "./fileList";
 import { EXPORT_SIZES, VIEW_PRESETS } from "../render/scene3d";
 import type { SchematicSummary } from "../types";
 
@@ -64,8 +65,8 @@ export interface UiStateDeps {
   exportSize: Ref<number>;
   /** 文件搜索词（fileList） */
   searchText: Ref<string>;
-  /** 状态栏文本（fileList）；恢复完成后汇报目录数 */
-  status: Ref<string>;
+  /** 状态栏内容（fileList）；恢复完成后汇报目录数 */
+  status: Ref<StatusText>;
 }
 
 export function createUiStateSlice(s: UiStateDeps) {
@@ -210,7 +211,10 @@ export function createUiStateSlice(s: UiStateDeps) {
       // 把失效目录从记忆里清掉
       persistUiState();
     }
-    s.status.value = t("ui.dirsRestored", { count: Object.keys(next).length });
+    s.status.value = {
+      key: "ui.dirsRestored",
+      params: { count: Object.keys(next).length },
+    };
   }
 
   // 记住界面改动。逐个监听而不是 watch 一个大对象：后者要么深比较整棵状态树，

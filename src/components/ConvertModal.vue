@@ -210,6 +210,7 @@ function replName(rec: ConvertItem): string {
     :ok-loading="convBusy"
     :ok-text="t('convert.ok')"
     :ok-button-props="{ disabled: convTargetIdx === undefined || !selected || !convAnalyzed }"
+    :body-style="{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }"
     @ok="doConvert"
     modal-class="conv-window"
   >
@@ -329,7 +330,7 @@ function replName(rec: ConvertItem): string {
               @clear="onConvPickSearch('')"
             />
             <div class="hint-dim" style="margin: 6px 0">
-              <i18n-t v-if="convActiveItem" keypath="convert.pickHintTarget" tag="span">
+              <i18n-t scope="global" v-if="convActiveItem" keypath="convert.pickHintTarget" tag="span">
                 <template #name>
                   <b>{{ sourceName(convActiveItem) }}</b>
                 </template>
@@ -368,9 +369,10 @@ function replName(rec: ConvertItem): string {
                     {{ t("convert.pickWarn") }}
                   </span>
                 </span>
-                <!-- 英文名与方块 ID 一并给出，显示名称在上方 -->
+                <!-- 英文名与方块 ID 一并给出，显示名称在上方；
+                     英文名与显示名称相同时不再重复（英语界面下本会重复一次） -->
                 <span class="conv-block__id">
-                  {{ h.name }}<template v-if="h.en"> · {{ h.en }}</template>
+                  {{ h.name }}<template v-if="h.en && h.en !== h.zh"> · {{ h.en }}</template>
                 </span>
               </button>
             </a-scrollbar>

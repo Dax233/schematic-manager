@@ -70,6 +70,7 @@ function pickFieldLabel(): string {
     :ok-loading="replaceBusy"
     :ok-text="t('replace.ok')"
     :ok-button-props="{ disabled: !selected }"
+    :body-style="{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }"
     @ok="doReplace"
     modal-class="repl-window"
   >
@@ -107,7 +108,7 @@ function pickFieldLabel(): string {
                 <div v-else-if="nameStatus(replaceForm.fromName)" class="hint-dim">
                   {{ nameStatus(replaceForm.fromName) }}
                 </div>
-                <div class="hint-dim">{{ t("replace.pickHint", { field: t("replace.fieldFrom") }) }}</div>
+                <div class="hint-dim">{{ t("replace.fromPickHint") }}</div>
               </div>
             </a-form-item>
 
@@ -168,7 +169,7 @@ function pickFieldLabel(): string {
                   {{ t("replace.previewCount") }}
                 </a-button>
                 <!-- 数字要加粗，而句式随语言变化，因此整句走 i18n-t -->
-                <i18n-t
+                <i18n-t scope="global"
                   v-if="replacePreview !== null"
                   keypath="replace.previewResult"
                   tag="span"
@@ -201,7 +202,7 @@ function pickFieldLabel(): string {
           @clear="onBlockSearch('')"
         />
         <div class="hint-dim" style="margin: 6px 0">
-          <i18n-t keypath="replace.pickHint" tag="span">
+          <i18n-t scope="global" keypath="replace.pickHint" tag="span">
             <template #field><b>{{ pickFieldLabel() }}</b></template>
           </i18n-t>
         </div>
@@ -225,12 +226,13 @@ function pickFieldLabel(): string {
             @click="pickBlock(h)"
           >
             <!-- 显示名称在上、方块 ID 与英文名在下：名字是用户认方块的
-                 主要依据，ID 与英文名是精确依据 -->
+                 主要依据，ID 与英文名是精确依据。英文名与上面的显示名称
+                 相同时不再重复给出（英语界面下本来就会重复一次） -->
             <span class="repl-block__zh">
               {{ displayName({ zhName: h.zh, enName: h.en }) || h.name }}
             </span>
             <span class="repl-block__id">
-              {{ h.name }}<template v-if="h.en"> · {{ h.en }}</template>
+              {{ h.name }}<template v-if="h.en && h.en !== h.zh"> · {{ h.en }}</template>
               <template v-if="h.versions.length > 1">
                 {{ t("replace.versionCount", { count: h.versions.length }) }}
               </template>

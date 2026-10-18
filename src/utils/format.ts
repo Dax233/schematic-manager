@@ -1,6 +1,7 @@
 import { t } from "../i18n";
 
-/** 把字节数格式化为易读文本 */export function formatSize(bytes: number): string {
+/** 把字节数格式化为易读文本 */
+export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;

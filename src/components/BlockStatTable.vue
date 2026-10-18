@@ -41,16 +41,16 @@ const {
       <div class="block-head">
         <a-space :size="16">
           <!-- 统计数字要加粗，而冒号在两种语言里宽度不同，因此整句走 i18n-t -->
-          <i18n-t keypath="stats.nonAir" tag="span">
+          <i18n-t scope="global" keypath="stats.nonAir" tag="span">
             <template #value><b>{{ analysis.nonAirTotal }}</b></template>
           </i18n-t>
-          <i18n-t keypath="stats.air" tag="span">
+          <i18n-t scope="global" keypath="stats.air" tag="span">
             <template #value><b>{{ analysis.airTotal }}</b></template>
           </i18n-t>
-          <i18n-t keypath="stats.blockKinds" tag="span">
+          <i18n-t scope="global" keypath="stats.blockKinds" tag="span">
             <template #value><b>{{ analysis.distinctBlockTypes }}</b></template>
           </i18n-t>
-          <i18n-t keypath="stats.stateKinds" tag="span">
+          <i18n-t scope="global" keypath="stats.stateKinds" tag="span">
             <template #value><b>{{ analysis.distinctStates }}</b></template>
           </i18n-t>
         </a-space>

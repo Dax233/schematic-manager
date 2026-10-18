@@ -1484,6 +1484,9 @@ body[arco-theme='dark'] .repl-block--empty .arco-input-wrapper {
   top: 16px;
   bottom: 16px;
   height: auto;
+  // Arco 基础样式给抽屉设了 overflow: auto，极端尺寸下会冒出原生滚动条；
+  // 需要滚动的内容各自包在 Arco 无轨道滚动条里（规范五.4）
+  overflow: hidden;
   border-radius: var(--border-radius-medium);
 }
 

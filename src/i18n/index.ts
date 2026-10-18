@@ -45,6 +45,8 @@ export function setLocale(next: Locale): void {
   locale.value = next;
   // index.html 上写死了 zh-CN；它影响断行、字体选择与朗读，切语言时要一起改
   document.documentElement.lang = next;
+  // 窗口标题与任务栏/Alt-Tab 上显示的就是它，同样要跟着语言走
+  document.title = t("titleBar.appName");
 }
 
 /** Arco 自己那些内置文案（分页、空数据、弹窗按钮）的语言包 */

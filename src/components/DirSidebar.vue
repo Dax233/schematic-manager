@@ -86,14 +86,14 @@ const {
     <div v-if="dupResult" class="sidebar__dups">
       <span class="sidebar__dups-text">
         <template v-if="dupResult.groups.length > 0">
-          <i18n-t keypath="files.dupFound" tag="span">
+          <i18n-t scope="global" keypath="files.dupFound" tag="span">
             <template #groups><b>{{ dupResult.groups.length }}</b></template>
             <template #files><b>{{ dupFileCount }}</b></template>
           </i18n-t>
         </template>
         <template v-else>{{ t("files.dupNotFound") }}</template>
         <template v-if="dupSuspects.length > 0">
-          <i18n-t keypath="files.dupSuspects" tag="span">
+          <i18n-t scope="global" keypath="files.dupSuspects" tag="span">
             <template #groups><b>{{ dupSuspects.length }}</b></template>
             <template #files>{{ suspectFileCount }}</template>
           </i18n-t>
@@ -111,7 +111,9 @@ const {
       <template v-if="dupResult.unreadable.length > 0">
         {{ t("files.unreadableFiles", { count: dupResult.unreadable.length }) }}
       </template>
-      <template v-if="dupResult.unreadable.length > 0 && dupResult.skippedDirs > 0">；</template>
+      <template v-if="dupResult.unreadable.length > 0 && dupResult.skippedDirs > 0">
+        {{ t("files.unreadableBothSeparator") }}
+      </template>
       <template v-if="dupResult.skippedDirs > 0">
         {{ t("files.unreadableDirs", { count: dupResult.skippedDirs }) }}
       </template>

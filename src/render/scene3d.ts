@@ -8,6 +8,7 @@
 //! 网格构建与取景逻辑，避免两处各写一份而逐渐不一致。
 
 import * as THREE from "three";
+import { t } from "../i18n";
 import type { SceneData } from "../types";
 
 /** 视角预设，与界面上的四个按钮一致 */
@@ -316,7 +317,7 @@ export class OffscreenRenderer {
 
       const blob: Blob = await new Promise((resolve, reject) => {
         this.renderer.domElement.toBlob(
-          (b) => (b ? resolve(b) : reject(new Error("导出图像失败：画布为空"))),
+          (b) => (b ? resolve(b) : reject(new Error(t("export.canvasEmpty")))),
           "image/png",
         );
       });

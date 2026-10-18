@@ -110,7 +110,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     if (cur.unresolvedBlocks > 0) {
       parts.push(t("export.unresolved", { count: cur.unresolvedBlocks }));
     }
-    return parts.join("　");
+    return parts.join(t("export.infoSeparator"));
   });
 
   function setView(name: string) {
@@ -207,7 +207,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
           await writeFile(joinPath(dir, name), bytes);
           ok += 1;
         } catch (e) {
-          failures.push(`${f.fileName}：${e}`);
+          failures.push(t("export.batchFailureEntry", { name: f.fileName, error: String(e) }));
         }
         exportingProgress.value = { done: ok + failures.length, total: list.length };
       }

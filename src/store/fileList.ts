@@ -70,6 +70,14 @@ export interface SuspectGroup {
   paths: string[];
 }
 
+/** 状态栏要显示的内容：文案键与插值参数。
+ *
+ * 不存译文：存下来的译文会固定成赋值时的语言，切语言后不再跟着变。 */
+export interface StatusText {
+  key: string;
+  params?: Record<string, unknown>;
+}
+
 /** 重复组配色的种类数，与 global.scss 里生成的色相数量一致。
  *
  * 两组共用一种颜色会让人误以为它们是同一组，因此这个数一旦调整，
@@ -432,12 +440,21 @@ export function createFileListSlice(s: FileListDeps) {
     },
   ]);
 
-  const status = ref(t("files.statusReady"));
+  const status = ref<StatusText>({ key: "files.statusReady" });
 
   const statusText = computed(() => {
     const n = files.value.length;
-    return n === 0 ? status.value : t("files.statusWithTotal", { status: status.value, count: n });
+    const text = t(status.value.key, status.value.params ?? {});
+    return n === 0 ? text : t("files.statusWithTotal", { status: text, count: n });
   });
+
+  /** 状态栏内容以「文案键 + 参数」的形式存，而不是存译文。
+   *
+   * 译文一旦在赋值时算出来就固定成了当时的语言，切到英语后状态栏会继续
+   * 显示中文。存键则每次渲染都按当前语言取。 */
+  function setStatus(key: string, params?: Record<string, unknown>) {
+    status.value = { key, params };
+  }
 
   /// 列表被新的扫描结果替换后，让选中项与新列表保持一致。
   ///
@@ -799,7 +816,7 @@ export function createFileListSlice(s: FileListDeps) {
     );
     if (dirs.length === 0) return;
 
-    status.value = t("files.statusScanning");
+    setStatus("files.statusScanning");
     const next = { ...dirItems.value };
     const parts: string[] = [];
     let bad = 0;
@@ -824,7 +841,7 @@ export function createFileListSlice(s: FileListDeps) {
     if (Object.keys(next).length === Object.keys(dirItems.value).length && added === 0) {
       // 一个目录都没加进来（全部失败或被取消）
       if (skippedDirs === 0) Message.warning(t("files.noNewDirs"));
-      status.value = t("files.statusScanDone");
+      setStatus("files.statusScanDone");
       return;
     }
 
@@ -850,10 +867,13 @@ export function createFileListSlice(s: FileListDeps) {
       });
     }
     if (bad > 0) parts.push(t("files.parseFailedPart", { count: bad }));
-    status.value =
-      parts.length > 0
-        ? t("files.statusScanDoneWith", { parts: parts.join(t("common.listSeparator")) })
-        : t("files.statusScanDone");
+    if (parts.length > 0) {
+      setStatus("files.statusScanDoneWith", {
+        parts: parts.join(t("common.listSeparator")),
+      });
+    } else {
+      setStatus("files.statusScanDone");
+    }
   }
 
   /** 移除一个已加载目录。

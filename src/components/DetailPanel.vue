@@ -213,9 +213,11 @@ const {
         >
           {{ t("detail.exportBatch") }}
           <template v-if="exportingProgress">
-            （{{ exportingProgress.done }}/{{ exportingProgress.total }}）
+            {{ t("detail.batchExportProgress", { done: exportingProgress.done, total: exportingProgress.total }) }}
           </template>
-          <template v-else-if="hasChecked">（{{ checkedCount }}）</template>
+          <template v-else-if="hasChecked">
+            {{ t("detail.batchExportCount", { count: checkedCount }) }}
+          </template>
         </a-button>
         <span class="preview__spacer" />
         <span v-if="sceneError" class="preview__error">{{ sceneError }}</span>

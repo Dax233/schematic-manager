@@ -92,6 +92,8 @@ const enUS: typeof zhCN = {
     exportBatch: "Batch export",
     batchExportHint: "Export one preview for each of the {count} checked schematics",
     batchExportEmpty: "Check the schematics to export in the sidebar first",
+    batchExportProgress: " ({done}/{total})",
+    batchExportCount: " ({count})",
     tabInfo: "Info",
     tabBlocks: "Blocks",
     tabEntities: "Entities",
@@ -137,6 +139,9 @@ const enUS: typeof zhCN = {
     batchDone: "Exported {count} previews of {size}×{size} to {dir}",
     batchPartial: "{ok} succeeded, {fail} failed:\n{list}",
     iconRenderFailed: "Failed to render the block icons: {error}",
+    canvasEmpty: "Export failed: the canvas is empty",
+    infoSeparator: " · ",
+    batchFailureEntry: "{name}: {error}",
     tableName: "Display name",
     tableId: "Block ID",
     tableState: "State",
@@ -177,6 +182,7 @@ const enUS: typeof zhCN = {
     unreadableFiles: "{count} files could not be read and were not considered",
     unreadableDirs:
       "{count} subdirectories could not be read; the files inside were not considered",
+    unreadableBothSeparator: "; ",
     dupGroupTitle: "Duplicate group {no}: identical content to the other files in the group",
     suspectTitle:
       "Suspected duplicate: same name, size and block count but different content; check it yourself",
@@ -301,6 +307,8 @@ const enUS: typeof zhCN = {
     libraryHint:
       "{count} versions are available in the block library; a backup is taken before replacing and can be restored from “Backups and logs”.",
     pickHint: "Click a block below to fill {field} (whichever input is focused on the left)",
+    fromPickHint:
+      "Clicking any row in the “Blocks” tab fills this in directly, including the property filter",
     pickTitle: "Click to fill “{field}”",
     fieldFrom: "source block",
     fieldTo: "target block",

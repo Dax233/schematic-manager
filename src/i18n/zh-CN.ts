@@ -94,6 +94,9 @@ export default {
     exportBatch: "批量导出",
     batchExportHint: "导出勾选的 {count} 个投影各一张预览图",
     batchExportEmpty: "先在下方的目录栏里勾选要导出的投影",
+    /** 批量导出按钮上的进度与数量后缀，中文用全角括号 */
+    batchExportProgress: "（{done}/{total}）",
+    batchExportCount: "（{count}）",
     tabInfo: "信息",
     tabBlocks: "方块",
     tabEntities: "实体",
@@ -139,6 +142,11 @@ export default {
     batchDone: "已导出 {count} 张 {size}×{size} 预览图到 {dir}",
     batchPartial: "成功 {ok} 张，失败 {fail} 张：\n{list}",
     iconRenderFailed: "渲染方块图失败：{error}",
+    canvasEmpty: "导出图像失败：画布为空",
+    /** 场景信息里两段之间的分隔，中文用表意空格 */
+    infoSeparator: "　",
+    /** 批量导出失败清单里的一条 */
+    batchFailureEntry: "{name}：{error}",
     tableName: "显示名称",
     tableId: "方块ID",
     tableState: "状态",
@@ -176,6 +184,8 @@ export default {
     gotIt: "知道了",
     unreadableFiles: "有 {count} 个文件无法读取，未参与判定",
     unreadableDirs: "有 {count} 个子目录无法读取，其中的文件未参与判定",
+    /** 两条都出现时的分隔，中文用分号 */
+    unreadableBothSeparator: "；",
     dupGroupTitle: "重复组 {no}：与同组文件内容完全相同",
     suspectTitle: "疑似重复：名称、尺寸、方块总数相同，但内容不同，请自行核对",
     suspectChip: "疑似",
@@ -293,6 +303,8 @@ export default {
     previewResult: "将替换 {count} 个方块",
     libraryHint: "方块库共 {count} 个版本可选；替换前会自动备份，可在「备份与日志」中还原。",
     pickHint: "点下面的方块，填入 {field}（点左侧哪个输入框就填哪个）",
+    /** 源方块那一栏另给一条：从「方块」页签点行也能填，且会带上属性 */
+    fromPickHint: "在「方块」页签点击任意行可直接填入，属性限定也会一并带入",
     pickTitle: "点一下填入「{field}」",
     fieldFrom: "源方块",
     fieldTo: "目标方块",
