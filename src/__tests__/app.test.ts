@@ -3776,6 +3776,18 @@ describe("版本库", () => {
     expect(parseFloat(bar!.style.width), "条宽应等于真实比例").toBeCloseTo(9, 3);
     expect(row.textContent, "不应出现被放大一百倍的百分比").not.toContain("900%");
 
+    // 除不尽的进度只保留两位小数：Arco 默认文本会把比例原样乘 100 输出浮点，
+    // 实测出现过「6.886031082519097%」。6886/100000 = 6.886%
+    listener!.handler({
+      payload: { id: "1.21", stage: "download", received: 6886, total: 100000, error: "" },
+    });
+    await flushPromises();
+    const frac = [...document.querySelectorAll(".setup-table tbody tr")]
+      .find((r) => (r.textContent ?? "").includes("1.21"))!
+      .querySelector<HTMLElement>(".arco-progress-line-text");
+    expect(frac?.textContent?.trim(), "除不尽时应四舍五入到两位小数").toBe("6.89%");
+    expect(frac?.textContent, "不该把整串浮点都铺出来").not.toContain("6.886031");
+
     // 服务器没给长度时画不出进度条，这时才由文案补一句状态
     listener!.handler({
       payload: { id: "1.21", stage: "download", received: 0, total: 0, error: "" },
