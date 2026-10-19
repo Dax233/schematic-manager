@@ -230,6 +230,12 @@ every entry, confirming that each one really came from the master it should have
 is not optional, because the band boundary (the 64-pixel entry belongs to the large master)
 is exactly where mistakes happen.
 
+The mark in the top-left of the title bar comes from the same script
+(`src/assets/app-icon.png`, the small master rendered at 54 pixels) and is used as an image
+in the component rather than a hand-written SVG. That keeps the mark and the app icon on one
+source: an earlier hand-written SVG was not updated when the icon was redesigned, so the UI
+kept showing the old mark.
+
 The 1024 entry is a 2× upscale of the 512 master (there is no larger master), so its edges
 are slightly softer than native; with a larger master later, just change `MASTER_LARGE` in
 the script.
