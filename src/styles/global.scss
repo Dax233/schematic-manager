@@ -1533,8 +1533,8 @@ body[arco-theme='dark'] .repl-block--empty .arco-input-wrapper {
 // `.arco-scrollbar-container` 还要显式给 min-height: 0，否则它的默认
 // min-height: auto 会挡住收缩，同样撑到内容高度。
 //
-// 同理，不要在外面再套一层 a-scrollbar：那会让高度先经过一个不参与 flex 的
-// 容器，滚动条滑块拖动时会滚不动。
+// 同理，不要在外面再套一层 a-scrollbar：Table 自己已经有滚动条，
+// 外层那一条的容器既不参与 Table 的滚动、又会多出一条不动的滑块。
 .scroll-table,
 .scroll-table > .arco-spin,
 .scroll-table > .arco-spin > .arco-table-container,
@@ -1557,19 +1557,27 @@ body[arco-theme='dark'] .repl-block--empty .arco-input-wrapper {
   min-height: 0;
 }
 
-// 可滚动区域：让 Arco 的无轨道滚动条真的在给定高度内滚动。
+// 可滚动区域：让 Arco 的无轨道滚动条真的滚起来。
 //
-// Arco 的结构是 `.arco-scrollbar`（根，Arco 自己给了 height: 100%）套
-// `.arco-scrollbar-container`（真正滚动的那个，height: 100% + overflow: auto）。
-// 当根的高度由**父级 flex 布局**决定时，容器的 `height: 100%` 解析不成确定值，
-// 于是它退回按内容撑开、`overflow: auto` 形同虚设：内容溢出到弹窗遮罩层
-// （`.arco-modal-wrapper` 是 overflow: auto）上，表现为**一滚动整个弹窗往上移，
-// 列表自己不滚**。实测：根 464px、容器却 1565px。
+// Arco 只给 `.arco-scrollbar`（根）和 `.arco-scrollbar-container`（内容容器）
+// 各一句 `position: relative` 与隐藏原生滚动条的样式，**既没给 height，
+// 也没给 overflow**——滚动能力要使用方自己给。少了 `overflow: auto`，
+// 容器即使被限住高度也只是把内容裁掉：滚动条照样画、滑块照样显示，
+// 但 `container.scrollTop = 200` 仍是 0，拖动滑块也一动不动
+// （实测日志窗口：容器 c397/s14025，设 scrollTop 无反应、拖滑块 0 → 0）。
 //
-// 修法是把高度沿 flex 传下去，不再依赖百分比：根当纵向 flex 容器，
-// 容器由 flex 拿到确定高度。
+// 两件事缺一不可：
+//   1. 高度要确定。根的高度由父级 flex 决定时，容器的 `height: 100%` 解析不成
+//      确定值，会退回按内容撑开（实测根 464px、容器 1565px），因此高度沿 flex
+//      传下去：根当纵向 flex 容器，容器用 flex 拿到确定高度。
+//   2. 容器自己要 `overflow: auto`，否则它根本不能滚。
+//
 // 用法：`<a-scrollbar type="embed" class="scroll-fill__inner" outer-class="scroll-fill">`
-// （普通 class 会落到内部容器上，根要用 outer-class）。
+// （普通 class 落到内部容器上，根要用 outer-class）。
+//
+// 注意 Arco Table 不适用这条：它自己给 `.arco-table-body` 设了 overflow 与
+// max-height，额外套一层 a-scrollbar 反而会多出一条不参与滚动的容器
+// （见 .scroll-table 的说明）。
 .scroll-fill {
   display: flex;
   flex-direction: column;
@@ -1578,7 +1586,17 @@ body[arco-theme='dark'] .repl-block--empty .arco-input-wrapper {
 }
 
 .scroll-fill__inner {
+  overflow: auto;
   flex: 1 1 auto;
+  min-height: 0;
+}
+
+// 抽屉里日志页签的宿主：抽屉内容区没有确定高度，这里给它一个，
+// 滚动区（.scroll-fill）再在里面 flex 伸缩，容器这才拿得到确定高度。
+.log-scroll-host {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 220px);
   min-height: 0;
 }
 
