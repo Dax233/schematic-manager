@@ -1,6 +1,6 @@
 /**
  * 界面状态记忆域：把用户调过的界面形态（侧栏宽度、目录、列宽、
- * 视角、亮度、导出尺寸、搜索词）持久化，下次启动时恢复。
+ * 视角、亮度、导出尺寸、搜索词、日志等级）持久化，下次启动时恢复。
  *
  * 这个域横跨几乎所有其他域（读它们的状态来收集、写它们的状态来恢复），
  * 因此它最后被创建：注册顺序决定 onMounted 执行顺序，恢复必须发生在
@@ -14,6 +14,9 @@ import { loadUiState, saveUiState, scanLitematics } from "../api";
 import { currentLocale, isLocale, locale, setLocale, t } from "../i18n";
 import type { StatusText } from "./fileList";
 import { EXPORT_SIZES, VIEW_PRESETS } from "../render/scene3d";
+import { isLogLevel } from "../utils/run_log";
+import type { LogLevel } from "../utils/run_log";
+import { reportUiWarning } from "../utils/run_log_report";
 import type { SchematicSummary } from "../types";
 
 /** 会被记住的界面状态。
@@ -36,6 +39,8 @@ interface UiState {
   searchText: string;
   /** 界面语言；认不出来的值按默认语言处理 */
   locale?: string;
+  /** 运行日志等级；缺失或认不出来的值按 "info" 处理 */
+  logLevel?: string;
 }
 
 const UI_STATE_VERSION = 1;
@@ -67,6 +72,10 @@ export interface UiStateDeps {
   searchText: Ref<string>;
   /** 状态栏内容（fileList）；恢复完成后汇报目录数 */
   status: Ref<StatusText>;
+  /** 运行日志等级（backups）；本身也是要记住的界面形态 */
+  logLevel: Ref<LogLevel>;
+  /** 把当前等级与本地日期推给后端（backups）；恢复完成后必须调用 */
+  syncRunLogLevel: () => Promise<void>;
 }
 
 export function createUiStateSlice(s: UiStateDeps) {
@@ -83,6 +92,7 @@ export function createUiStateSlice(s: UiStateDeps) {
       exportSize: s.exportSize.value,
       searchText: s.searchText.value,
       locale: currentLocale(),
+      logLevel: s.logLevel.value,
     };
   }
 
@@ -97,6 +107,8 @@ export function createUiStateSlice(s: UiStateDeps) {
     try {
       await saveUiState(JSON.stringify(collectUiState()));
     } catch (e) {
+      // save_ui_state 的失败已由 api.ts 的 logged 出口记进运行日志（带命令名），
+      // 这里只留控制台一份，免得同一次失败出现两条
       console.warn("保存界面状态失败：", e);
     }
   }
@@ -133,6 +145,7 @@ export function createUiStateSlice(s: UiStateDeps) {
     try {
       raw = await loadUiState();
     } catch (e) {
+      // load_ui_state 的失败已由 logged 记录，这里只留控制台一份
       console.warn("读取界面状态失败，使用默认界面：", e);
       return;
     }
@@ -143,13 +156,13 @@ export function createUiStateSlice(s: UiStateDeps) {
       st = JSON.parse(raw) as Partial<UiState>;
     } catch (e) {
       // 内容损坏时不应让程序起不来，也不该静默：明确告知并按默认界面继续
-      console.warn("界面状态内容无法解析，已忽略：", e);
+      reportUiWarning("界面状态内容无法解析，已忽略：", e);
       Message.warning(t("ui.stateUnreadable"));
       return;
     }
     // 版本不匹配时丢弃：旧结构硬套会得到难以解释的界面
     if (st.version !== UI_STATE_VERSION) {
-      console.warn(`界面状态版本为 ${String(st.version)}，当前为 ${UI_STATE_VERSION}，已忽略`);
+      reportUiWarning(`界面状态版本为 ${String(st.version)}，当前为 ${UI_STATE_VERSION}，已忽略`);
       return;
     }
 
@@ -171,6 +184,10 @@ export function createUiStateSlice(s: UiStateDeps) {
     // 语言先恢复：后面那些提示文案要用它来出
     if (isLocale(st.locale)) {
       setLocale(st.locale);
+    }
+    // 日志等级只认约定里的四档：认不出的取值照原样记下会让后端收到它不认识的等级
+    if (isLogLevel(st.logLevel)) {
+      s.logLevel.value = st.logLevel;
     }
     // 恢复列宽。只接受正数：0 或负数会让列不可见，损坏的值不该让界面变形
     if (st.columnWidths && typeof st.columnWidths === "object") {
@@ -226,14 +243,19 @@ export function createUiStateSlice(s: UiStateDeps) {
   watch(s.searchText, persistUiState);
   // 语言也是要记住的界面形态
   watch(locale, persistUiState);
+  // 日志等级由「日志管理」窗口里的选择器改动，同样要记住
+  watch(s.logLevel, persistUiState);
   // 目录集合变化（添加/移除/勾选）同样要记住
   watch(s.dirItems, persistUiState, { deep: false });
   watch(s.enabledDirs, persistUiState, { deep: false });
 
-  onMounted(() => {
+  onMounted(async () => {
     // 恢复上次的界面状态与已添加目录。放在最后：先把界面建起来，
     // 恢复只改状态，不必等它完成就能显示
-    void restoreUiState();
+    await restoreUiState();
+    // 恢复之后再推日志等级：等级要用恢复出来的值，日期要用用户当下的本地日期。
+    // 没保存过状态时也要推，否则后端只能用它的默认值记日志
+    await s.syncRunLogLevel();
   });
 
   onBeforeUnmount(() => {

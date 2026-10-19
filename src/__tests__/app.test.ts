@@ -127,6 +127,10 @@ function mountApp() {
   });
 }
 
+/** 运行日志目录：界面显示的路径必须来自后端 run_log_dir，而不是前端自己拼的
+ *  （identifier 改过一次，拼出来的位置会指向不存在的地方）。 */
+const LOG_DIR = "C:\\Users\\tester\\AppData\\Roaming\\io.github.heiheids.schematic-manager\\logs";
+
 /** 一个可用的场景数据，字段与后端 SceneData 对齐 */
 const scene: SceneData = {
   batches: [],
@@ -199,8 +203,11 @@ function stubInvoke(overrides: Record<string, unknown> = {}) {
       case "setup_add_versions":
         return { outcomes: [] };
       case "list_backups":
-      case "read_operation_log":
+      case "read_run_log":
         return [];
+      case "run_log_dir":
+        // 契约是 string | null。默认给一个目录，说明文案里才会显示日志位置
+        return LOG_DIR;
       case "rename_schematic":
         // 契约是 RenameOutcome。默认「名字没变」，因此路径与文件名都取空，
         // 需要断言改名的用例自己给出具体返回值。
@@ -219,6 +226,11 @@ function stubInvoke(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   mockInvoke.mockReset();
+  // invoke 的契约是**总返回 Promise**：替身若在未设实现时返回 undefined，
+  // 调用链上的 `.catch`（api.ts 的命令失败上报、界面诊断上报）会直接崩成
+  // TypeError，测出来的就不是被测代码的问题了。这里补上默认值，让替身与
+  // 真实 invoke 的形状一致。
+  mockInvoke.mockResolvedValue(undefined as never);
   mockOpen.mockReset();
   mockOpen.mockResolvedValue(null);
   // 主题用例会替换 getCurrentWindow 的返回值；不复位的话，
@@ -2699,6 +2711,36 @@ describe("界面状态记忆", () => {
     ).not.toContain("111");
     w.unmount();
   });
+
+  it("界面状态写入失败时只写一条带命令名的 error 运行日志", async () => {
+    // 写盘失败原来会记两条（命令一条、界面语境一条），现在收口成一条：
+    // 由 api.ts 的 logged 出口按命令名记，排查时能直接定位是哪条命令。
+    mockInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === "load_ui_state") return null;
+      if (cmd === "save_ui_state") throw new Error("磁盘只读");
+      return undefined;
+    }) as never);
+
+    const w = mountApp();
+    await flushPromises();
+
+    // 改一下界面状态，卸载时防抖中的写盘会立刻执行，必然撞上失败的替身
+    const splitter = w.find(".splitter").element as HTMLElement;
+    splitter.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 0 }),
+    );
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 800 }));
+    window.dispatchEvent(new PointerEvent("pointerup", { clientX: 800 }));
+    await flushPromises();
+    w.unmount();
+    await flushPromises();
+
+    const events = mockInvoke.mock.calls.filter((c) => c[0] === "log_ui_event");
+    expect(events.length, "同一次失败只应留一条日志").toBe(1);
+    const args = events[0][1] as { level: string; message: string };
+    expect(args.level, "命令失败属于错误").toBe("error");
+    expect(args.message, "说明里要带上失败的命令名").toContain("save_ui_state");
+  });
 });
 
 /** 方块栏里的方块渲染图。
@@ -3202,7 +3244,7 @@ describe("方块栏渲染图", () => {
   });
 });
 
-/** 日志管理窗口：从备份与日志的「操作日志」页签进入 */
+/** 日志管理窗口：从备份与日志的「运行日志」页签进入 */
 describe("日志管理窗口", () => {
   /** 在弹窗里按文字找按钮 */
   function bodyButton(label: string): HTMLElement | undefined {
@@ -3240,18 +3282,20 @@ describe("日志管理窗口", () => {
     return [...root.querySelectorAll(".log-list__row")].map((r) => r.textContent ?? "");
   }
 
-  /** 从「备份与日志」的「操作日志」页签打开日志管理窗口。
+  /** 从「备份与日志」的「运行日志」页签打开日志管理窗口。
    *
-   * read_operation_log 用**有状态**替身：清空之后必须真的读到空，
+   * read_run_log 用**有状态**替身：清空之后必须真的读到空，
    * 否则「清空 → 界面变空」这条链路验不出来（固定数组会让漏掉刷新也照样通过）。
+   *
+   * `lines` 可换成别的日志内容，用来覆盖等级标签一类的展示分支。
    */
-  async function openLogWindow(extra: Record<string, unknown> = {}) {
-    // 与后端实际写出的格式一致：纳秒时间戳 + 制表符 + 说明。
+  async function openLogWindow(extra: Record<string, unknown> = {}, lines?: string[]) {
+    // 与后端实际写出的格式一致：纳秒时间戳 + 制表符 + 大写等级 + 制表符 + 说明。
     // 这里曾经写成「2026-10-15 12:00:00\t…」——那是格式化后的时间，
     // 后端从不这么写，界面也就照不出真实的显示效果。
     const state = {
-      lines: [
-        "1792138651762518000\t替换 demo.litematic：石头（minecraft:stone） -> 泥土（minecraft:dirt），共 12 个",
+      lines: lines ?? [
+        "1792138651762518000\tINFO\t替换 demo.litematic：石头（minecraft:stone） -> 泥土（minecraft:dirt），共 12 个",
       ],
     };
     stubInvoke({
@@ -3260,23 +3304,23 @@ describe("日志管理窗口", () => {
     const w = mountApp();
     await flushPromises();
 
-    // 备份与日志抽屉 → 操作日志页签 → 日志管理
+    // 备份与日志抽屉 → 运行日志页签 → 日志管理
     const entry = w.findAll("button").find((b) => b.text().includes("备份与日志"));
     expect(entry, "工具栏应有「备份与日志」").toBeTruthy();
     await entry!.trigger("click");
     await flushPromises();
     const tab = [...document.querySelectorAll<HTMLElement>(".arco-tabs-tab")].find((t) =>
-      (t.textContent ?? "").includes("操作日志"),
+      (t.textContent ?? "").includes("运行日志"),
     );
-    expect(tab, "备份与日志里应有「操作日志」页签").toBeTruthy();
+    expect(tab, "备份与日志里应有「运行日志」页签").toBeTruthy();
     tab!.click();
     await flushPromises();
 
     // 叠一层带状态的日志命令替身
     const base = mockInvoke.getMockImplementation()!;
     mockInvoke.mockImplementation((async (cmd: string, args: never) => {
-      if (cmd === "read_operation_log") return [...state.lines];
-      if (cmd === "clear_operation_log") {
+      if (cmd === "read_run_log") return [...state.lines];
+      if (cmd === "clear_run_log") {
         state.lines = [];
         return undefined;
       }
@@ -3284,12 +3328,14 @@ describe("日志管理窗口", () => {
     }) as never);
 
     const btn = bodyButton("日志管理");
-    expect(btn, "「操作日志」页签里应有「日志管理」按钮").toBeTruthy();
+    expect(btn, "「运行日志」页签里应有「日志管理」按钮").toBeTruthy();
     // 进页签时抽屉已读过一次，记下来供「打开窗口又读一次」的断言比对
-    const readsBeforeOpen = calls("read_operation_log");
+    const readsBeforeOpen = calls("read_run_log");
+    // 打开窗口会顺带刷新一次归档日期，同样记下来供断言比对
+    const configuresBeforeOpen = calls("configure_run_log");
     btn!.click();
     await flushPromises();
-    return { w, state, readsBeforeOpen };
+    return { w, state, readsBeforeOpen, configuresBeforeOpen };
   }
 
   /** 二次确认弹层里的「清空」按钮。
@@ -3305,18 +3351,24 @@ describe("日志管理窗口", () => {
     return mockInvoke.mock.calls.filter((c) => c[0] === cmd).length;
   }
 
-  it("「日志」按钮打开日志管理窗口并逐条分开显示日志", async () => {
+  it("「日志管理」按钮打开日志管理窗口并逐条分开显示日志", async () => {
     const { w } = await openLogWindow();
     const modal = logModal();
     expect(modal, "应打开日志管理窗口").toBeTruthy();
 
-    // 每条的三个部分各自成元素：时间单独一列、动作成标签、细节另起一段。
+    // 用户要看得见日志在哪：窗口说明里显示的必须是后端给的目录
+    expect(modal!.textContent, "说明里应写明日志位置").toContain(LOG_DIR);
+
+    // 每条的四个部分各自成元素：时间单独一列、等级与动作各成标签、细节另起一段。
     // 断言不再比对整行原文——正因为「整行糊成一段」才要改版。
     const row = modal!.querySelector(".log-list__row")!;
     // 形状写死到时分秒：区域设置一变，toLocaleString 会给出
     // 10/16/2026, 8:17:31 AM 这类 12 小时制，年在前面的断言挡不住
     expect(row.querySelector(".log-list__time")!.textContent, "时间要格式化成日期").toMatch(
       /^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}$/,
+    );
+    expect(row.querySelector(".log-list__level")!.textContent?.trim(), "应显示等级标签").toBe(
+      "提示",
     );
     expect(row.querySelector(".log-list__action")!.textContent?.trim()).toBe("替换");
     expect(row.querySelector(".log-list__detail")!.textContent).toContain(
@@ -3331,21 +3383,106 @@ describe("日志管理窗口", () => {
     w.unmount();
   });
 
+  it("每条日志的等级标签按等级渲染", async () => {
+    const { w } = await openLogWindow({}, [
+      "1792138651762518000\tERROR\t替换失败：目标文件只读",
+      "1792138651762518001\tWARN\t转换跳过了 1 种方块",
+      "1792138651762518002\tINFO\t替换 demo.litematic",
+      "1792138651762518003\tDEBUG\t读取方块库版本 3465",
+    ]);
+    const rows = [...logModal()!.querySelectorAll(".log-list__row")];
+    const tags = rows.map((r) => r.querySelector(".log-list__level"));
+    expect(tags.map((t) => t?.textContent?.trim())).toEqual(["错误", "警告", "提示", "调试"]);
+    // 颜色走 Arco 标签的内置色板（深浅主题各自有一套）：错误红、调试灰
+    expect(tags[0]!.className, "错误应是红色标签").toContain("arco-tag-red");
+    expect(tags[3]!.className, "调试应是灰色标签").toContain("arco-tag-gray");
+    // 等级列是独立一列，不该混进动作里
+    expect(rows[0].querySelector(".log-list__action")!.textContent).toBe("替换失败：目标文件只读");
+    w.unmount();
+  });
+
+  it("切换日志等级会调用 configure_run_log，并带上等级与本地日期", async () => {
+    const { w } = await openLogWindow();
+    const before = calls("configure_run_log");
+    const select = logModal()!.querySelector(
+      ".arco-select-view, .arco-select",
+    ) as HTMLElement | null;
+    expect(select, "日志窗口应有等级选择器").toBeTruthy();
+    select!.click();
+    await flushPromises();
+    const opt = [...document.querySelectorAll<HTMLElement>(".arco-select-option")].find(
+      (o) => (o.textContent ?? "").trim() === "调试",
+    );
+    expect(opt, "等级选择器应有「调试」一档").toBeTruthy();
+    opt!.click();
+    await flushPromises();
+
+    expect(calls("configure_run_log"), "改等级后应再推一次给后端").toBe(before + 1);
+    const last = mockInvoke.mock.calls.filter((c) => c[0] === "configure_run_log").at(-1)!;
+    expect((last[1] as { level: string }).level, "应把选中的等级交给后端").toBe("debug");
+    expect((last[1] as { localDate: string }).localDate, "应带上本地日期").toMatch(
+      /^\d{4}-\d{2}-\d{2}$/,
+    );
+
+    // 等级还要被记住。界面状态的写盘是防抖的，卸载会把它立刻写出，
+    // 因此不必等 400ms 也能确定地读到这次改动。
+    w.unmount();
+    await flushPromises();
+    const saves = mockInvoke.mock.calls.filter((c) => c[0] === "save_ui_state");
+    const saved = JSON.parse((saves.at(-1)![1] as { json: string }).json) as {
+      logLevel?: string;
+    };
+    expect(saved.logLevel, "改过的等级应写进界面状态").toBe("debug");
+  });
+
+  it("恢复记忆里的日志等级，并在启动后把等级与本地日期推给后端", async () => {
+    const { w } = await openLogWindow({
+      load_ui_state: JSON.stringify({ version: 1, logLevel: "debug", dirs: [] }),
+    });
+    const shown = logModal()!.querySelector(".arco-select-view-value")?.textContent?.trim();
+    expect(shown, "选择器应显示记忆里的等级").toBe("调试");
+
+    // 恢复之后必须推一次：后端得知道该收哪些行、写进哪一天的文件
+    const pushed = mockInvoke.mock.calls.filter((c) => c[0] === "configure_run_log");
+    expect(pushed.length, "启动时应推一次日志设置").toBeGreaterThan(0);
+    const args = pushed.at(-1)![1] as { level: string; localDate: string };
+    expect(args.level, "推的应是恢复出来的等级").toBe("debug");
+    expect(args.localDate, "应带上当前的本地日期").toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    w.unmount();
+  });
+
+  it("后端给不出日志目录时不显示位置，不猜一个路径", async () => {
+    const { w } = await openLogWindow({ run_log_dir: null });
+    // 路径由后端算；拿不到就整条不显示——显示一个猜的位置比不显示更糟
+    expect(logModal()!.textContent, "不应显示日志位置").not.toContain("日志位置");
+    w.unmount();
+  });
+
   it("打开日志窗口时随即读取一次日志", async () => {
-    // 进入「操作日志」页签时抽屉已经读过一次，因此这里比对的是
+    // 进入「运行日志」页签时抽屉已经读过一次，因此这里比对的是
     // 「打开窗口又读了一次」，而不是总次数恰好为一
     const { w, readsBeforeOpen } = await openLogWindow();
     expect(logModal(), "此时日志窗口应已打开").toBeTruthy();
-    expect(calls("read_operation_log"), "打开窗口应再读一次").toBe(readsBeforeOpen + 1);
+    expect(calls("read_run_log"), "打开窗口应再读一次").toBe(readsBeforeOpen + 1);
+    w.unmount();
+  });
+
+  it("打开日志管理窗口会把等级与当前日期再推一次", async () => {
+    // 跨天挂机时，按大小滚动出来的归档要用「今天」的日期命名，
+    // 因此每次打开窗口都要顺手刷新一次日期（见 store/backups.ts 的 openLogs）
+    const { w, configuresBeforeOpen } = await openLogWindow();
+    expect(calls("configure_run_log"), "打开窗口应再推一次日志设置").toBe(
+      configuresBeforeOpen + 1,
+    );
     w.unmount();
   });
 
   it("「刷新」再读一次日志", async () => {
     const { w } = await openLogWindow();
-    const before = calls("read_operation_log");
+    const before = calls("read_run_log");
     logButton("刷新")!.click();
     await flushPromises();
-    expect(calls("read_operation_log"), "刷新应再读一次").toBe(before + 1);
+    expect(calls("read_run_log"), "刷新应再读一次").toBe(before + 1);
     w.unmount();
   });
 
@@ -3366,7 +3503,7 @@ describe("日志管理窗口", () => {
     const { w } = await openLogWindow();
     logButton("打开日志所在目录")!.click();
     await flushPromises();
-    expect(calls("open_operation_log_dir"), "应调用 open_operation_log_dir").toBe(1);
+    expect(calls("open_run_log_dir"), "应调用 open_run_log_dir").toBe(1);
     w.unmount();
   });
 
@@ -3376,7 +3513,7 @@ describe("日志管理窗口", () => {
     // 只点触发器还不该清空：清空不可撤销，必须先确认
     logButton("清空日志")!.click();
     await flushPromises();
-    expect(calls("clear_operation_log"), "确认之前不应清空").toBe(0);
+    expect(calls("clear_run_log"), "确认之前不应清空").toBe(0);
     expect(state.lines.length, "确认之前日志内容不应变").toBe(1);
 
     const ok = confirmClearButton();
@@ -3384,7 +3521,7 @@ describe("日志管理窗口", () => {
     ok!.click();
     await flushPromises();
 
-    expect(calls("clear_operation_log"), "确认后应调用 clear_operation_log").toBe(1);
+    expect(calls("clear_run_log"), "确认后应调用 clear_run_log").toBe(1);
     // 后端清了还不够：界面必须重新读取，否则会继续显示已经删掉的那几行
     expect(state.lines.length, "确认后后端内容应被清空").toBe(0);
     expect(logRows(), "清空后界面不应再显示旧日志").toEqual([]);
@@ -3395,7 +3532,7 @@ describe("日志管理窗口", () => {
     const { w } = await openLogWindow();
     const base = mockInvoke.getMockImplementation()!;
     mockInvoke.mockImplementation((async (cmd: string, args: never) => {
-      if (cmd === "clear_operation_log") throw new Error("日志文件被占用");
+      if (cmd === "clear_run_log") throw new Error("日志文件被占用");
       return base(cmd, args);
     }) as never);
 
@@ -3415,7 +3552,7 @@ describe("日志管理窗口", () => {
     const { w } = await openLogWindow();
     const base = mockInvoke.getMockImplementation()!;
     mockInvoke.mockImplementation((async (cmd: string, args: never) => {
-      if (cmd === "open_operation_log_dir") throw new Error("资源管理器不可用");
+      if (cmd === "open_run_log_dir") throw new Error("资源管理器不可用");
       return base(cmd, args);
     }) as never);
 
