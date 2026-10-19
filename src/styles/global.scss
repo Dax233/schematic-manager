@@ -1487,30 +1487,35 @@ body[arco-theme='dark'] .repl-block--empty .arco-input-wrapper {
   font-size: 13px;
 }
 
-// 弹出层的高度：上下都要与页面边缘留出距离，不要铺满整屏。
+// 弹出层的高度与位置：上下都与页面边缘留出距离，且垂直居中。
 //
-// Arco 的弹窗默认靠 `text-align: center` + `inline-block` + `vertical-align: middle`
-// 做水平与垂直居中，本身不限高：内容一多就把遮罩层撑成可滚动的，标题与按钮
-// 随之滚出视野。这里给弹窗封顶并改成纵向 flex，body 于是在弹窗内部伸缩。
+// Arco 原本靠 `text-align: center` + `inline-block` + `vertical-align: middle`
+// 居中，本身不限高：内容一多就把遮罩层撑成可滚动的，标题与按钮随之滚出视野。
+// 为了封顶并让 body 在弹窗内部伸缩，这里把弹窗改成了纵向 flex——而 display
+// 一改，上面那套 vertical-align 居中就失效了（实测弹窗贴到屏幕顶部）。
 //
-// 改了 display 之后 Arco 那套 vertical-align 居中就失效了（实测弹窗贴到屏幕
-// 顶部，上方没有留白），因此**必须自己给上下外边距**，不能只靠 max-height。
-// `calc(100vh - 160px)` 的上限加上 24px 上下边距，最多占满视口也不溢出，
-// 遮罩层因此不会变成可滚动的——否则滚轮一动，整个弹窗会跟着上移。
-// 宽度仍由各弹窗的 width 属性以内联样式给出，配合 margin 的 auto 保持水平居中。
+// 因此居中改由遮罩层承担：它变成 flex 容器后，`align-items: center` 做垂直
+// 居中、`justify-content: center` 做水平居中，弹窗自己的 display 就不必再迁就
+// Arco 的老写法。`align-items` 必须显式写：flex 默认是 stretch，会把弹窗拉成
+// 整屏高。
+//
+// `max-height` 上限加上 24px 外边距，最多占满视口也不溢出，遮罩层因此不会
+// 变成可滚动的——否则滚轮一动，整个弹窗会跟着上移。
+.arco-modal-wrapper {
+  // 遮罩层是 Arco 的滚动容器（overflow: auto）。弹窗封顶后它永远不需要滚动，
+  // 但只要它还能滚，滚轮落在弹窗的非滚动区域（标题、按钮行）时就会带着整个
+  // 弹窗上移（实测 scrollTop=300 时弹窗位移 -300）。直接关掉它的滚动。
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .arco-modal {
   display: flex;
   flex-direction: column;
   max-height: calc(100vh - 160px);
-  margin: 24px auto;
-}
-
-// 遮罩层是 Arco 的滚动容器（overflow: auto）。弹窗封顶后它永远不需要滚动，
-// 但只要它还能滚，滚轮落在弹窗的非滚动区域（标题、按钮行）时就会**带着整个
-// 弹窗上移**（实测 scrollTop=300 时弹窗位移 -300）。直接关掉它的滚动：
-// 内容超出的部分由弹窗内部的滚动条负责，这里不该再出现第二条滚动路径。
-.arco-modal-wrapper {
-  overflow: hidden;
+  margin: 24px;
 }
 
 // Arco 表格的滚动链。
