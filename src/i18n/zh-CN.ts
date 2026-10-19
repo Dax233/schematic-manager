@@ -122,6 +122,8 @@ export default {
     notReady: "3D 视图尚未就绪，无法导出",
     exportFailed: "导出图像失败",
     empty: "尚无预览",
+    fps: "FPS {value}",
+    fpsIdle: "FPS 0 · 静止不重绘",
   },
   logList: {
     timeUnknown: "时间未知",

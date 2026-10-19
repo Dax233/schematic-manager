@@ -119,6 +119,8 @@ const enUS: typeof zhCN = {
     notReady: "The 3D view is not ready yet; cannot export",
     exportFailed: "Failed to export the image",
     empty: "No preview yet",
+    fps: "FPS {value}",
+    fpsIdle: "FPS 0 · idle, not redrawing",
   },
   logList: {
     timeUnknown: "Time unknown",
