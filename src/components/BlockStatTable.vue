@@ -68,7 +68,7 @@ const {
       <div class="hint-dim" style="margin-bottom: 6px">{{ t("stats.hint") }}</div>
       <a-table
         :key="blockTableKey"
-        class="block-table"
+        class="block-table scroll-table"
         :columns="blockTableColumns"
         :data="blockRows"
         :pagination="{ pageSize: BLOCK_PAGE_SIZE, current: blockPage }"

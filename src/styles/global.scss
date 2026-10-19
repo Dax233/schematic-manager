@@ -901,17 +901,12 @@ $preview-row-h: $preview-stage-h + 16px;
     height: auto;
   }
 
-  // 表格本体：占满剩余高度，滚动交给 Arco 的滚动容器
-  .block-table,
-  .block-table > .arco-table-container {
+  // 表格本体：占满剩余高度，滚动交给 Arco 的滚动容器。
+  // 它下面还有 .arco-spin 等层级，见顶层的「Arco 表格的滚动链」。
+  .block-table {
     display: flex;
     flex: 1 1 auto;
     flex-direction: column;
-    min-height: 0;
-  }
-
-  .block-table .arco-table-container > .arco-scrollbar {
-    flex: 1 1 auto;
     min-height: 0;
   }
 }
@@ -1511,6 +1506,38 @@ body[arco-theme='dark'] .repl-block--empty .arco-input-wrapper {
 // 内容超出的部分由弹窗内部的滚动条负责，这里不该再出现第二条滚动路径。
 .arco-modal-wrapper {
   overflow: hidden;
+}
+
+// Arco 表格的滚动链。
+//
+// 用 Table 自带的纵向滚动（`:scroll="{ y: '100%' }"` + `:scrollbar="true"`）把长
+// 列表做成「一整个可滚列表」时，高度必须沿 Table 内部这条**真实**路径用 flex
+// 传下去，否则 `max-height: 100%` 找不到确定的父高度，`.arco-table-body` 就会
+// 按内容撑开、连滚动条都不出现：
+//
+//   .arco-table → .arco-spin → .arco-table-container → .arco-scrollbar
+//     → .arco-scrollbar-container.arco-table-content → .arco-table-body
+//
+// 层级是实测出来的（`.arco-table > .arco-table-container` 这种写法并不存在，
+// Table 自己套了一层 .arco-spin）。缺任何一层都会在那一层按内容撑开；
+// `.arco-scrollbar-container` 还要显式给 min-height: 0，否则它的默认
+// min-height: auto 会挡住收缩，同样撑到内容高度。
+//
+// 同理，不要在外面再套一层 a-scrollbar：那会让高度先经过一个不参与 flex 的
+// 容器，滚动条滑块拖动时会滚不动。
+.scroll-table,
+.scroll-table > .arco-spin,
+.scroll-table > .arco-spin > .arco-table-container,
+.scroll-table > .arco-spin > .arco-table-container > .arco-scrollbar {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.scroll-table .arco-scrollbar-container {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 // body 跟着弹窗伸缩；内容区要不要用 Arco 的无轨道滚动条由各弹窗决定，

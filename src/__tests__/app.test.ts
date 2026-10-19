@@ -3503,6 +3503,48 @@ describe("版本库", () => {
     w.unmount();
   });
 
+  it("表头全选框能一次勾上清单里的所有版本", async () => {
+    // 清单里没有、要联网下载的版本默认不勾（那是几十 MB 级任务），
+    // 但用户想整批补齐时不该只能一行行点，表头那个全选框要能一次勾满。
+    //
+    // 弹窗被 teleport 到 body 上，用 wrapper 的 find 找不到，必须查 document。
+    stubInvoke({
+      base_db_status: { versions: [], entityAvailable: false, supported },
+      default_minecraft_dir: "C:/mc",
+      scan_minecraft: { versions: [], warnings: [] },
+    });
+    const w = mountApp();
+    await flushPromises();
+
+    const startCount = () => {
+      const btn = [...document.querySelectorAll("button")].find((b) =>
+        (b.textContent ?? "").includes("准备勾选的版本"),
+      );
+      return (btn?.textContent ?? "").match(/（(\d+)）/)?.[1];
+    };
+    expect(startCount(), "默认不勾要下载的版本").toBe("0");
+
+    const head = document.querySelector<HTMLInputElement>(
+      ".setup-table thead input[type=checkbox]",
+    );
+    expect(head, "表头应有全选框").not.toBeNull();
+    expect(
+      document.querySelectorAll(".setup-table tbody input[type=checkbox]").length,
+      "每行一个勾选框",
+    ).toBe(2);
+
+    head!.click();
+    await flushPromises();
+    expect(startCount(), "全选后两个版本都进勾选").toBe("2");
+
+    document
+      .querySelector<HTMLInputElement>(".setup-table thead input[type=checkbox]")!
+      .click();
+    await flushPromises();
+    expect(startCount(), "取消全选后清空").toBe("0");
+    w.unmount();
+  });
+
   it("扫描到本机版本就自动导入并标记已就绪，联网下载的才要用户勾选", async () => {
     // 有状态替身：导入之前 1.20.1 只是「本机已装」，导入之后基础库里就有它了
     let built = false;

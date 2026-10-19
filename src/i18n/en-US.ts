@@ -52,8 +52,6 @@ const enUS: typeof zhCN = {
       "The official endpoint downloads from Mojang and is often unreachable from mainland China; switch to the BMCL mirror when it fails. Versions found locally are imported directly and cost no download traffic; the checkboxes are for versions missing from the manifest that need downloading.",
     scanWarnings: "{count} entries could not be read during the scan and were skipped",
     loadingStatus: "Reading version library state…",
-    checkAll: "Select all",
-    uncheckAll: "Clear all",
     version: "Version",
     dataVersion: "Data version",
     state: "State",

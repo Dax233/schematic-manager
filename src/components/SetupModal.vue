@@ -30,9 +30,7 @@ const {
   outcomes,
   rows,
   setupColumns,
-  toggleChecked,
-  allChecked,
-  setAllChecked,
+  onVersionSelectionChange,
   rescan,
   pickMcDir,
   selectSource,
@@ -130,13 +128,6 @@ function warningText(code: string): string {
       </a-radio-group>
       <a-button
         size="small"
-        :disabled="running || rows.length === 0"
-        @click="setAllChecked(!allChecked)"
-      >
-        {{ allChecked ? t("setup.uncheckAll") : t("setup.checkAll") }}
-      </a-button>
-      <a-button
-        size="small"
         type="primary"
         :loading="running"
         :disabled="checked.size === 0"
@@ -148,40 +139,38 @@ function warningText(code: string): string {
 
     <div class="hint-dim" style="margin-bottom: 10px">{{ t("setup.sourceHint") }}</div>
 
-    <!-- 内容区自己滚：弹窗高度不铺满整屏，版本多的时候在这里滚 -->
-    <a-scrollbar
-      type="embed"
-      class="scroll-fill__inner"
-      outer-class="scroll-fill"
+    <!-- 版本表格自己滚：用 Arco Table 自带的滚动（:scroll + 无轨道滚动条），
+         与「方块」页签的表格同一套做法。不套外层滚动条是有原因的：
+         外层 scrollbar 的核心容器靠 height: 100% 拿高度，在「高度来自 flex」的
+         链路上解析不成确定值，容器会被内容撑开、拖动滑块也滚不动。 -->
+    <a-alert
+      v-if="scanWarnings.length > 0"
+      type="warning"
+      style="margin-bottom: 10px; flex: 0 0 auto"
     >
-      <a-alert v-if="scanWarnings.length > 0" type="warning" style="margin-bottom: 10px">
-        <template #title>
-          {{ t("setup.scanWarnings", { count: scanWarnings.length }) }}
-        </template>
-        <div v-for="w in scanWarnings" :key="w" class="dup-path">{{ w }}</div>
-      </a-alert>
+      <template #title>
+        {{ t("setup.scanWarnings", { count: scanWarnings.length }) }}
+      </template>
+      <div v-for="w in scanWarnings" :key="w" class="dup-path">{{ w }}</div>
+    </a-alert>
 
-      <a-alert v-if="rows.length === 0" type="normal">
-        {{ t("setup.loadingStatus") }}
-      </a-alert>
-      <a-table
-        v-else
-        class="setup-table"
-        :columns="setupColumns"
-        :data="rows"
-        :pagination="false"
-        size="small"
-        row-key="name"
-      >
-        <template #check="{ record }">
-          <!-- 已就绪的行也能勾：贴图库缺了或包损坏时要靠重做来恢复，
-               构建本身是幂等的（同名文件覆盖、同数据版本替换） -->
-          <a-checkbox
-            :model-value="checked.has(record.name)"
-            :disabled="running"
-            @change="(v: any) => toggleChecked(record.name, Boolean(v))"
-          />
-        </template>
+    <a-alert v-if="rows.length === 0" type="normal">
+      {{ t("setup.loadingStatus") }}
+    </a-alert>
+    <a-table
+      v-else
+      class="setup-table scroll-table"
+      :columns="setupColumns"
+      :data="rows"
+      :pagination="false"
+      :scroll="{ y: '100%' }"
+      :scrollbar="true"
+      :row-selection="{ type: 'checkbox', showCheckedAll: true, width: 40 }"
+      :selected-keys="Array.from(checked)"
+      size="small"
+      row-key="name"
+      @selection-change="onVersionSelectionChange"
+    >
         <template #state="{ record }">
           <a-tag v-if="record.state === 'ready'" size="small" color="green">
             {{ t("setup.ready") }}
@@ -206,6 +195,5 @@ function warningText(code: string): string {
           </template>
         </template>
       </a-table>
-    </a-scrollbar>
   </a-modal>
 </template>

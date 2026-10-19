@@ -117,9 +117,10 @@ export function createSetupSlice(s: SetupDeps) {
     return list.sort((a, b) => stateRank[a.state] - stateRank[b.state]);
   });
 
-  /** 列定义随界面语言变化，用 computed 包住，切语言后表头跟着变 */
+  /** 列定义随界面语言变化，用 computed 包住，切语言后表头跟着变。
+   *
+   * 勾选列不在这里：它由 Table 的 row-selection 生成（表头带全选框）。 */
   const setupColumns = computed(() => [
-    { title: "", slotName: "check", width: 44 },
     { title: t("setup.version"), dataIndex: "name", width: 110 },
     { title: t("setup.dataVersion"), dataIndex: "dataVersion", width: 90 },
     { title: t("setup.state"), slotName: "state", width: 110 },
@@ -138,24 +139,13 @@ export function createSetupSlice(s: SetupDeps) {
     );
   }
 
-  function toggleChecked(name: string, on: boolean) {
-    const next = new Set(checked.value);
-    if (on) next.add(name);
-    else next.delete(name);
-    checked.value = next;
-  }
-
-  /** 是否已经全选（列表为空时不算全选，否则按钮一开始就写着「全不选」） */
-  const allChecked = computed(
-    () => rows.value.length > 0 && rows.value.every((r) => checked.value.has(r.name)),
-  );
-
-  /** 全选 / 全不选。
+  /** 勾选变化：Arco 传回完整 keys 数组（含表头全选）。
    *
    * 全选会把需要联网下载的版本也勾上——那是几十 MB 到 GB 级的任务，因此只在
-   * 用户明确点这个按钮时这么做（默认勾选仍只含本机已装的版本）。 */
-  function setAllChecked(on: boolean) {
-    checked.value = on ? new Set(rows.value.map((r) => r.name)) : new Set();
+   * 用户明确点全选框时这么做（默认勾选仍只含本机已装的版本，见 resetChecked）。
+   */
+  function onVersionSelectionChange(keys: (string | number)[]) {
+    checked.value = new Set(keys.map(String));
   }
 
   async function refreshStatus() {
@@ -420,9 +410,7 @@ export function createSetupSlice(s: SetupDeps) {
     outcomes,
     rows,
     setupColumns,
-    toggleChecked,
-    allChecked,
-    setAllChecked,
+    onVersionSelectionChange,
     rescan,
     pickMcDir,
     selectSource,

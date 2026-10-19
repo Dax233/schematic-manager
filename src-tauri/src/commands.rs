@@ -1125,6 +1125,31 @@ pub fn mc_version_name(data_version: i32) -> String {
 mod tests {
     use super::*;
 
+    /// 补语言表时只请求 jar 里没有的那些。
+    ///
+    /// 资源索引里没有 `minecraft/lang/en_us.json`（官方把它留在客户端 jar 里），
+    /// 若把 `en_us` 也算作「本地缺、要去下」，库完全正常时也会报「未取到中文
+    /// 语言表」，用户会以为中文名没生效。
+    #[test]
+    fn only_langs_absent_from_the_jar_are_downloaded() {
+        // 本机 .minecraft/assets 为空（从没启动过游戏）——这是最常见的场景
+        assert_eq!(langs_to_download(&[]), vec!["zh_cn"]);
+
+        // 本机已经有中文表（用户启动过游戏）时什么都不用下
+        let local = vec![(
+            "assets/minecraft/lang/zh_cn.json".to_string(),
+            b"{}".to_vec(),
+        )];
+        assert!(langs_to_download(&local).is_empty());
+
+        // 只有英文表（客户端 jar 里那份）不算缺中文
+        let en_only = vec![(
+            "assets/minecraft/lang/en_us.json".to_string(),
+            b"{}".to_vec(),
+        )];
+        assert_eq!(langs_to_download(&en_only), vec!["zh_cn"]);
+    }
+
     /// 每个用例用独立的临时目录，避免并行执行时互相覆盖
     fn temp_state_dir(tag: &str) -> PathBuf {
         let mut d = std::env::temp_dir();
@@ -2078,12 +2103,38 @@ fn setup_one(
     Ok(warning)
 }
 
+/// 客户端 jar 里自带的语言表键。
+///
+/// 这些既不需要、也无法从资源索引下载：官方把 `en_us` 留在 jar 里，
+/// 索引里根本没有 `minecraft/lang/en_us.json` 这一条。
+const LANGS_IN_JAR: [&str; 1] = ["en_us"];
+
+/// 判断某语言的本地文件是否已经齐了。
+fn has_lang(langs: &[(String, Vec<u8>)], lang: &str) -> bool {
+    let want = format!("assets/minecraft/lang/{lang}.json");
+    langs.iter().any(|(p, _)| p == &want)
+}
+
+/// 还需要联网补哪些语言表：**只算 jar 里没有的那些**。
+///
+/// 把 `en_us` 也算进来会让库完全正常时报出误报——它在 jar 里，资源索引里
+/// 没有对应条目，永远补不上。
+fn langs_to_download(langs: &[(String, Vec<u8>)]) -> Vec<&'static str> {
+    crate::base_db::LANG_KEYS
+        .iter()
+        .copied()
+        .filter(|lang| !LANGS_IN_JAR.contains(lang))
+        .filter(|lang| !has_lang(langs, lang))
+        .collect()
+}
+
 /// 把本机资源库里没有的语言表补上；返回需要提醒用户的提示码。
 ///
-/// 客户端 jar 只有 `en_us.json`，中文只在资源库里（或按资源索引下载）。
-/// 本机 `.minecraft/assets` 是空的（例如从没启动过游戏）时就得上网取；
-/// 取不到不算失败——库照样建得出来，只是名字会回落成英文，因此这里
-/// 返回提示码而不是错误，让界面如实说明原因，而不是让用户以为界面坏了。
+/// 客户端 jar 自带 `en_us.json`，**其余语言**（中文即在其中）只能从资源库取：
+/// 本机 `.minecraft/assets` 为空时（例如从没启动过游戏）就得上网下载。
+///
+/// 取不到不算失败——库照样建得出来，只是名字回落成英文，因此返回提示码而不是
+/// 错误，让界面如实说明原因，而不是让用户以为界面坏了。
 fn fill_missing_langs(
     v: &SetupVersionDto,
     manifest: Option<&str>,
@@ -2091,15 +2142,7 @@ fn fill_missing_langs(
     source: SetupSource,
     langs: &mut Vec<(String, Vec<u8>)>,
 ) -> Option<String> {
-    let missing: Vec<&str> = crate::base_db::LANG_KEYS
-        .iter()
-        .copied()
-        .filter(|lang| {
-            !langs
-                .iter()
-                .any(|(p, _)| p == &format!("assets/minecraft/lang/{lang}.json"))
-        })
-        .collect();
+    let missing = langs_to_download(langs);
     if missing.is_empty() {
         return None;
     }
@@ -2118,11 +2161,7 @@ fn fill_missing_langs(
             langs.extend(extra);
             // 索引里没有请求的语言时也值得说一声：那说明这个版本确实不带它，
             // 用户以后不必再重试
-            if missing.iter().all(|lang| {
-                langs
-                    .iter()
-                    .any(|(p, _)| p == &format!("assets/minecraft/lang/{lang}.json"))
-            }) {
+            if missing.iter().all(|lang| has_lang(langs, lang)) {
                 None
             } else {
                 Some("lang-unavailable".to_string())

@@ -54,8 +54,6 @@ export default {
       "「官方接口」从 Mojang 下载，国内网络常不通；连不上时换「BMCL 镜像」。本机扫到的版本直接导入、不消耗下载流量；勾选框用于清单里没有、要联网下载的版本。",
     scanWarnings: "扫描时有 {count} 项读不出版本信息，已跳过",
     loadingStatus: "正在读取版本库状态…",
-    checkAll: "全选",
-    uncheckAll: "全不选",
     version: "版本",
     dataVersion: "数据版本",
     state: "状态",
