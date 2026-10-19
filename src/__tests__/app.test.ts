@@ -4311,3 +4311,188 @@ describe("方块显示名称", () => {
     w.unmount();
   });
 });
+describe("投影列表排序", () => {
+  /** 三个文件：文件名、修改时间、作者的顺序各不相同，
+   *  这样每个字段排出来的结果都能和别的字段区分开。 */
+  const make = (
+    fileName: string,
+    name: string,
+    author: string,
+    timeModified: number,
+  ): SchematicSummary => ({
+    ...summary,
+    path: `/p/${fileName}`,
+    fileName,
+    name,
+    author,
+    timeModified,
+  });
+
+  const c = make("c.litematic", "阿尔法", "甲", 300);
+  const a = make("a.litematic", "查理", "丙", 200);
+  const b = make("b.litematic", "布拉沃", "", 100);
+
+  /** 挂载并加载这三个文件 */
+  async function setup() {
+    stubInvoke({ scan_litematics: { items: [c, a, b], skippedDirs: 0, skippedPaths: [] } });
+    const w = mountApp();
+    await flushPromises();
+    mockOpen.mockResolvedValue(["/p"]);
+    const btn = w.findAll("button").find((x) => x.text().includes("添加目录"));
+    await btn!.trigger("click");
+    await flushPromises();
+    return w;
+  }
+
+  /** 表格里当前的名称列顺序（只取数据行） */
+  function order(w: ReturnType<typeof mountApp>): string[] {
+    // 第一列是行选择复选框列（文本为空），文件名不在第一列；
+    // 直接按整行里的 .litematic 片段取，稳定且与列顺序无关
+    return w
+      .findAll("tr")
+      .map((r) => /[\w.-]+\.litematic/.exec(r.text() ?? "")?.[0] ?? "")
+      .filter(Boolean);
+  }
+
+  /** 点开排序下拉并选一项。下拉内容被 teleport 到 body，只能从 document 找。 */
+  async function pick(w: ReturnType<typeof mountApp>, label: string) {
+    const trigger = w.find(".sidebar__checks .arco-select");
+    expect(trigger.exists(), "底部应有排序下拉").toBe(true);
+    await trigger.trigger("click");
+    await flushPromises();
+    const opt = Array.from(document.querySelectorAll(".arco-select-option")).find((el) =>
+      (el.textContent ?? "").includes(label),
+    ) as HTMLElement | undefined;
+    expect(opt, `下拉里应有「${label}」`).toBeTruthy();
+    opt!.click();
+    await flushPromises();
+  }
+
+it("默认按路径排序，未选字段时就是文件系统的扫描顺序", async () => {
+    const w = await setup();
+    expect(order(w), "未排序时按路径").toEqual([
+      "a.litematic",
+      "b.litematic",
+      "c.litematic",
+    ]);
+    w.unmount();
+  });
+
+  it("按文件名升序与降序", async () => {
+    const w = await setup();
+    await pick(w, "按文件名");
+    expect(order(w), "按文件名升序").toEqual([
+      "a.litematic",
+      "b.litematic",
+      "c.litematic",
+    ]);
+
+    // 方向按钮：再点一次变降序
+    const dirBtn = w.findAll(".sidebar__checks button").find((x) => x.text().includes("↑"));
+    expect(dirBtn, "选了字段后应出现方向按钮").toBeTruthy();
+    await dirBtn!.trigger("click");
+    await flushPromises();
+    expect(order(w), "按文件名降序").toEqual([
+      "c.litematic",
+      "b.litematic",
+      "a.litematic",
+    ]);
+    w.unmount();
+  });
+
+  it("按修改时间排，数字比大小而不是比字符串", async () => {
+    const w = await setup();
+    await pick(w, "按修改时间");
+    // 时间：a=200 b=100 c=300，升序应为 b,a,c；
+    // 若按字符串比较会得到 "100"<"200"<"300" 同样成立，故再用降序交叉验证
+    expect(order(w), "按修改时间升序").toEqual([
+      "b.litematic",
+      "a.litematic",
+      "c.litematic",
+    ]);
+    w.unmount();
+  });
+
+  it("按作者排，空作者固定排在末尾（升降序都不翻到最前）", async () => {
+    const w = await setup();
+    await pick(w, "按作者");
+    // 作者：c=甲 a=丙 b=空。中文按拼音排，丙(bǐng) 在 甲(jiǎ) 之前，
+    // 因此升序是 a,c；空作者的 b 固定排末尾
+    expect(order(w), "按作者升序，空作者在末尾").toEqual([
+      "a.litematic",
+      "c.litematic",
+      "b.litematic",
+    ]);
+
+    const dirBtn = w.findAll(".sidebar__checks button").find((x) => x.text().includes("↑"));
+    await dirBtn!.trigger("click");
+    await flushPromises();
+    // 降序时空的仍在末尾——这条是空值处理的关键：若跟着翻转，
+    // 降序会把空作者顶到最前，盖住真正有作者的那两行
+    // 降序把甲(c) 提到丙(a) 之前，空作者的 b 仍在末尾
+    expect(order(w), "降序时空作者仍在末尾").toEqual([
+      "c.litematic",
+      "a.litematic",
+      "b.litematic",
+    ]);
+    w.unmount();
+  });
+
+  it("选「按路径」可以取消排序，回到默认顺序", async () => {
+    const w = await setup();
+    await pick(w, "按文件名");
+    const dirBtn = w.findAll(".sidebar__checks button").find((x) => x.text().includes("↑"));
+    await dirBtn!.trigger("click");
+    await flushPromises();
+    expect(order(w)[0], "先确认已变成降序").toBe("c.litematic");
+
+    await pick(w, "按路径");
+    expect(order(w), "取消排序后回到路径序").toEqual([
+      "a.litematic",
+      "b.litematic",
+      "c.litematic",
+    ]);
+    w.unmount();
+  });
+
+  it("排序设置会被记住，重开应用后仍是同一顺序", async () => {
+    // 同时覆盖「收集」与「恢复」两条路径：只测其一的话，写盘字段名与读盘
+    // 字段名对不上也不会被发现（两边各自看都「通过」）
+    const w = await setup();
+    await pick(w, "按文件名");
+    const dirBtn = w.findAll(".sidebar__checks button").find((x) => x.text().includes("↑"));
+    await dirBtn!.trigger("click");
+    await flushPromises();
+    expect(order(w)[0], "先确认已按文件名降序").toBe("c.litematic");
+
+    // 卸载会把防抖中的改动立刻写出
+    w.unmount();
+    await flushPromises();
+
+    const saved = mockInvoke.mock.calls
+      .filter((c) => c[0] === "save_ui_state")
+      .map((c) => JSON.parse(String((c[1] as { json: string }).json)) as Record<string, unknown>);
+    const last = saved[saved.length - 1];
+    expect(last, "应写出过界面状态").toBeTruthy();
+    expect(last.sortKey, "写出的状态里应带排序字段").toBe("fileName");
+    expect(last.sortOrder, "写出的状态里应带排序方向").toBe("descend");
+
+    // 用同一份状态重新挂载，顺序应与刚才一致
+    stubInvoke({
+      load_ui_state: JSON.stringify(last),
+      scan_litematics: { items: [c, a, b], skippedDirs: 0, skippedPaths: [] },
+    });
+    const w2 = mountApp();
+    await flushPromises();
+    mockOpen.mockResolvedValue(["/p"]);
+    const btn = w2.findAll("button").find((x) => x.text().includes("添加目录"));
+    await btn!.trigger("click");
+    await flushPromises();
+    expect(order(w2), "重开后应恢复降序").toEqual([
+      "c.litematic",
+      "b.litematic",
+      "a.litematic",
+    ]);
+    w2.unmount();
+  });
+});

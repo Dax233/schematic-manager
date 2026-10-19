@@ -10,6 +10,7 @@
  * Scrollbar），轨道已在全局样式里去掉，不留原生滚动条。
  */
 <script setup lang="ts">
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../store";
 import { formatDims } from "../utils/format";
@@ -49,7 +50,35 @@ const {
   clearChecks,
   ctxMenu,
   revealRow,
+  sortKey,
+  sortOrder,
+  setSort,
 } = useAppStore();
+
+/** 排序字段清单：顺序就是下拉里的顺序，值对应 store 的 SortKey。
+ *  单独列一份是为了下拉能显示「按路径」这一项（它不是排序字段）。 */
+const SORT_FIELDS = [
+  { key: "fileName", label: "files.sortByFileName" },
+  { key: "name", label: "files.sortByName" },
+  { key: "mcVersionName", label: "files.sortByVersion" },
+  { key: "timeModified", label: "files.sortByTime" },
+  { key: "author", label: "files.sortByAuthor" },
+] as const;
+
+/** 下拉当前值：未排序时用空串表示「按路径」 */
+const sortFieldValue = computed(() => sortKey.value ?? "");
+
+/** 选字段：选中即按该字段升序排；选「按路径」则取消排序。
+ *
+ * 下拉只负责「选哪个字段」，不负责换方向——重复选同一个字段仍然是升序，
+ * 不会莫名其妙变成降序。换方向由旁边的 ↑/↓ 按钮做。 */
+function onSortFieldChange(v: unknown) {
+  if (v === "" || v === undefined) {
+    setSort(null, null);
+    return;
+  }
+  setSort(v as (typeof SORT_FIELDS)[number]["key"], "ascend");
+}
 </script>
 
 <template>
@@ -169,6 +198,30 @@ const {
         {{ t("files.checkedCount", { checked: checkedCount, total: filteredFiles.length }) }}
       </span>
       <span class="preview__spacer" />
+      <!-- 排序：字段下拉 + 方向按钮。放在这条而不是列头上，因为要排的
+           「名称 / 时间 / 作者」并不是列表列（列表只有文件名/版本/尺寸/方块数），
+           为排序把它们加成列会把目录栏撑宽，与布局优化冲突。
+           方向按钮只在选了字段后可用：按路径排序无所谓升序降序。 -->
+      <a-select
+        :model-value="sortFieldValue"
+        size="mini"
+        :title="t('files.sortToggleTip')"
+        style="width: 116px"
+        @change="onSortFieldChange"
+      >
+        <a-option value="">{{ t("files.sortByPath") }}</a-option>
+        <a-option v-for="f in SORT_FIELDS" :key="f.key" :value="f.key">
+          {{ t(f.label) }}
+        </a-option>
+      </a-select>
+      <a-button
+        size="mini"
+        :disabled="!sortKey"
+        :title="sortOrder === 'descend' ? t('files.sortDesc') : t('files.sortAsc')"
+        @click="sortKey && setSort(sortKey, sortOrder === 'ascend' ? 'descend' : 'ascend')"
+      >
+        {{ sortOrder === "descend" ? "↓" : "↑" }}
+      </a-button>
       <a-button size="mini" :disabled="filteredFiles.length === 0" @click="checkAll">
         {{ t("files.checkAll") }}
       </a-button>

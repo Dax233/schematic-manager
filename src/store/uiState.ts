@@ -12,7 +12,7 @@ import type { ComputedRef, Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { loadUiState, saveUiState, scanLitematics } from "../api";
 import { currentLocale, isLocale, locale, setLocale, t } from "../i18n";
-import type { StatusText } from "./fileList";
+import type { SortKey, SortOrder, StatusText } from "./fileList";
 import { EXPORT_SIZES, VIEW_PRESETS } from "../render/scene3d";
 import { isLogLevel } from "../utils/run_log";
 import type { LogLevel } from "../utils/run_log";
@@ -41,9 +41,29 @@ interface UiState {
   locale?: string;
   /** 运行日志等级；缺失或认不出来的值按 "info" 处理 */
   logLevel?: string;
+  /** 列表排序字段与方向；都没选时按路径排序（原行为） */
+  sortKey?: string;
+  sortOrder?: string;
 }
 
 const UI_STATE_VERSION = 1;
+
+/** 排序字段的合法取值，与 fileList 的 SortKey 保持一致 */
+const SORT_KEYS: readonly SortKey[] = [
+  "fileName",
+  "name",
+  "mcVersionName",
+  "timeModified",
+  "author",
+];
+
+function isSortKey(v: unknown): v is SortKey {
+  return typeof v === "string" && (SORT_KEYS as readonly string[]).includes(v);
+}
+
+function isSortOrder(v: unknown): v is SortOrder {
+  return v === "ascend" || v === "descend";
+}
 
 /** 界面状态域用到的其他域成员（循环引用回避见 fileList.ts）。
  *
@@ -70,6 +90,10 @@ export interface UiStateDeps {
   exportSize: Ref<number>;
   /** 文件搜索词（fileList） */
   searchText: Ref<string>;
+  /** 列表排序字段（fileList）；null 表示按路径 */
+  sortKey: Ref<SortKey | null>;
+  /** 列表排序方向（fileList） */
+  sortOrder: Ref<SortOrder | null>;
   /** 状态栏内容（fileList）；恢复完成后汇报目录数 */
   status: Ref<StatusText>;
   /** 运行日志等级（backups）；本身也是要记住的界面形态 */
@@ -93,6 +117,8 @@ export function createUiStateSlice(s: UiStateDeps) {
       searchText: s.searchText.value,
       locale: currentLocale(),
       logLevel: s.logLevel.value,
+      sortKey: s.sortKey.value ?? undefined,
+      sortOrder: s.sortOrder.value ?? undefined,
     };
   }
 
@@ -181,6 +207,12 @@ export function createUiStateSlice(s: UiStateDeps) {
     if (typeof st.searchText === "string") {
       s.searchText.value = st.searchText;
     }
+    // 排序只认约定里的字段与方向：脏值留下去会让列表顺序变得无法解释，
+    // 而用户看不出是「记住了坏值」还是「排序坏了」
+    if (isSortKey(st.sortKey) && isSortOrder(st.sortOrder)) {
+      s.sortKey.value = st.sortKey;
+      s.sortOrder.value = st.sortOrder;
+    }
     // 语言先恢复：后面那些提示文案要用它来出
     if (isLocale(st.locale)) {
       setLocale(st.locale);
@@ -241,6 +273,8 @@ export function createUiStateSlice(s: UiStateDeps) {
   watch(s.brightness, persistUiState);
   watch(s.exportSize, persistUiState);
   watch(s.searchText, persistUiState);
+  // 排序：点一次列头就换一种顺序，属于用户对界面的调整
+  watch([s.sortKey, s.sortOrder], persistUiState);
   // 语言也是要记住的界面形态
   watch(locale, persistUiState);
   // 日志等级由「日志管理」窗口里的选择器改动，同样要记住
