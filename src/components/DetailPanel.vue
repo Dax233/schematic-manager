@@ -10,7 +10,7 @@
 import SceneViewer from "./SceneViewer.vue";
 import BlockStatTable from "./BlockStatTable.vue";
 import EntityTable from "./EntityTable.vue";
-import { EXPORT_SIZES } from "../render/scene3d";
+import ExportDialog from "./ExportDialog.vue";
 import {
   PREVIEW_MAX_H,
   PREVIEW_MAX_W,
@@ -47,13 +47,13 @@ const {
   sceneBlockLimit,
   brightness,
   activeView,
-  exportSize,
+  exportOpen,
+  exportBatchMode,
   exporting,
   exportingProgress,
   setView,
   startRender,
   exportPreview,
-  exportBatch,
   selected,
   draft,
   dirty,
@@ -263,17 +263,14 @@ onBeforeUnmount(() => {
           :style="{ width: '140px' }"
         />
         <span class="preview__value">{{ Math.round(brightness * 100) }}%</span>
-        <!-- 导出尺寸：四档可选，单个与批量共用。
-             选项来自 EXPORT_SIZES，避免与 scene3d.ts 的定义各写一份而漂移 -->
-        <a-select v-model="exportSize" size="small" style="width: 104px">
-          <a-option v-for="s in EXPORT_SIZES" :key="s" :value="s">{{ s }}</a-option>
-        </a-select>
+        <!-- 尺寸改在导出面板里选：系统保存框放不下自定义控件，
+             而尺寸与「存到哪」本来就是两件事 -->
         <a-button
           size="small"
           type="primary"
           :loading="exporting && !exportingProgress"
           :disabled="!scene || exporting"
-          @click="exportPreview"
+          @click="exportBatchMode = false; exportOpen = true"
         >
           {{ t("detail.exportPng") }}
         </a-button>
@@ -287,7 +284,7 @@ onBeforeUnmount(() => {
               ? t('detail.batchExportHint', { count: checkedCount })
               : t('detail.batchExportEmpty')
           "
-          @click="exportBatch"
+          @click="exportBatchMode = true; exportOpen = true"
         >
           {{ t("detail.exportBatch") }}
           <template v-if="exportingProgress">
@@ -392,5 +389,8 @@ onBeforeUnmount(() => {
         <EntityTable />
       </a-tab-pane>
     </a-tabs>
+
+    <!-- 导出尺寸面板：点「导出预览图」先在这里定尺寸，确认后才走系统保存框 -->
+    <ExportDialog />
   </div>
 </template>

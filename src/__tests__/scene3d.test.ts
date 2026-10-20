@@ -4,7 +4,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
   applyPreset,
   buildSceneGroup,
-  EXPORT_SIZES,
+  exportPixelSize,
   fitCamera,
   fitDistance,
   frameBox,
@@ -275,9 +275,29 @@ describe("相机取景", () => {
   });
 });
 
-describe("导出尺寸", () => {
-  it("提供 512 / 1024 / 2048 / 3072 四档", () => {
-    expect([...EXPORT_SIZES]).toEqual([512, 1024, 2048, 3072]);
+describe("导出尺寸换算", () => {
+  it("横构图以高为短边，长边按比例放大", () => {
+    // 短边指宽高比里较小的那一边的像素数，不是把给定的数硬当成宽
+    expect(exportPixelSize("4x3", 1024)).toEqual({ w: 1365, h: 1024 });
+    expect(exportPixelSize("16x9", 1080)).toEqual({ w: 1920, h: 1080 });
+  });
+
+  it("竖构图以宽为短边", () => {
+    expect(exportPixelSize("3x4", 1024)).toEqual({ w: 1024, h: 1365 });
+    expect(exportPixelSize("9x16", 1080)).toEqual({ w: 1080, h: 1920 });
+  });
+
+  it("正方形两条边都等于给定像素数", () => {
+    expect(exportPixelSize("1x1", 2048)).toEqual({ w: 2048, h: 2048 });
+  });
+
+  it("任何比例都不会算出 0 宽或 0 高", () => {
+    // 零尺寸画布会让导出直接失败，极端取值下也必须守住下限
+    for (const aspect of ["1x1", "4x3", "3x4", "16x9", "9x16"] as const) {
+      const px = exportPixelSize(aspect, 1);
+      expect(px.w, `${aspect} 的宽应至少为 1`).toBeGreaterThanOrEqual(1);
+      expect(px.h, `${aspect} 的高应至少为 1`).toBeGreaterThanOrEqual(1);
+    }
   });
 });
 

@@ -12,8 +12,9 @@ import type { ComputedRef, Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { loadUiState, saveUiState, scanLitematics } from "../api";
 import { currentLocale, isLocale, locale, setLocale, t } from "../i18n";
+import type { ExportAspect } from "../render/scene3d";
 import type { SortKey, SortOrder, StatusText } from "./fileList";
-import { EXPORT_SIZES, VIEW_PRESETS } from "../render/scene3d";
+import { EXPORT_ASPECTS, EXPORT_SHORT_EDGES, VIEW_PRESETS } from "../render/scene3d";
 import { isLogLevel } from "../utils/run_log";
 import type { LogLevel } from "../utils/run_log";
 import { reportUiWarning } from "../utils/run_log_report";
@@ -39,7 +40,10 @@ interface UiState {
   columnWidths?: Record<string, number>;
   activeView: string;
   brightness: number;
+  /** 导出尺寸的短边像素数（旧版含义是正方形边长，取值同样落在合法档位内） */
   exportSize: number;
+  /** 导出尺寸的宽高比标识；缺失时按 1:1 处理 */
+  exportAspect?: string;
   searchText: string;
   /** 界面语言；认不出来的值按默认语言处理 */
   locale?: string;
@@ -98,8 +102,10 @@ export interface UiStateDeps {
   activeView: Ref<string>;
   /** 预览亮度（scenePreview） */
   brightness: Ref<number>;
-  /** 预览导出尺寸（scenePreview） */
+  /** 预览导出尺寸的短边像素数（scenePreview） */
   exportSize: Ref<number>;
+  /** 预览导出尺寸的宽高比（scenePreview） */
+  exportAspect: Ref<ExportAspect>;
   /** 文件搜索词（fileList） */
   searchText: Ref<string>;
   /** 列表排序字段（fileList）；null 表示按路径 */
@@ -128,6 +134,7 @@ export function createUiStateSlice(s: UiStateDeps) {
       activeView: s.activeView.value,
       brightness: s.brightness.value,
       exportSize: s.exportSize.value,
+      exportAspect: s.exportAspect.value,
       searchText: s.searchText.value,
       locale: currentLocale(),
       logLevel: s.logLevel.value,
@@ -221,8 +228,16 @@ export function createUiStateSlice(s: UiStateDeps) {
     if (typeof st.brightness === "number") {
       s.brightness.value = Math.min(2, Math.max(0.5, st.brightness));
     }
-    if (typeof st.exportSize === "number" && EXPORT_SIZES.includes(st.exportSize as never)) {
+    if (
+      typeof st.exportSize === "number" &&
+      EXPORT_SHORT_EDGES.includes(st.exportSize as never)
+    ) {
       s.exportSize.value = st.exportSize;
+    }
+    // 宽高比只认预设里的值：脏值会让导出尺寸算得毫无道理，
+    // 而用户在界面上看不出是「记住了坏值」还是「导出坏了」
+    if (typeof st.exportAspect === "string" && EXPORT_ASPECTS.some((a) => a.key === st.exportAspect)) {
+      s.exportAspect.value = st.exportAspect as ExportAspect;
     }
     if (typeof st.searchText === "string") {
       s.searchText.value = st.searchText;

@@ -312,12 +312,12 @@ watch(
 );
 
 /**
- * 按指定边长导出当前画面为透明背景 PNG。
+ * 按指定像素宽高导出当前画面为透明背景 PNG。
  *
- * 临时把渲染器调到目标尺寸、宽高比设为 1，渲染后立即恢复，
+ * 临时把渲染器调到目标尺寸、宽高比设为 w/h，渲染后立即恢复，
  * 因此用户不会看到界面尺寸被改动。
  */
-async function exportPng(size: number): Promise<Uint8Array> {
+async function exportPng(w: number, h: number): Promise<Uint8Array> {
   const r = renderer.value;
   if (!r || !camera || !threeScene) {
     throw new Error(t("scene.notReady"));
@@ -329,8 +329,8 @@ async function exportPng(size: number): Promise<Uint8Array> {
 
   try {
     r.setPixelRatio(1);
-    r.setSize(size, size, false);
-    camera.aspect = 1;
+    r.setSize(w, h, false);
+    camera.aspect = w / h;
     camera.updateProjectionMatrix();
     r.render(threeScene, camera);
 

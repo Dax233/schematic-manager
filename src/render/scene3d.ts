@@ -275,8 +275,43 @@ export function syncClipPlanes(
   return true;
 }
 
-/** 导出允许的边长。与界面的下拉选项一致。 */
-export const EXPORT_SIZES = [512, 1024, 2048, 3072] as const;
+/**
+ * 导出尺寸的宽高比预设。
+ *
+ * 预览区可以单独调宽与调高，画面未必是正方形，导出也就不该只给正方形。
+ * 宽与高都用「相对单位」，实际像素由短边长度乘出来（见 exportPixelSize）。
+ */
+export const EXPORT_ASPECTS = [
+  { key: "1x1", w: 1, h: 1 },
+  { key: "4x3", w: 4, h: 3 },
+  { key: "3x4", w: 3, h: 4 },
+  { key: "16x9", w: 16, h: 9 },
+  { key: "9x16", w: 9, h: 16 },
+] as const;
+
+/** 导出尺寸的短边像素档位 */
+export const EXPORT_SHORT_EDGES = [1024, 2048, 3072, 4096] as const;
+
+/** 导出尺寸的宽高比标识 */
+export type ExportAspect = (typeof EXPORT_ASPECTS)[number]["key"];
+
+/** 由宽高比与短边像素算出实际导出的宽高（像素）。
+ *
+ * 「短边」按名字理解：宽高比里较小的那一边就是短边，它取给定像素数，
+ * 长边按比例放大。3:4 这种竖构图因此以宽为短边，而不是把宽硬当成给定的数。
+ *
+ * 乘完取整，并保证不小于 1——否则极端比例下会算出 0 宽 0 高的画布。
+ */
+export function exportPixelSize(aspect: ExportAspect, shortEdge: number): { w: number; h: number } {
+  const preset = EXPORT_ASPECTS.find((a) => a.key === aspect) ?? EXPORT_ASPECTS[0];
+  const ratio = preset.w / preset.h;
+  if (ratio >= 1) {
+    // 横构图或正方：高是短边
+    return { w: Math.max(1, Math.round(shortEdge * ratio)), h: Math.max(1, shortEdge) };
+  }
+  // 竖构图：宽是短边
+  return { w: Math.max(1, shortEdge), h: Math.max(1, Math.round(shortEdge / ratio)) };
+}
 
 /**
  * 离屏渲染器：把任意场景数据渲染成透明背景的 PNG。
@@ -304,14 +339,18 @@ export class OffscreenRenderer {
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10000);
   }
 
-  /** 渲染一个场景并返回 PNG 字节。view 为视角预设名。 */
-  async renderPng(data: SceneData, size: number, view = "front"): Promise<Uint8Array> {
+  /** 渲染一个场景并返回 PNG 字节。view 为视角预设名，w / h 为像素宽高。 */
+  async renderPng(
+    data: SceneData,
+    w: number,
+    h: number,
+    view = "front",
+  ): Promise<Uint8Array> {
     const built = buildSceneGroup(data);
     try {
       this.scene.add(built.group);
-      // 正方形成像，宽高比固定为 1
-      this.renderer.setSize(size, size, false);
-      this.camera.aspect = 1;
+      this.renderer.setSize(w, h, false);
+      this.camera.aspect = w / h;
       applyPreset(this.camera, built.group, view);
       this.renderer.render(this.scene, this.camera);
 

@@ -19,7 +19,8 @@ import { writeFile } from "@tauri-apps/plugin-fs";
 import { displayName, t } from "../i18n";
 import { buildScene, renderBlockIcons } from "../api";
 import type SceneViewer from "../components/SceneViewer.vue";
-import { OffscreenRenderer } from "../render/scene3d";
+import { OffscreenRenderer, exportPixelSize } from "../render/scene3d";
+import type { ExportAspect } from "../render/scene3d";
 import { NamePool, joinPath, previewStem } from "../render/export_name";
 import type { AnalysisResult, BlockRow, SceneData, SchematicSummary } from "../types";
 import { itemsForState } from "../utils/material_items";
@@ -53,8 +54,16 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   const sceneError = ref("");
   const brightness = ref(1.45);
   const activeView = ref("left45");
-  const exportSize = ref(1024);
+  const exportSize = ref<number>(1024);
+  /** 导出尺寸的宽高比；与 exportSize（短边像素）一起决定实际宽高 */
+  const exportAspect = ref<ExportAspect>("1x1");
+  /** 当前导出尺寸换算出的像素宽高 */
+  const exportPixels = computed(() => exportPixelSize(exportAspect.value, exportSize.value));
   const exporting = ref(false);
+  /** 导出设置面板是否打开 */
+  const exportOpen = ref(false);
+  /** 本次打开导出面板是为了导出当前文件，还是批量导出勾选项 */
+  const exportBatchMode = ref(false);
   /** 批量导出的进度（null 表示未在批量导出） */
   const exportingProgress = ref<{ done: number; total: number } | null>(null);
 
@@ -118,11 +127,15 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     viewer.value?.applyPreset(name);
   }
 
-  /** 导出当前视角为透明背景 PNG（单个文件） */
-  async function exportPreview() {
+  /** 导出当前视角为透明背景 PNG（单个文件）。
+   *
+   * 尺寸由导出面板确认后传入：面板里既能选预设，也能手填宽高。
+   * 不传时退回当前记住的尺寸，供「不改设置直接再导一次」这类调用使用。
+   */
+  async function exportPreview(size?: { w: number; h: number }) {
     const cur = s.selected.value;
     if (!cur || !scene.value) return;
-    const size = exportSize.value;
+    const px = size ?? exportPixels.value;
     const stem = cur.fileName.replace(/\.litematic$/i, "");
     // 同 pickDirectory：保存对话框失败时必须给出提示，
     // 放在 try 外会让这个 Promise 静默 reject，用户点了导出却没反应
@@ -130,7 +143,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     try {
       target = await save({
         title: t("export.previewTitle"),
-        defaultPath: `${stem}_preview_${size}.png`,
+        defaultPath: `${stem}_preview_${px.w}x${px.h}.png`,
         filters: [{ name: t("export.pngFilter"), extensions: ["png"] }],
       });
     } catch (e) {
@@ -141,10 +154,10 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
 
     exporting.value = true;
     try {
-      const bytes = await viewer.value?.exportPng(size);
+      const bytes = await viewer.value?.exportPng(px.w, px.h);
       if (!bytes) throw new Error(t("export.notReady"));
       await writeFile(target, bytes);
-      Message.success(t("export.previewExported", { size }));
+      Message.success(t("export.previewExported", { w: px.w, h: px.h }));
     } catch (e) {
       Message.error(t("export.failed", { error: String(e) }));
     } finally {
@@ -177,7 +190,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
    * 单个文件失败不中断整批——某个投影读不出来（被占用、格式异常）时
    * 其余文件仍应导出成功，最后把失败清单如实报出来。
    */
-  async function exportBatch() {
+  async function exportBatch(size?: { w: number; h: number }) {
     const list = s.checkedFiles.value.filter((f) => !f.error);
     if (list.length === 0) {
       Message.warning(t("export.noChecked"));
@@ -186,7 +199,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     const dir = await pickExportDir();
     if (!dir) return;
 
-    const size = exportSize.value;
+    const px = size ?? exportPixels.value;
     const view = activeView.value;
     exporting.value = true;
     exportingProgress.value = { done: 0, total: list.length };
@@ -202,8 +215,8 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
       for (const f of list) {
         try {
           const data = await buildScene(f.path);
-          const bytes = await renderer.renderPng(data, size, view);
-          const name = names.take(previewStem(f.fileName, size), ".png");
+          const bytes = await renderer.renderPng(data, px.w, px.h, view);
+          const name = names.take(previewStem(f.fileName, px.w, px.h), ".png");
           await writeFile(joinPath(dir, name), bytes);
           ok += 1;
         } catch (e) {
@@ -222,7 +235,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     }
 
     if (failures.length === 0) {
-      Message.success(t("export.batchDone", { count: ok, size, dir }));
+      Message.success(t("export.batchDone", { count: ok, w: px.w, h: px.h, dir }));
     } else {
       Message.warning({
         content: t("export.batchPartial", {
@@ -545,6 +558,10 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     brightness,
     activeView,
     exportSize,
+    exportAspect,
+    exportPixels,
+    exportOpen,
+    exportBatchMode,
     exporting,
     exportingProgress,
     loadScene,

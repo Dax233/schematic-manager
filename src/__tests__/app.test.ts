@@ -5153,3 +5153,144 @@ describe("列表键盘导航不抢输入框", () => {
     w.unmount();
   });
 });
+describe("导出尺寸面板", () => {
+  /** 挂载并选中一个文件，让预览区与导出按钮出现 */
+  async function setup() {
+    stubInvoke({
+      analyze_schematic: () => ({
+        blocks: [],
+        entities: [],
+        tileEntities: [],
+        nonAirTotal: 0,
+        airTotal: 0,
+        distinctBlockTypes: 0,
+        distinctStates: 0,
+      }),
+      build_scene: () => scene,
+    });
+    const w = mountApp();
+    await flushPromises();
+    mockOpen.mockResolvedValue("/p");
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+    return w;
+  }
+
+  /** 面板里的两个宽高输入框 */
+  function sizeInputs(): HTMLInputElement[] {
+    return [...document.querySelectorAll<HTMLInputElement>(".export-dialog input")];
+  }
+
+  it("点「导出预览图」先打开尺寸面板，而不是直接弹保存框", async () => {
+    const w = await setup();
+    const btn = w.findAll("button").find((b) => b.text().trim() === "导出预览图");
+    expect(btn, "应有「导出预览图」按钮").toBeTruthy();
+    await btn!.trigger("click");
+    await flushPromises();
+
+    const dialog = document.querySelector(".export-dialog");
+    expect(dialog, "应先打开导出尺寸面板").toBeTruthy();
+    // 面板里既要有预设，也要能手填
+    expect(sizeInputs().length, "应有宽、高两个输入框").toBe(2);
+    expect(dialog!.textContent, "应有预设区").toContain("预设尺寸");
+    expect(dialog!.textContent, "应有自定义区").toContain("自定义尺寸");
+    w.unmount();
+  });
+
+  it("批量导出也先经过尺寸面板，标题写明是批量", async () => {
+    // 批量导出原先只能沿用记住的尺寸，而界面上已无处可改——
+    // 用户无从得知批量导出会出多大图。因此它同样走这个面板。
+    const w = await setup();
+    // 勾选一个文件，批量导出按钮才可用
+    const cb = w.find('.sidebar input[type="checkbox"]');
+    if (cb.exists()) {
+      await cb.setValue(true);
+      await flushPromises();
+    }
+    const btn = w.findAll("button").find((b) => b.text().includes("批量导出"));
+    expect(btn, "应有批量导出按钮").toBeTruthy();
+    await btn!.trigger("click");
+    await flushPromises();
+
+    const dialog = document.querySelector(".export-dialog");
+    expect(dialog, "批量导出也应先打开尺寸面板").toBeTruthy();
+    expect(
+      document.querySelector(".arco-modal-title")?.textContent ?? "",
+      "标题应说明这是批量导出",
+    ).toContain("批量");
+    w.unmount();
+  });
+
+  it("选预设会把手填的宽高覆盖掉", async () => {
+    const w = await setup();
+    await w.findAll("button").find((b) => b.text().trim() === "导出预览图")!.trigger("click");
+    await flushPromises();
+
+    // 先手填一个奇怪的尺寸
+    const [wIn, hIn] = sizeInputs();
+    wIn.value = "700";
+    wIn.dispatchEvent(new Event("input"));
+    hIn.value = "300";
+    hIn.dispatchEvent(new Event("input"));
+    await flushPromises();
+    expect((sizeInputs()[0] as HTMLInputElement).value, "手填值应生效").toBe("700");
+
+    // 再点 16:9 → 2048 的预设按钮。短边相同的按钮每行都有，
+    // 必须按比例那一行定位，否则会点到 1:1 那行的同名按钮。
+    const row = document.querySelector<HTMLElement>('.export-dialog__ratio[data-aspect="16x9"]');
+    expect(row, "应有 16:9 那一行").toBeTruthy();
+    const preset = [...row!.querySelectorAll<HTMLElement>("button")].find(
+      (b) => (b.textContent ?? "").trim() === "2048",
+    );
+    expect(preset, "16:9 应有短边 2048 的按钮").toBeTruthy();
+    preset!.click();
+    await flushPromises();
+
+    // 16:9 的短边是 2048，长边 3641
+    const after = sizeInputs();
+    const wv = Number((after[0] as HTMLInputElement).value);
+    const hv = Number((after[1] as HTMLInputElement).value);
+    expect(Math.min(wv, hv), "预设的短边应被覆盖成 2048").toBe(2048);
+    expect(Math.max(wv, hv), "长边应按 16:9 放大").toBe(3641);
+    w.unmount();
+  });
+
+  it("确认后面板关闭并按所选尺寸导出", async () => {
+    const w = await setup();
+    await w.findAll("button").find((b) => b.text().trim() === "导出预览图")!.trigger("click");
+    await flushPromises();
+
+    // 选 4:3 短边 1024 的预设（第一个 1024 按钮属于 1:1，取第 2 个）
+    const buttons = [...document.querySelectorAll<HTMLElement>(".export-dialog button")].filter(
+      (b) => (b.textContent ?? "").trim() === "1024",
+    );
+    expect(buttons.length, "每档短边各有一个按钮").toBe(5);
+    buttons[1].click(); // 4:3
+    await flushPromises();
+
+    const ok = [
+      ...document.querySelectorAll<HTMLElement>(".arco-modal-footer button"),
+    ].find((b) => (b.textContent ?? "").trim() === "导出");
+    expect(ok, "面板应有「导出」按钮").toBeTruthy();
+    ok!.click();
+    await flushPromises();
+
+    // 面板关闭：Arco 的 modal 用 v-show 控制显隐，jsdom 下元素仍在文档里，
+    // 因此断言可见性而不是「元素是否被移除」
+    const modal = document.querySelector<HTMLElement>(".export-dialog")?.closest(".arco-modal");
+    expect(modal, "面板元素应仍在（由 v-show 控制）").toBeTruthy();
+    // 面板关闭：Arco 的 modal 用 v-show 控制显隐，jsdom 下元素仍留在文档里，
+    // 因此断言可见性而不是「元素是否被移除」。承载 display 的那一层在
+    // wrapper / modal / mask 之间，任一层被设为 none 即表示已关闭。
+    const layers = [
+      modal!.closest<HTMLElement>(".arco-modal-wrapper"),
+      modal as HTMLElement,
+      modal!.closest<HTMLElement>(".arco-modal-mask"),
+    ];
+    const hidden = layers.some((el) => el?.style.display === "none");
+    expect(hidden, "确认后应隐藏面板").toBe(true);
+    w.unmount();
+  });
+});
