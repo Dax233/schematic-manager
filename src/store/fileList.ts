@@ -404,9 +404,9 @@ export function createFileListSlice(s: FileListDeps) {
     return [...list].sort((a, b) => {
       const va = sortValue(a, key);
       const vb = sortValue(b, key);
-      // 空值排末尾，与升降序无关
-      const ea = va === "" || va === undefined;
-      const eb = vb === "" || vb === undefined;
+      // 空字符串排末尾，与升降序无关
+      const ea = va === "";
+      const eb = vb === "";
       if (ea !== eb) return ea ? 1 : -1;
       if (ea && eb) return a.path.localeCompare(b.path);
       const cmp =
