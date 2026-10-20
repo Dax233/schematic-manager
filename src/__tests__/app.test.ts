@@ -4507,6 +4507,42 @@ it("默认按路径排序，未选字段时就是文件系统的扫描顺序", a
     w2.unmount();
   });
 });
+describe("预览控制条", () => {
+  /** 挂载并选中一个文件，让控制条出现 */
+  async function mountWithSelection() {
+    stubInvoke();
+    const w = mountApp();
+    await flushPromises();
+    mockOpen.mockResolvedValue(["/p"]);
+    const btn = w.findAll("button").find((b) => b.text().includes("添加目录"));
+    await btn!.trigger("click");
+    await flushPromises();
+    const row = w.findAll("tr").find((r) => r.text().includes("测试.litematic"));
+    await row!.trigger("click");
+    await flushPromises();
+    return w;
+  }
+
+  it("拖动亮度滑杆时不弹数值气泡", async () => {
+    // 滑杆右侧已有常驻百分比，气泡是同一信息的第二份，还会挡住滑杆
+    const w = await mountWithSelection();
+    const handle = w.find(".arco-slider-btn");
+    expect(handle.exists(), "应能找到亮度滑杆的手柄").toBe(true);
+
+    // Arco 的气泡在手柄被按下时弹出
+    handle.element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    await flushPromises();
+
+    expect(
+      document.querySelector(".arco-tooltip"),
+      "按下亮度滑杆手柄时不应出现数值气泡",
+    ).toBeNull();
+
+    // 数值仍有可见的显示途径
+    expect(w.text(), "亮度百分比仍要有常驻显示").toMatch(/\d+%/);
+    w.unmount();
+  });
+});
 describe("预览区尺寸调整", () => {
   /** 面板当前高度（由组件内联样式给出） */
   function panelHeight(w: ReturnType<typeof mountApp>): number {

@@ -252,11 +252,14 @@ onBeforeUnmount(() => {
           <a-radio value="back">{{ t("detail.viewBack") }}</a-radio>
         </a-radio-group>
         <span class="preview__label">{{ t("detail.brightness") }}</span>
+        <!-- 关掉拖动手柄上的数值气泡：右侧已有常驻百分比，气泡是同一信息的第二份，
+             拖动时还会挡住滑杆本身 -->
         <a-slider
           v-model="brightness"
           :min="0.5"
           :max="2"
           :step="0.05"
+          :show-tooltip="false"
           :style="{ width: '140px' }"
         />
         <span class="preview__value">{{ Math.round(brightness * 100) }}%</span>
