@@ -57,7 +57,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "../App.vue";
 import i18n, { setLocale } from "../i18n";
-import type { SchematicSummary, SceneData, DuplicateGroup, ConvertItem, BlockCount } from "../types";
+import type { SchematicSummary, SceneData, DuplicateGroup, ConvertItem, ConvertOutcome, BlockCount } from "../types";
 
 const mockInvoke = vi.mocked(invoke);
 const mockOpen = vi.mocked(open);
@@ -1643,6 +1643,45 @@ describe("版本转换窗口（中文名与替代品点选）", () => {
     await flushPromises();
     return w;
   }
+
+  it.each([true, false])("转换结束按实际替换情况显示兼容报告（有替换：%s）", async (hasReplacement) => {
+    const w = await openAndAnalyze();
+    const base = mockInvoke.getMockImplementation()!;
+    const report: ConvertOutcome = {
+      replacedKinds: 0, replacedBlocks: 0, skippedKinds: 0, outputPath: "/p/兼容版.litematic",
+      compatibilityReplacements: hasReplacement ? [{
+        originalId: "minecraft:music_disc_creator", replacementId: "minecraft:red_stained_glass_pane",
+        count: 1, location: "Unnamed / minecraft:barrel / (10, 19, 3)",
+        path: "Regions/Unnamed/TileEntities[583]/Items[0]", slot: 0,
+      }] : [],
+    };
+    mockInvoke.mockImplementation((async (cmd: string, args: never) => {
+      if (cmd === "apply_conversion") return report;
+      return base(cmd, args);
+    }) as never);
+    const input = rowByText("minecraft:ancient_debris")!.querySelector("input")!;
+    input.value = "minecraft:stone";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await flushPromises();
+    findButton("开始转换")!.click();
+    await flushPromises();
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "apply_conversion")).toBe(true);
+    expect(messageError.mock.calls).toHaveLength(0);
+    const modal = document.querySelector(".conv-report-window");
+    const reportModal = w.findAllComponents({ name: "Modal" }).find((m) => m.props("modalClass") === "conv-report-window");
+    expect(reportModal?.props("visible")).toBe(hasReplacement);
+    if (hasReplacement) {
+      expect(modal?.textContent).toContain("minecraft:music_disc_creator");
+      expect(modal?.textContent).toContain("minecraft:red_stained_glass_pane");
+      expect(modal?.textContent).toContain("(10, 19, 3)");
+      expect(modal?.textContent).toContain("/p/兼容版.litematic");
+      const row = [...modal!.querySelectorAll("tr")].find((row) => row.textContent?.includes("容器槽位"));
+      expect(row?.querySelector(".arco-descriptions-item-value")?.textContent?.trim()).toBe("0");
+    } else {
+      expect(modal?.querySelectorAll(".arco-descriptions").length ?? 0).toBe(0);
+    }
+    w.unmount();
+  });
 
   it("未加载的版本以灰字列出，点一下就下载并变成可选的目标版本", async () => {
     // 有状态替身：补库之前 1.21.11 只是「支持但未加载」，补完之后

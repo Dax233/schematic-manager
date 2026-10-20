@@ -1386,7 +1386,14 @@ fn every_real_project_survives_a_version_conversion() {
                 continue;
             }
         };
-        let out = crate::convert::convert(&mut work, &db, source_idx, t.index, &items);
+        let out = match crate::convert::convert(&mut work, &db, source_idx, t.index, &items) {
+            Ok(out) => out,
+            Err(e) => {
+                failed.push(format!("{name}: 转换失败 {e}"));
+                continue;
+            }
+        };
+        work.blocks_modified = out.replaced_blocks > 0;
 
         let dst = dir.join(format!("converted_{name}"));
         let dst_s = dst.to_string_lossy().to_string();

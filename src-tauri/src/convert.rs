@@ -5,6 +5,7 @@
 //! 会变成无法识别的状态。为避免破坏原文件，转换结果另存为新文件。
 
 use crate::blockdb::BlockDb;
+use crate::error::{AppError, AppResult};
 use crate::litematic::Schematic;
 
 /// 转换中需要处理的一项：投影用到、但目标版本没有的方块
@@ -131,9 +132,11 @@ pub struct ConvertOutcome {
     pub replaced_blocks: u64,
     /// 因没有指定替代品而保持原样的种类数
     pub skipped_kinds: usize,
+    /// 目标版本不存在的物品，以及生成的兼容替代品和原位置。
+    pub compatibility_replacements: Vec<crate::legacy_items::CompatibilityReplacement>,
 }
 
-/// 在内存中执行转换：逐条替换后再改写 dataVersion。
+/// 在内存中执行转换：先迁移跨格式的物品，再替换方块并改写 dataVersion。
 ///
 /// 不改动磁盘：调用方决定另存到哪里。转换失败时不应破坏原文件。
 pub fn convert(
@@ -142,16 +145,22 @@ pub fn convert(
     source_idx: usize,
     target_idx: usize,
     items: &[ConvertItem],
-) -> ConvertOutcome {
+) -> AppResult<ConvertOutcome> {
     let Some(target) = db.versions.get(target_idx) else {
-        return ConvertOutcome::default();
+        return Err(AppError::Parse("目标版本不存在".into()));
     };
     let Some(source) = db.versions.get(source_idx) else {
-        // 源版本未知时无法判断属性是否被支持，宁可不转换
-        return ConvertOutcome::default();
+        return Err(AppError::Parse("源版本不存在".into()));
     };
 
+    let source_version = sc.root.get("MinecraftDataVersion")
+        .and_then(|v| v.as_i64()).and_then(|v| i32::try_from(v).ok())
+        .unwrap_or(source.data_version);
     let mut out = ConvertOutcome::default();
+    if let Some(prepared) = crate::legacy_items::prepare(&sc.root, source_version, target.data_version)? {
+        sc.root = prepared.root;
+        out.compatibility_replacements = prepared.replacements;
+    }
     let info = crate::block_model::DbBlockInfo { db, version: source };
 
     for it in items {
@@ -176,7 +185,7 @@ pub fn convert(
 
     // 改写制作版本号，使文件被识别为目标版本
     set_data_version(sc, target.data_version);
-    out
+    Ok(out)
 }
 
 /// 改写投影的 MinecraftDataVersion。
@@ -477,7 +486,7 @@ mod tests {
             suggested: "minecraft:kept".into(),
             chosen: String::new(),
         }];
-        let out = convert(&mut sc, &db, 0, 1, &items);
+        let out = convert(&mut sc, &db, 0, 1, &items).unwrap();
 
         assert_eq!(out.replaced_kinds, 1);
         assert_eq!(out.replaced_blocks, 2);
@@ -505,7 +514,7 @@ mod tests {
             suggested: String::new(),
             chosen: String::new(),
         }];
-        let out = convert(&mut sc, &db, 0, 1, &items);
+        let out = convert(&mut sc, &db, 0, 1, &items).unwrap();
         assert_eq!(out.replaced_kinds, 0);
         assert_eq!(out.skipped_kinds, 1, "没有替代品应计入未指定");
         // 方块保持原样，但版本号仍然改写
@@ -529,7 +538,7 @@ mod tests {
             suggested: "minecraft:kept".into(),
             chosen: "minecraft:picked".into(),
         }];
-        convert(&mut sc, &db, 0, 1, &items);
+        convert(&mut sc, &db, 0, 1, &items).unwrap();
         // 替换会把新状态追加到调色板、并改写索引指向它，
         // 因此必须顺着索引读，不能直接看 palette[0]
         let idx = sc.regions[0].indices[0] as usize;
@@ -549,7 +558,7 @@ mod tests {
         if let crate::nbt::Value::Compound(f) = &mut sc.root {
             f.retain(|(k, _)| k != "MinecraftDataVersion");
         }
-        convert(&mut sc, &db, 0, 1, &[]);
+        convert(&mut sc, &db, 0, 1, &[]).unwrap();
         assert_eq!(
             sc.root.get("MinecraftDataVersion"),
             Some(&crate::nbt::Value::Int(200)),
@@ -568,8 +577,8 @@ mod tests {
             chosen: String::new(),
         }];
         // 目标版本不存在：不能转换，也不能改写版本号
-        let out = convert(&mut sc, &db, 0, 9, &items);
-        assert_eq!(out.replaced_blocks, 0);
+        let err = convert(&mut sc, &db, 0, 9, &items).unwrap_err();
+        assert!(err.to_string().contains("目标版本"));
         let idx = sc.regions[0].indices[0] as usize;
         assert_eq!(sc.regions[0].palette[idx].name, "minecraft:gone");
         assert_eq!(
@@ -605,7 +614,7 @@ mod tests {
         let db = db_with(vec![old, new]);
         let mut sc = schematic(vec![BlockState::new("minecraft:gone")], vec![0], 100);
         // 没有可替换项
-        let out = convert(&mut sc, &db, 0, 1, &[]);
+        let out = convert(&mut sc, &db, 0, 1, &[]).unwrap();
         assert_eq!(out.replaced_blocks, 0);
         assert!(
             !sc.blocks_modified,
@@ -616,6 +625,74 @@ mod tests {
             sc.root.get("MinecraftDataVersion"),
             Some(&crate::nbt::Value::Int(200))
         );
+    }
+
+    #[test]
+    fn rejected_item_migration_keeps_blocks_root_and_flags_unchanged() {
+        use crate::nbt::Value;
+        let db = db_with(vec![
+            version("1.21", 3953, &["minecraft:gone"]),
+            version("1.20.4", 3700, &["minecraft:stone"]),
+        ]);
+        let mut sc = schematic(vec![BlockState::new("minecraft:gone")], vec![0], 3953);
+        let stack = |unknown| Value::Compound(vec![
+            ("id".into(), Value::String("minecraft:stone".into())),
+            ("count".into(), Value::Int(1)),
+            ("components".into(), Value::Compound(if unknown {
+                vec![("mod:unknown".into(), Value::Int(1))]
+            } else { vec![] })),
+        ]);
+        sc.root.set("Regions", Value::Compound(vec![("r".into(), Value::Compound(vec![
+            ("TileEntities".into(), Value::List(vec![Value::Compound(vec![
+                ("Items".into(), Value::List(vec![stack(false), stack(true)], 10)),
+            ])], 10)),
+        ]))]));
+        let before_root = sc.root.clone();
+        let before_palette = sc.regions[0].palette.clone();
+        let before_indices = sc.regions[0].indices.clone();
+        let items = analyze(&sc, &db, 1);
+        assert!(convert(&mut sc, &db, 0, 1, &items).is_err());
+        assert_eq!(sc.root, before_root);
+        assert_eq!(sc.regions[0].palette, before_palette);
+        assert_eq!(sc.regions[0].indices, before_indices);
+        assert!(!sc.blocks_modified && !sc.meta_modified);
+    }
+
+    #[test]
+    fn migration_with_palette_alias_and_block_replacement_roundtrips() {
+        use crate::nbt::Value;
+        let db = db_with(vec![
+            version("1.21", 3953, &["minecraft:gone"]),
+            version("1.20.4", 3700, &["minecraft:stone"]),
+        ]);
+        let mut sc = schematic(vec![BlockState::new("minecraft:gone")], vec![0], 3953);
+        let xyz = |x, y, z| Value::Compound(vec![
+            ("x".into(), Value::Int(x)), ("y".into(), Value::Int(y)), ("z".into(), Value::Int(z)),
+        ]);
+        sc.root.set("Version", Value::Int(7));
+        sc.root.set("Regions", Value::Compound(vec![("r".into(), Value::Compound(vec![
+            ("Position".into(), xyz(0, 0, 0)), ("Size".into(), xyz(1, 1, 1)),
+            ("Palette".into(), Value::List(vec![Value::Compound(vec![
+                ("Name".into(), Value::String("minecraft:gone".into())),
+            ])], 10)),
+            ("BlockStates".into(), Value::LongArray(vec![0])),
+        ]))]));
+        let mut items = analyze(&sc, &db, 1);
+        items[0].chosen = "minecraft:stone".into();
+        let out = convert(&mut sc, &db, 0, 1, &items).unwrap();
+        sc.blocks_modified = out.replaced_blocks > 0;
+        let path = std::env::temp_dir().join(format!("sm_conversion_{}_{}.litematic",
+            std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let filename = path.to_string_lossy();
+        sc.save_to(&filename).unwrap();
+        let back = Schematic::load(&filename).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(back.summary().data_version, 3700);
+        assert_eq!(back.summary().format_version, 6);
+        assert_eq!(back.regions[0].palette[back.regions[0].indices[0] as usize].name, "minecraft:stone");
+        let region = back.root.get("Regions").unwrap().get("r").unwrap();
+        assert!(region.get("Palette").is_none());
+        assert!(region.get("BlockStatePalette").is_some());
     }
 
 }

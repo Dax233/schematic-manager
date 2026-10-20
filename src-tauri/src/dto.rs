@@ -227,6 +227,19 @@ pub struct ConvertOutcomeDto {
     pub skipped_kinds: usize,
     /// 新文件的路径
     pub output_path: String,
+    pub compatibility_replacements: Vec<CompatibilityReplacementDto>,
+}
+
+/// 兼容替代品及其在原投影中的位置。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompatibilityReplacementDto {
+    pub original_id: String,
+    pub replacement_id: String,
+    pub count: i32,
+    pub location: String,
+    pub path: String,
+    pub slot: Option<u8>,
 }
 
 /// 一组内容相同的投影文件

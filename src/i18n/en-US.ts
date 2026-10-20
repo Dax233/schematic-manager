@@ -285,6 +285,13 @@ const enUS: typeof zhCN = {
       "The target version is missing {total} block types, {missing} of which have no suggestion",
     analyzeFailed: "Analysis failed: {error}",
     convertFailed: "Conversion failed: {error}",
+    compatibilityTitle: "Conversion completed with compatibility replacements",
+    compatibilityHint: "These items do not exist in the target version. They were replaced with red stained glass panes enchanted with Mending. The three newer music discs are named after their tracks; other items use the original IDs. Original item data is stored in the replacement tags, and locations are recorded in the run log. Coordinates are relative to the schematic origin; slots start at 0.",
+    originalItem: "Original item",
+    replacementItem: "Compatibility replacement",
+    replacementLocation: "Region / container or entity / schematic coordinates",
+    replacementSlot: "Container slot (starting at 0)",
+    replacementPath: "Data location",
     converted: "Converted: replaced {kinds} block types ({blocks} blocks). New file: {path}",
     convertedSkipped:
       "Converted: replaced {kinds} block types ({blocks} blocks); {skipped} types were left as they are. New file: {path}",

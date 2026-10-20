@@ -22,6 +22,7 @@ import {
 import type {
   BlockHit,
   ConvertItem,
+  ConvertOutcome,
   ConvertTarget,
   SchematicSummary,
 } from "../types";
@@ -55,6 +56,8 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
    * 「现在点方块会填到哪一行」，否则点下去不知道改的是谁。
    */
   const convActiveName = ref("");
+  const convReport = ref<ConvertOutcome | null>(null);
+  const convReportOpen = ref(false);
 
   // 右侧方块列表：搜索并点选替代品
   const convPickQuery = ref("");
@@ -344,6 +347,8 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
     convBusy.value = true;
     try {
       const r = await applyConversion(cur.path, convTargetIdx.value, convItems.value);
+      convReport.value = r;
+      convReportOpen.value = r.compatibilityReplacements.length > 0;
       Message.success(
         (r.skippedKinds > 0
           ? t("convert.convertedSkipped", {
@@ -371,6 +376,8 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
   }
 
   return {
+    convReport,
+    convReportOpen,
     convOpen,
     convBusy,
     convTargets,

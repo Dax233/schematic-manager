@@ -26,6 +26,8 @@ const { t } = useI18n();
 const {
   selected,
   convOpen,
+  convReport,
+  convReportOpen,
   convBusy,
   convTargets,
   convTargetIdx,
@@ -392,5 +394,28 @@ function replName(rec: ConvertItem): string {
       </template>
       <a-empty v-else :description="t('convert.empty')" />
     </a-spin>
+  </a-modal>
+  <a-modal
+    v-model:visible="convReportOpen"
+    :title="t('convert.compatibilityTitle')"
+    :width="900"
+    :hide-cancel="true"
+    modal-class="conv-report-window"
+    @ok="convReportOpen = false"
+  >
+    <a-alert type="warning" style="margin-bottom: 12px">
+      {{ t("convert.compatibilityHint") }}
+    </a-alert>
+    <div style="margin-bottom: 12px; overflow-wrap: anywhere">{{ convReport?.outputPath }}</div>
+    <a-scrollbar style="max-height: 55vh; overflow: auto" type="embed">
+      <a-descriptions v-for="item in convReport?.compatibilityReplacements" :key="item.path"
+        :column="1" bordered size="small" style="margin-bottom: 12px">
+        <a-descriptions-item :label="t('convert.originalItem')">{{ item.originalId }} ×{{ item.count }}</a-descriptions-item>
+        <a-descriptions-item :label="t('convert.replacementItem')">{{ item.replacementId }}</a-descriptions-item>
+        <a-descriptions-item :label="t('convert.replacementLocation')">{{ item.location }}</a-descriptions-item>
+        <a-descriptions-item :label="t('convert.replacementSlot')">{{ item.slot ?? '—' }}</a-descriptions-item>
+        <a-descriptions-item :label="t('convert.replacementPath')"><span style="overflow-wrap: anywhere">{{ item.path }}</span></a-descriptions-item>
+      </a-descriptions>
+    </a-scrollbar>
   </a-modal>
 </template>

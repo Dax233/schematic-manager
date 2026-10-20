@@ -832,7 +832,8 @@ pub fn apply_conversion(
         })
         .collect();
 
-    let out = crate::convert::convert(&mut sc, db, source_idx, target_index, &items);
+    let out = crate::convert::convert(&mut sc, db, source_idx, target_index, &items)
+        .map_err(|e| e.to_string())?;
     // 只有真的替换过方块才需要重编码 BlockStates 与调色板；
     // 若仅改版本号（方块都没变），save_to 仍会序列化整个 root，
     // 版本号照样写入，无需无谓地重写全部区域数据。
@@ -848,11 +849,23 @@ pub fn apply_conversion(
         out.replaced_kinds, out.skipped_kinds
     ));
 
+    let compatibility_replacements = out.compatibility_replacements.into_iter().map(|item| {
+        crate::run_log::warn(&format!(
+            "兼容替换 {} ×{} -> {}；{}，槽位 {:?}；{}",
+            item.original_id, item.count, item.replacement_id, item.location, item.slot, item.path
+        ));
+        crate::dto::CompatibilityReplacementDto {
+            original_id: item.original_id, replacement_id: item.replacement_id,
+            count: item.count, location: item.location, path: item.path, slot: item.slot,
+        }
+    }).collect();
+
     Ok(ConvertOutcomeDto {
         replaced_kinds: out.replaced_kinds,
         replaced_blocks: out.replaced_blocks,
         skipped_kinds: out.skipped_kinds,
         output_path: out_path.to_string_lossy().into_owned(),
+        compatibility_replacements,
     })
 }
 

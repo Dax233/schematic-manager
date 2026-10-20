@@ -204,6 +204,16 @@ export interface ConvertOutcome {
   replacedBlocks: number;
   skippedKinds: number;
   outputPath: string;
+  compatibilityReplacements: CompatibilityReplacement[];
+}
+
+export interface CompatibilityReplacement {
+  originalId: string;
+  replacementId: string;
+  count: number;
+  location: string;
+  path: string;
+  slot: number | null;
 }
 
 /** 一组内容相同的投影文件 */
