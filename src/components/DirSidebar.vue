@@ -19,7 +19,11 @@ const { t } = useI18n();
 
 const {
   sidebarWidth,
+  files,
   filteredFiles,
+  searchText,
+  dupBusy,
+  scanDuplicatesInline,
   tableColumns,
   tableKey,
   checkedKeys,
@@ -84,8 +88,20 @@ function onSortFieldChange(v: unknown) {
 <template>
   <div class="sidebar" :style="{ width: sidebarWidth + 'px' }">
     <!-- 文件操作条：在目录栏顶部、靠左。
-         作用于勾选的文件；未勾选时禁用，避免误操作到「看起来选中」的行。 -->
+         作用于勾选的文件；未勾选时禁用，避免误操作到「看起来选中」的行。
+         搜索与重复筛查放在这里而不是顶部工具条：它们作用于这张列表，
+         入口与被作用的对象应当在同一区域。 -->
     <div class="sidebar__ops">
+      <a-input-search
+        v-model="searchText"
+        size="mini"
+        :placeholder="t('files.searchPlaceholder')"
+        class="sidebar__search"
+        allow-clear
+      />
+      <a-button size="mini" :loading="dupBusy" @click="scanDuplicatesInline">
+        {{ t("files.duplicates") }}
+      </a-button>
       <a-button
         size="mini"
         status="danger"
@@ -192,10 +208,24 @@ function onSortFieldChange(v: unknown) {
       </template>
     </a-table>
 
-    <!-- 目录栏底部：只放多选操作 -->
+    <!-- 目录栏底部：多选与排序操作 -->
     <div class="sidebar__checks">
+      <!-- 搜索时把「共多少、匹配多少」一并给出来：只显示匹配数会让人
+           以为文件变少了 -->
       <span class="hint-dim">
-        {{ t("files.checkedCount", { checked: checkedCount, total: filteredFiles.length }) }}
+        <template v-if="searchText">
+          {{
+            t("files.checkedCountOfAll", {
+              checked: checkedCount,
+              total: filteredFiles.length,
+              all: files.length,
+              matched: filteredFiles.length,
+            })
+          }}
+        </template>
+        <template v-else>
+          {{ t("files.checkedCount", { checked: checkedCount, total: filteredFiles.length }) }}
+        </template>
       </span>
       <span class="preview__spacer" />
       <!-- 排序：字段下拉 + 方向按钮。放在这条而不是列头上，因为要排的

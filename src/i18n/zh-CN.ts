@@ -23,10 +23,6 @@ export default {
     fileCount: "{count} 个",
     remove: "移除",
     removeTitle: "从列表移除该目录（不会删除磁盘上的文件）",
-    searchPlaceholder: "搜索名称/作者/文件名…",
-    replace: "方块替换",
-    convert: "版本转换",
-    duplicates: "重复文件筛查",
     backups: "备份与日志",
     setup: "版本库",
     update: "更新",
@@ -73,6 +69,8 @@ export default {
   detail: {
     previewSplitterAria: "调整预览区高度",
     previewSplitterTitle: "拖动调整预览区高度，双击复位",
+    /** 版本转换按钮在投影信息区，文案因此归 detail */
+    convert: "版本转换",
     gateWarning:
       "该投影里「{name}」有 {count} 个，超过 {limit} 个时不会自动渲染。",
     startRender: "开始渲染",
@@ -186,6 +184,9 @@ export default {
     dupSuspects: "；另有 {groups} 组疑似重复（名称/尺寸/方块数相同、共 {files} 个文件），内容并不相同，未勾选",
     clearMarks: "清除标记",
     gotIt: "知道了",
+    /** 搜索框与重复筛查按钮在投影列表区，文案因此归 files */
+    searchPlaceholder: "搜索名称/作者/文件名…",
+    duplicates: "重复文件筛查",
     unreadableFiles: "有 {count} 个文件无法读取，未参与判定",
     unreadableDirs: "有 {count} 个子目录无法读取，其中的文件未参与判定",
     /** 两条都出现时的分隔，中文用分号 */
@@ -195,6 +196,7 @@ export default {
     suspectChip: "疑似",
     empty: "点击「添加目录」选择投影所在文件夹",
     checkedCount: "已选 {checked} / {total}",
+    checkedCountOfAll: "已选 {checked} / {total}（共 {all}，匹配 {matched}）",
     checkAll: "全选",
     invert: "反选",
     clear: "清除",
@@ -361,6 +363,8 @@ export default {
     exportTable: "导出表格",
     resetWidths: "列宽复位",
     resetWidthsTitle: "把各列宽度恢复为默认",
+    /** 方块替换按钮在方块列表区，文案因此归 stats */
+    replace: "方块替换",
     hint: "数量按建造所需的物品折算：水与岩浆只算源头一个桶、门与床只算一次、双层台阶算两个，摆法差异（墙上的火把等）与同一物品合为一行；点击任意行可以把它设为方块替换的源方块，表头可拖动调整列宽",
     noIcon: "无图",
     noBlocks: "选择投影文件后显示方块统计",

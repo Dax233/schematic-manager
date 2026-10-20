@@ -252,29 +252,38 @@ describe("界面外壳", () => {
     expect(() => mountApp()).not.toThrow();
   });
 
-  it("工具栏列出全部功能入口", () => {
+  it("功能入口各自出现在被作用的面板里", () => {
     const w = mountApp();
-    const text = w.text();
-    for (const label of [
-      "添加目录",
-      "方块替换",
-      "版本转换",
+    // 入口与它作用的对象在同一区域：搜索与重复筛查在投影列表、
+    // 方块替换在方块列表、版本转换在投影信息区。
+    // 这里核对「不在工具栏、而在对应面板」，防止以后搬家时漏掉或搬错。
+    const toolbar = w.find(".toolbar");
+    expect(toolbar.find("input").exists(), "工具栏不应再有搜索框").toBe(false);
+
+    const labels = (sel: string) =>
+      w.findAll(`${sel} button`).map((b) => b.text().trim());
+    expect(labels(".sidebar__ops").join(" "), "投影列表区应有重复文件筛查").toContain(
       "重复文件筛查",
-      "备份与日志",
-      "版本库",
-    ]) {
-      expect(text, `工具栏应含「${label}」`).toContain(label);
+    );
+
+    // 与选中项无关的入口仍在工具栏
+    const toolbarText = toolbar.text();
+    for (const label of ["添加目录", "备份与日志", "版本库"]) {
+      expect(toolbarText, `工具栏应含「${label}」`).toContain(label);
     }
     w.unmount();
   });
 
-  it("未选中文件时，依赖选中项的按钮被禁用", () => {
+  it("未选中文件时不出现依赖选中项的入口", async () => {
     const w = mountApp();
+    await flushPromises();
     const buttons = w.findAll("button");
     const find = (label: string) => buttons.find((b) => b.text().includes(label));
-    // 这两个功能以「有选中的投影文件」为前提，无选中时应禁用而不是可点后报错
-    expect(find("方块替换")?.attributes("disabled"), "方块替换应禁用").toBeDefined();
-    expect(find("版本转换")?.attributes("disabled"), "版本转换应禁用").toBeDefined();
+    // 方块替换与版本转换都以「选中的投影文件」为前提。它们现在分别放在
+    // 方块列表与投影信息区，而那两块在无选中时整块不渲染，入口自然不可达
+    // ——比「可见但禁用」更彻底，用户不会去点一个点了报错的按钮。
+    expect(find("方块替换"), "无选中时不应出现方块替换").toBeUndefined();
+    expect(find("版本转换"), "无选中时不应出现版本转换").toBeUndefined();
     // 与选中项无关的入口应始终可用
     expect(find("添加目录")?.attributes("disabled")).toBeUndefined();
     expect(find("备份与日志")?.attributes("disabled")).toBeUndefined();
@@ -1053,10 +1062,11 @@ describe("重新扫描后的选中项", () => {
       "选中项已不在列表中，应回到空状态而不是继续显示旧文件的详情",
     ).toContain("选择一个投影文件以查看详情");
 
-    // 依赖选中项的按钮必须同步禁用，否则点下去会作用到旧路径
+    // 依赖选中项的入口必须同步消失，否则点下去会作用到旧路径。
+    // 它们分别放在方块列表与投影信息区，选中项没了这两块就不渲染。
     const btn = (label: string) => w.findAll("button").find((b) => b.text().includes(label));
-    expect(btn("方块替换")?.attributes("disabled"), "移除后应禁用").toBeDefined();
-    expect(btn("版本转换")?.attributes("disabled"), "移除后应禁用").toBeDefined();
+    expect(btn("方块替换"), "移除后不应再有方块替换入口").toBeUndefined();
+    expect(btn("版本转换"), "移除后不应再有版本转换入口").toBeUndefined();
     w.unmount();
   });
 
@@ -2476,7 +2486,8 @@ describe("多目录与列宽复位", () => {
 
     expect(w.text(), "文件已不显示，应回到空状态").toContain("选择一个投影文件以查看详情");
     const btn = (label: string) => w.findAll("button").find((x) => x.text().includes(label));
-    expect(btn("方块替换")?.attributes("disabled"), "依赖选中项的按钮应禁用").toBeDefined();
+    // 入口随信息区 / 方块列表一起消失，用户不会点到作用在旧路径上的按钮
+    expect(btn("方块替换"), "依赖选中项的入口应消失").toBeUndefined();
     w.unmount();
   });
 });

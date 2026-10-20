@@ -12,6 +12,7 @@ import BlockStatTable from "./BlockStatTable.vue";
 import EntityTable from "./EntityTable.vue";
 import { EXPORT_SIZES } from "../render/scene3d";
 import { PREVIEW_MAX_H, PREVIEW_MIN_H } from "../composables/usePreviewResize";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { displayName } from "../i18n";
 import { useAppStore } from "../store";
@@ -22,6 +23,7 @@ const { t } = useI18n();
 const {
   previewHeight,
   previewStage,
+  measurePreviewRowHeight,
   previewResizing,
   startPreviewResize,
   togglePreviewHeight,
@@ -50,7 +52,29 @@ const {
   saveDraft,
   checkedCount,
   hasChecked,
+  openConvert,
 } = useAppStore();
+
+/** 预览行的 DOM，用于实测它拿到的高度 */
+const previewRowEl = ref<HTMLElement | null>(null);
+let rowObserver: ResizeObserver | null = null;
+
+onMounted(() => {
+  // 舞台尺寸必须按实测高度算：控制条是 flex-wrap 的，预览区窄到放不下
+  // 那一排控件时会折行，固定常数就偏了（多算的高度会把舞台顶出面板）。
+  const el = previewRowEl.value;
+  if (!el) return;
+  rowObserver = new ResizeObserver(() => {
+    measurePreviewRowHeight(el.getBoundingClientRect().height);
+  });
+  rowObserver.observe(el);
+  measurePreviewRowHeight(el.getBoundingClientRect().height);
+});
+
+onBeforeUnmount(() => {
+  rowObserver?.disconnect();
+  rowObserver = null;
+});
 </script>
 
 <template>
@@ -58,7 +82,7 @@ const {
     <div class="preview" :style="{ height: previewHeight + 'px' }">
       <!-- 预览与信息并排：左边是 3D 视图，右边是该投影的基本信息与元数据。
            用横向 flex 让「信息在预览右侧」这条要求不随窗口宽度漂移。 -->
-      <div class="preview__main">
+      <div ref="previewRowEl" class="preview__main">
         <div
           class="preview__stage"
           :style="{ width: previewStage.w + 'px', height: previewStage.h + 'px' }"
@@ -151,6 +175,10 @@ const {
                面板高度由用户拖动决定，不钉住的话保存按钮会落到折叠线以下，
                用户得先滚动才能保存，等于按钮藏起来了。 -->
           <div class="preview__actions">
+            <!-- 版本转换放在投影信息区：它读的是当前选中投影的信息再另存一份 -->
+            <a-button size="small" @click="openConvert">
+              {{ t("detail.convert") }}
+            </a-button>
             <a-button
               type="primary"
               size="small"

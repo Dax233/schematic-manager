@@ -20,10 +20,6 @@ const enUS: typeof zhCN = {
     fileCount: "{count} files",
     remove: "Remove",
     removeTitle: "Remove this directory from the list (files on disk are kept)",
-    searchPlaceholder: "Search name/author/file name…",
-    replace: "Block replacement",
-    convert: "Version conversion",
-    duplicates: "Duplicate scan",
     backups: "Backups and logs",
     setup: "Version library",
     update: "Updates",
@@ -71,6 +67,8 @@ const enUS: typeof zhCN = {
   detail: {
     previewSplitterAria: "Adjust the preview height",
     previewSplitterTitle: "Drag to adjust the preview height; double-click to reset",
+    /** 版本转换按钮在投影信息区，文案因此归 detail */
+    convert: "Version conversion",
     gateWarning:
       "This schematic contains {count} “{name}”, which is over the {limit} limit, so it is not rendered automatically.",
     startRender: "Start rendering",
@@ -183,6 +181,9 @@ const enUS: typeof zhCN = {
       "; {groups} suspected duplicate groups (same name/size/block count, {files} files in total) with different content are not checked",
     clearMarks: "Clear marks",
     gotIt: "Got it",
+    /** 搜索框与重复筛查按钮在投影列表区，文案因此归 files */
+    searchPlaceholder: "Search name/author/file name…",
+    duplicates: "Duplicate scan",
     unreadableFiles: "{count} files could not be read and were not considered",
     unreadableDirs:
       "{count} subdirectories could not be read; the files inside were not considered",
@@ -193,6 +194,7 @@ const enUS: typeof zhCN = {
     suspectChip: "Suspected",
     empty: "Click “Add directory” to choose the folder containing your schematics",
     checkedCount: "Selected {checked} / {total}",
+    checkedCountOfAll: "Selected {checked} / {total} ({all} total, {matched} matching)",
     checkAll: "Select all",
     invert: "Invert",
     clear: "Clear",
@@ -365,6 +367,8 @@ const enUS: typeof zhCN = {
     exportTable: "Export table",
     resetWidths: "Reset column widths",
     resetWidthsTitle: "Restore the default width of every column",
+    /** 方块替换按钮在方块列表区，文案因此归 stats */
+    replace: "Block replacement",
     hint: "Counts are folded into the items needed to build it: water and lava count only the single source bucket, doors and beds count once, double slabs count twice, and placement variants (wall torches and the like) are merged into the same item as one row; click any row to set it as the source block for block replacement, and drag table headers to resize columns",
     noIcon: "No icon",
     noBlocks: "Select a schematic to see block statistics",
