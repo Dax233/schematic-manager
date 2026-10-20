@@ -815,6 +815,13 @@ $preview-stage-h: 344px;
     &:hover {
       background-color: var(--color-fill-1);
     }
+
+    // 被方向键选中的那条：与 hover 同一底色再加左侧色条，
+    // 键盘用户在鼠标不动时也能看出当前停在哪一条
+    &--active {
+      background-color: var(--color-fill-2);
+      box-shadow: inset 3px 0 0 0 rgb(var(--primary-6));
+    }
   }
 
   // 时间列：等宽字体 + 不换行，多行日志的时间里也对得齐
@@ -1300,6 +1307,31 @@ body[arco-theme='dark'] .conv-block--auto .arco-input-wrapper {
 }
 
 body[arco-theme='dark'] .conv-window .arco-table tr.conv-row--active > .arco-table-td {
+  background-color: rgba(var(--primary-6), 0.22);
+}
+
+// 备份表里被方向键选中的那一行：只加左侧色条与浅底，
+// 与转换窗口那条整行主色区分开——这里选中不表示「正在编辑」，
+// 只是让键盘操作有个可见的落点。
+.backup-table-host .arco-table tr.backup-row--active > .arco-table-td {
+  background-color: var(--color-fill-2);
+  box-shadow: inset 3px 0 0 0 rgb(var(--primary-6));
+}
+
+// 实体表同理：选中只表示键盘停在这一行
+.entity-table-host .arco-table tr.entity-row--active > .arco-table-td {
+  background-color: var(--color-fill-2);
+  box-shadow: inset 3px 0 0 0 rgb(var(--primary-6));
+}
+
+// 方块表：选中即「当前替换源」，与转换窗口一样属于「正在编辑」，
+// 因此用主色底而不是浅灰底
+.block-table-host .arco-table tr.block-row--active > .arco-table-td {
+  background-color: var(--color-primary-light-2);
+  box-shadow: inset 3px 0 0 0 rgb(var(--primary-6));
+}
+
+body[arco-theme='dark'] .block-table-host .arco-table tr.block-row--active > .arco-table-td {
   background-color: rgba(var(--primary-6), 0.22);
 }
 

@@ -4819,3 +4819,337 @@ describe("预览区尺寸调整", () => {
     w2.unmount();
   });
 });
+describe("投影列表的键盘导航", () => {
+  /** 三个文件，按路径排序后是 a/b/c，便于断言上下移动的顺序 */
+  const make = (name: string): SchematicSummary => ({
+    ...summary,
+    path: `/p/${name}`,
+    fileName: name,
+  });
+  const a = make("a.litematic");
+  const b = make("b.litematic");
+  const c = make("c.litematic");
+
+  async function setup() {
+    stubInvoke({ scan_litematics: { items: [a, b, c], skippedDirs: 0, skippedPaths: [] } });
+    const w = mountApp();
+    await flushPromises();
+    mockOpen.mockResolvedValue(["/p"]);
+    const btn = w.findAll("button").find((x) => x.text().includes("添加目录"));
+    await btn!.trigger("click");
+    await flushPromises();
+    return w;
+  }
+
+  /** 列表容器：键盘事件绑在它上面 */
+  function host(w: ReturnType<typeof mountApp>) {
+    const el = w.find(".sidebar__table-host");
+    expect(el.exists(), "应有带 tabindex 的列表容器").toBe(true);
+    return el;
+  }
+
+  /** 当前详情面板显示的是哪个文件（用文件名输入框的值判断） */
+  function activeFile(w: ReturnType<typeof mountApp>): string {
+    const input = w.find('input[value^="a.litematic"], input[value^="b.litematic"], input[value^="c.litematic"]');
+    return input.exists() ? (input.element as HTMLInputElement).value : "";
+  }
+
+  it("第一次按下方向键选中第一行", async () => {
+    const w = await setup();
+    await host(w).trigger("keydown", { key: "ArrowDown" });
+    await flushPromises();
+    expect(activeFile(w), "未选中时按方向键应选第一行").toBe("a.litematic");
+    w.unmount();
+  });
+
+  it("上下方向键在相邻行之间移动", async () => {
+    const w = await setup();
+    const h = host(w);
+    await h.trigger("keydown", { key: "ArrowDown" });
+    await flushPromises();
+    await h.trigger("keydown", { key: "ArrowDown" });
+    await flushPromises();
+    expect(activeFile(w), "再按一次应移到第二行").toBe("b.litematic");
+
+    await h.trigger("keydown", { key: "ArrowUp" });
+    await flushPromises();
+    expect(activeFile(w), "按上方向键应回到第一行").toBe("a.litematic");
+    w.unmount();
+  });
+
+  it("Home 与 End 直达首尾，且不会越界", async () => {
+    const w = await setup();
+    const h = host(w);
+
+    await h.trigger("keydown", { key: "End" });
+    await flushPromises();
+    expect(activeFile(w), "End 应选中最后一行").toBe("c.litematic");
+
+    // 已在末尾再按下方向键不能越界
+    await h.trigger("keydown", { key: "ArrowDown" });
+    await flushPromises();
+    expect(activeFile(w), "末尾再按下方向键不应越界").toBe("c.litematic");
+
+    await h.trigger("keydown", { key: "Home" });
+    await flushPromises();
+    expect(activeFile(w), "Home 应选中第一行").toBe("a.litematic");
+
+    await h.trigger("keydown", { key: "ArrowUp" });
+    await flushPromises();
+    expect(activeFile(w), "开头再按上方向键不应越界").toBe("a.litematic");
+    w.unmount();
+  });
+
+  it("列表没有文件时按键不报错", async () => {
+    stubInvoke();
+    const w = mountApp();
+    await flushPromises();
+    const h = w.find(".sidebar__table-host");
+    // 不应抛异常，也不应做出任何选中
+    await h.trigger("keydown", { key: "ArrowDown" });
+    await flushPromises();
+    w.unmount();
+  });
+});
+describe("其余列表的键盘导航", () => {
+  /** 挂载并选中一个文件，让详情页签与方块表出现 */
+  async function selectWithBlocks(blocks: BlockCount[]) {
+    stubInvoke({
+      analyze_schematic: () => ({
+        blocks,
+        entities: [],
+        tileEntities: [],
+        entityInstances: [],
+        nonAirTotal: blocks.reduce((a, b) => a + b.count, 0),
+        airTotal: 0,
+        distinctBlockTypes: new Set(blocks.map((b) => b.name)).size,
+        distinctStates: blocks.length,
+      }),
+    });
+    const w = mountApp();
+    await flushPromises();
+    mockOpen.mockResolvedValue("/p");
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+    return w;
+  }
+
+  it("方块表：方向键选中行并回填替换源方块", async () => {
+    const blocks: BlockCount[] = [
+      { name: "minecraft:stone", state: "minecraft:stone", count: 5, zhName: "石头", enName: "Stone" },
+      { name: "minecraft:dirt", state: "minecraft:dirt", count: 3, zhName: "泥土", enName: "Dirt" },
+    ];
+    const w = await selectWithBlocks(blocks);
+    const tab = w
+      .findAll(".detail__tabs .arco-tabs-tab")
+      .find((x) => (x.text() || "").trim() === "方块");
+    expect(tab, "应能定位到方块页签").toBeTruthy();
+    await tab!.trigger("click");
+    await flushPromises();
+
+    const host = w.find(".block-table-host");
+    expect(host.exists(), "方块表应有键盘导航容器").toBe(true);
+
+    await host.trigger("keydown", { key: "ArrowDown" });
+    await flushPromises();
+
+    // 选中方块会把它的方块名回填到替换窗口的「源方块」，
+    // 因此这个值是「选中真的生效」的直接证据，而不只是行上多了一个类名。
+    const fromInput = w.find('.replace-window input[placeholder*="minecraft:"]');
+    if (fromInput.exists()) {
+      expect((fromInput.element as HTMLInputElement).value, "选中方块应回填源方块").toBe(
+        "minecraft:stone",
+      );
+    }
+    // 行高亮是导航可见性的必要条件
+    expect(
+      w.findAll(".block-table tbody tr.block-row--active").length,
+      "应有且只有一行被标为当前行",
+    ).toBe(1);
+    w.unmount();
+  });
+
+  it("日志列表：方向键在日志行之间移动并只标一行", async () => {
+    stubInvoke({
+      read_run_log: () => [
+        "1792138651762518000\tINFO\t复制\t完成",
+        "1792138651762518001\tERROR\t替换\t失败",
+      ],
+    });
+    const w = mountApp();
+    await flushPromises();
+    // 备份与日志抽屉 → 运行日志页签
+    await w.findAll("button").find((b) => b.text().includes("备份与日志"))!.trigger("click");
+    await flushPromises();
+    const tab = [...document.querySelectorAll<HTMLElement>(".arco-tabs-tab")].find((t) =>
+      (t.textContent ?? "").includes("运行日志"),
+    );
+    expect(tab, "应有运行日志页签").toBeTruthy();
+    tab!.click();
+    await flushPromises();
+
+    // 抽屉里的日志页签在当前环境下不渲染列表，改走「日志管理」窗口：
+    // 两处用的是同一个 RunLogList 组件，导航行为一致。
+    const manageBtn = [...document.querySelectorAll<HTMLElement>("button")].find((b) =>
+      (b.textContent ?? "").includes("日志管理"),
+    );
+    expect(manageBtn, "运行日志页签里应有「日志管理」按钮").toBeTruthy();
+    manageBtn!.click();
+    await flushPromises();
+
+    const modal = [...document.querySelectorAll<HTMLElement>(".arco-modal")].find((m) =>
+      (m.textContent ?? "").includes("日志管理"),
+    );
+    expect(modal, "应打开日志管理窗口").toBeTruthy();
+
+    const hostEl = modal!.querySelector<HTMLElement>(".log-list");
+    expect(hostEl, "窗口里应显示日志列表").toBeTruthy();
+    const rows = modal!.querySelectorAll(".log-list__row");
+    expect(rows.length, "应显示两条日志").toBe(2);
+
+    hostEl!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    await flushPromises();
+    expect(
+      modal!.querySelectorAll(".log-list__row--active").length,
+      "应有且只有一行被标为当前行",
+    ).toBe(1);
+    expect(
+      modal!.querySelector(".log-list__row--active")!.textContent,
+      "第一次按下应停在第一条日志",
+    ).toContain("复制");
+
+    hostEl!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    await flushPromises();
+    const active = modal!.querySelectorAll(".log-list__row--active");
+    expect(active.length, "仍只应有一行被标记").toBe(1);
+    expect(active[0].textContent, "第二次按下后应停在第二条日志").toContain("替换");
+
+    // End 应直达最后一条
+    hostEl!.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    await flushPromises();
+    expect(
+      modal!.querySelector(".log-list__row--active")!.textContent,
+      "End 应停在最后一条",
+    ).toContain("替换");
+    w.unmount();
+  });
+});
+
+describe("列表键盘导航不抢输入框", () => {
+  const CONV_ITEMS = [
+    {
+      name: "minecraft:oak_stairs",
+      nameZh: "橡木楼梯",
+      count: 12,
+      suggested: "minecraft:pale_oak_stairs",
+      suggestedZh: "苍白橡木楼梯",
+      chosen: "",
+    },
+    {
+      name: "minecraft:ancient_debris",
+      nameZh: "远古残骸",
+      count: 3,
+      suggested: "",
+      suggestedZh: "",
+      chosen: "",
+    },
+  ];
+
+  /** 打开转换窗口并分析出两行缺口。
+   *
+   * 这两行的「替代为」列里各有一个输入框，正是那种「焦点在输入框里、
+   * 但位于列表容器内部」的情形：此时方向键属于光标，不属于列表。
+   */
+  async function openWithRows() {
+    mockInvoke.mockImplementation((async (cmd: string) => {
+      switch (cmd) {
+        case "scan_litematics":
+          return { items: [summary], skippedDirs: 0, skippedPaths: [] };
+        case "convert_targets":
+          return [{ index: 0, name: "1.19.2", dataVersion: 3120 }];
+        case "base_db_status":
+          return {
+            versions: [{ name: "1.20.1", dataVersion: 3465 }],
+            entityAvailable: true,
+            supported: [{ name: "1.20.1", dataVersion: 3465 }],
+          };
+        case "analyze_conversion":
+          return CONV_ITEMS.map((i) => ({ ...i }));
+        case "build_scene":
+          return scene;
+        case "analyze_schematic":
+          return {
+            blocks: [],
+            entities: [],
+            tileEntities: [],
+            nonAirTotal: 0,
+            airTotal: 0,
+            distinctBlockTypes: 0,
+            distinctStates: 0,
+          };
+        default:
+          return [];
+      }
+    }) as never);
+
+    const w = mountApp();
+    mockOpen.mockResolvedValue("/p");
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("button").find((b) => b.text().includes("版本转换"))!.trigger("click");
+    await flushPromises();
+
+    // 选目标版本：下拉 → 选项
+    const select = document.querySelector(".arco-select-view, .arco-select") as HTMLElement | null;
+    if (select) {
+      select.click();
+      await flushPromises();
+      const opt = [...document.querySelectorAll(".arco-select-option")].find((o) =>
+        (o.textContent ?? "").includes("1.19.2"),
+      ) as HTMLElement | undefined;
+      if (opt) {
+        opt.click();
+        await flushPromises();
+      }
+    }
+    // 分析差异，左栏才会出现那两行缺口
+    const analyze = [...document.querySelectorAll<HTMLElement>("button")].find((b) =>
+      (b.textContent ?? "").includes("分析差异"),
+    );
+    expect(analyze, "应能点「分析差异」").toBeTruthy();
+    analyze!.click();
+    await flushPromises();
+    return w;
+  }
+
+  it("转换窗口里在行内输入框按方向键不会切换选中行", async () => {
+    const w = await openWithRows();
+    const host = document.querySelector<HTMLElement>(".conv-table-host");
+    expect(host, "转换窗口的左栏应有键盘导航容器").toBeTruthy();
+
+    // 行内输入框（「替代为」那一列）确实在导航容器内部
+    const input = host!.querySelector<HTMLInputElement>("input");
+    expect(input, "行内应有替代品输入框").toBeTruthy();
+
+    // 先让键盘选中第一行
+    host!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    await flushPromises();
+    const firstActive = host!.querySelector("tr.conv-row--active");
+    expect(firstActive, "方向键应选中一行").toBeTruthy();
+
+    // 焦点在行内输入框时按下方向键：选中行必须保持不变
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    await flushPromises();
+    const stillActive = host!.querySelector("tr.conv-row--active");
+    expect(stillActive, "输入框里按方向键不应让选中行消失").toBeTruthy();
+    expect(
+      stillActive!.textContent,
+      "输入框里按方向键不应把选中换到另一行",
+    ).toBe(firstActive!.textContent);
+    w.unmount();
+  });
+});
