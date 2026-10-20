@@ -21,12 +21,6 @@ export interface PanelResizeOptions {
   min: number;
   /** 允许的最大尺寸 */
   max: number;
-  /** 指针移动方向与尺寸变化方向相反时为 true。
-   *
-   * 分隔条画在面板**下方**时用它：指针往上拖应当让面板变高，而指针纵坐标
-   * 是从上往下递增的，两者方向相反。
-   */
-  reverse?: boolean;
   /** 尺寸上限还要受容器大小限制时的计算函数。
    *
    * 拖动到窗口边缘时，只按固定 max 夹会允许面板压住别的分区，
@@ -46,10 +40,10 @@ export function usePanelResize(opts: PanelResizeOptions) {
     return Math.min(Math.max(Math.round(value), lower), upper);
   }
 
-  /** 从指针位置算出尺寸 */
+  /** 从指针位置算出尺寸：指针与尺寸同向变化，
+   *  分隔条因此始终跟着鼠标走，不会出现「分隔条往一边、鼠标往另一边」。 */
   function sizeFromPointer(startPointer: number, startSize: number, current: number): number {
-    const delta = current - startPointer;
-    return clamp(startSize + (opts.reverse ? -delta : delta));
+    return clamp(startSize + (current - startPointer));
   }
 
   let startPointer = 0;
@@ -89,14 +83,14 @@ export function usePanelResize(opts: PanelResizeOptions) {
   }
 
   /** 键盘操作：分隔条是 role="separator" 的可聚焦元素，
-   *  只支持鼠标拖动会让键盘用户无法调整布局。 */
+   *  只支持鼠标拖动会让键盘用户无法调整布局。
+   *
+   * 方向键的含义与鼠标拖动一致：「往分隔条自己移动的方向」= 变大。
+   * 横向时右方向键加宽、纵向时下方向键加高。 */
   function onSplitterKey(e: KeyboardEvent) {
     const step = e.shiftKey ? 40 : 8;
-    // 方向键的语义随布局翻转：分隔条在面板下方时，「向上」意味着面板变大
-    const up = opts.axis === "x" ? "ArrowLeft" : "ArrowUp";
-    const down = opts.axis === "x" ? "ArrowRight" : "ArrowDown";
-    const grow = opts.reverse ? up : down;
-    const shrink = opts.reverse ? down : up;
+    const grow = opts.axis === "x" ? "ArrowRight" : "ArrowDown";
+    const shrink = opts.axis === "x" ? "ArrowLeft" : "ArrowUp";
     if (e.key === grow) {
       size.value = clamp(size.value + step);
     } else if (e.key === shrink) {

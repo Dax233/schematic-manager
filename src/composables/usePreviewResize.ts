@@ -45,8 +45,8 @@ export function usePreviewResize() {
     defaultSize: PREVIEW_DEFAULT_H,
     min: PREVIEW_MIN_H,
     max: PREVIEW_MAX_H,
-    // 分隔条在面板下方，指针往上拖应当让面板变高
-    reverse: true,
+    // 预览行在分隔条**上方**，尺寸随指针同向变化：指针下移（clientY 变大）
+    // 预览行变高，分隔条因此始终跟着鼠标走。
     // 详情区高度 = 窗口高 − 标题栏与工具栏占位，页签区还要留 160
     maxByWindow: () => window.innerHeight - 199 - 160,
   });

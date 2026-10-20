@@ -4567,25 +4567,49 @@ describe("预览区尺寸调整", () => {
     w.unmount();
   });
 
-  it("拖高度分隔条：只改高度，不动宽度", async () => {
+  it("拖高度分隔条：只改高度，不动宽度，且分隔条跟着鼠标走", async () => {
     const w = await mountWithSelection();
     const beforePanel = panelHeight(w);
     const beforeStage = stageSize(w);
 
     const el = horizSplitter(w);
-    // 分隔条在面板下方：指针上移应让面板变高
+    // 预览行在分隔条上方：指针下移（clientY 变大）让预览行变高，
+    // 分隔条本身因此向下移动，与鼠标同向
     el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientY: 400 }));
-    window.dispatchEvent(new PointerEvent("pointermove", { clientY: 250 }));
+    window.dispatchEvent(new PointerEvent("pointermove", { clientY: 520 }));
     await flushPromises();
 
-    expect(panelHeight(w), "往上拖应让面板变高").toBeGreaterThan(beforePanel);
+    expect(panelHeight(w), "往下拖应让面板变高").toBeGreaterThan(beforePanel);
     const after = stageSize(w);
     expect(after.h, "舞台高度应跟着变").toBeGreaterThan(beforeStage.h);
     // 这条是「拖高度却改了宽度」的回归防护
     expect(after.w, "拖高度不应改变舞台宽度").toBe(beforeStage.w);
 
-    window.dispatchEvent(new PointerEvent("pointerup", { clientY: 250 }));
+    window.dispatchEvent(new PointerEvent("pointerup", { clientY: 520 }));
     await flushPromises();
+    w.unmount();
+  });
+
+  it("拖高度分隔条的方向与鼠标一致：上移变矮、下移变高", async () => {
+    const w = await mountWithSelection();
+
+    const drag = async (from: number, to: number) => {
+      const el = horizSplitter(w);
+      el.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, button: 0, clientY: from }),
+      );
+      window.dispatchEvent(new PointerEvent("pointermove", { clientY: to }));
+      window.dispatchEvent(new PointerEvent("pointerup", { clientY: to }));
+      await flushPromises();
+      return panelHeight(w);
+    };
+
+    const base = panelHeight(w);
+    const down = await drag(400, 460);
+    expect(down, "指针下移应让预览行变高").toBeGreaterThan(base);
+
+    const up = await drag(460, 380);
+    expect(up, "指针上移应让预览行变矮").toBeLessThan(down);
     w.unmount();
   });
 
@@ -4633,11 +4657,15 @@ describe("预览区尺寸调整", () => {
       await flushPromises();
     };
 
+    // 预览行在分隔条上方：指针一路下移让它变高，停在上限
     await dragTo(99999);
-    expect(panelHeight(w), "往下拖到底应停在下限").toBeGreaterThanOrEqual(200);
+    const max = panelHeight(w);
+    expect(max, "往下拖到底应停在最大高度").toBeLessThanOrEqual(window.innerHeight);
+    expect(max, "最大高度要容得下舞台与控制条").toBeGreaterThan(200);
 
+    // 指针一路上移让它变矮，停在下限
     await dragTo(-99999);
-    expect(panelHeight(w), "往上拖到底不应超出可用高度").toBeLessThanOrEqual(window.innerHeight);
+    expect(panelHeight(w), "往上拖到底应停在下限").toBe(200);
     w.unmount();
   });
 
