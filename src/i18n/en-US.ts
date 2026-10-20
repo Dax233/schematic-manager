@@ -161,7 +161,8 @@ const enUS: typeof zhCN = {
     copyFailed: "Copy failed: {error}",
   },
   files: {
-    colName: "Name",
+    // 这一列显示的是磁盘文件名（dataIndex: fileName），不是投影的「名称」
+    colName: "File name",
     colMcVersion: "Made with",
     colDims: "Size",
     colBlocks: "Blocks",
@@ -173,18 +174,18 @@ const enUS: typeof zhCN = {
     delete: "Delete",
     copy: "Copy",
     copyTo: "Copy to",
-    openFolder: "Open folder",
+    openFolder: "Open containing directory",
     resetWidths: "Reset column widths",
     resetWidthsTitle: "Restore the default width of every column",
     dupFound:
       "{groups} duplicate groups with identical content, {files} files in total (moved to the top; the extra copies are checked)",
     dupNotFound: "No duplicates with identical content found",
     dupSuspects:
-      "; {groups} suspected duplicate groups (same name/size/block count, {files} files in total) with different content are not checked",
+      "; {groups} suspected duplicate groups (same schematic name/size/block count, {files} files in total) with different content are not checked",
     clearMarks: "Clear marks",
     gotIt: "Got it",
     /** 搜索框与重复筛查按钮在投影列表区，文案因此归 files */
-    searchPlaceholder: "Search name/author/file name…",
+    searchPlaceholder: "Search schematic name/author/file name…",
     duplicates: "Duplicate scan",
     unreadableFiles: "{count} files could not be read and were not considered",
     unreadableDirs:
@@ -192,9 +193,9 @@ const enUS: typeof zhCN = {
     unreadableBothSeparator: "; ",
     dupGroupTitle: "Duplicate group {no}: identical content to the other files in the group",
     suspectTitle:
-      "Suspected duplicate: same name, size and block count but different content; check it yourself",
+      "Suspected duplicate: same schematic name, size and block count but different content; check it yourself",
     suspectChip: "Suspected",
-    empty: "Click “Add directory” to choose the folder containing your schematics",
+    empty: "Click “Add directory” to choose the directory containing your schematics",
     checkedCount: "Selected {checked} / {total}",
     checkedCountOfAll: "Selected {checked} / {total} ({all} total, {matched} matching)",
     checkAll: "Select all",
@@ -224,9 +225,9 @@ const enUS: typeof zhCN = {
     copiedToClipboard:
       "Copied {count} files ({size}) to the clipboard; paste them in your file manager",
     copiedToDir: "Copied {count} files ({size}) to {dir}",
-    chooseDestDir: "Choose the destination folder",
+    chooseDestDir: "Choose the destination directory",
     located: "Revealed in the file manager: {name}",
-    chooseSourceDir: "Choose the folder containing your schematics (multiple allowed)",
+    chooseSourceDir: "Choose the directory containing your schematics (multiple allowed)",
     openPickerFailed: "Failed to open the directory picker: {error}",
     scanDirFailed: "Failed to scan {dir}: {error}",
     noNewDirs: "No new directories were added",

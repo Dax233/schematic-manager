@@ -767,7 +767,7 @@ export function createFileListSlice(s: FileListDeps) {
     }
   }
 
-  /** 右键菜单：只保留「打开文件夹」，作用于右键点中的那一行。
+  /** 右键菜单：只保留「打开所在目录」，作用于右键点中的那一行。
    *
    * 用 a-table 的 rowContextmenu 事件而不是自定义 tr 插槽：
    * 该插槽在 Arco 里不存在（实测只在 tbody 内部渲染 tr），

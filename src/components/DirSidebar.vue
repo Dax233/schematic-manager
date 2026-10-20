@@ -263,7 +263,7 @@ function onSortFieldChange(v: unknown) {
       </a-button>
     </div>
 
-    <!-- 行的右键菜单：只保留「打开文件夹」 -->
+    <!-- 行的右键菜单：只保留「打开所在目录」 -->
     <div
       v-if="ctxMenu.open"
       class="ctx-menu"

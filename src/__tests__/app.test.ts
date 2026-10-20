@@ -1982,7 +1982,7 @@ describe("目录栏宽度调整", () => {
     expect(def, "默认宽度不应把右侧挤没").toBeLessThanOrEqual(1200);
 
     // 关键：各列默认宽度之和不能超过目录栏默认宽度，
-    // 否则最后一列会被挤出可视区——名称加宽本意是「显示更多」，
+    // 否则最后一列会被挤出可视区——文件名加宽本意是「显示更多」，
     // 挤出末列就与目的相反。这里按 colgroup 的实际宽度求和核对。
     const cols = w.findAll(".sidebar colgroup col");
     const sum = cols.reduce((acc, c) => {
@@ -2127,8 +2127,8 @@ describe("目录栏多选与文件操作", () => {
 
   it("勾选后按钮才可用，未勾选时禁用", async () => {
     const w = await mountWithRows();
-    // 未勾选：删除/复制/复制到/打开文件夹都应禁用
-    for (const label of ["删除", "复制", "复制到", "打开文件夹"]) {
+    // 未勾选：删除/复制/复制到/打开所在目录都应禁用
+    for (const label of ["删除", "复制", "复制到", "打开所在目录"]) {
       expect(btn(w, label), `应有「${label}」按钮`).toBeTruthy();
       expect(btn(w, label)!.attributes("disabled"), `未勾选时「${label}」应禁用`).toBeDefined();
     }
@@ -2137,7 +2137,7 @@ describe("目录栏多选与文件操作", () => {
 
     await rowCheckbox(w, 0).setValue(true);
     await flushPromises();
-    for (const label of ["删除", "复制", "复制到", "打开文件夹"]) {
+    for (const label of ["删除", "复制", "复制到", "打开所在目录"]) {
       expect(btn(w, label)!.attributes("disabled"), `勾选后「${label}」应可用`).toBeUndefined();
     }
     w.unmount();
@@ -2200,7 +2200,7 @@ describe("目录栏多选与文件操作", () => {
     w.unmount();
   });
 
-  it("右键菜单点「打开文件夹」要真的执行（pointerdown 不能先关掉菜单）", async () => {
+  it("右键菜单点「打开所在目录」要真的执行（pointerdown 不能先关掉菜单）", async () => {
     // 这条防的是「右键菜单点不动」：菜单由 v-if 控制，而全局监听在 window 的
     // pointerdown 上关闭它。真实点击的顺序是 pointerdown → click，
     // 若 pointerdown 就把菜单摘掉，click 永远落不到菜单项上。
@@ -2251,14 +2251,14 @@ describe("目录栏多选与文件操作", () => {
     w.unmount();
   });
 
-  it("打开文件夹只用第一个勾选项（资源管理器只能选中一个）", async () => {
+  it("打开所在目录只用第一个勾选项（资源管理器只能选中一个）", async () => {
     const w = await mountWithRows(3);
     await rowCheckbox(w, 0).setValue(true);
     await rowCheckbox(w, 2).setValue(true);
     await flushPromises();
 
     mockInvoke.mockResolvedValueOnce(undefined);
-    await btn(w, "打开文件夹")!.trigger("click");
+    await btn(w, "打开所在目录")!.trigger("click");
     await flushPromises();
 
     const call = mockInvoke.mock.calls.find((c) => c[0] === "reveal_in_file_manager");
@@ -2373,7 +2373,7 @@ describe("多目录与列宽复位", () => {
     w.unmount();
   });
 
-  it("名称列明显宽于其余各列", async () => {
+  it("文件名列明显宽于其余各列", async () => {
     const w = mountApp();
     // 断言 colgroup 上的宽度而不是 getBoundingClientRect：
     // jsdom 不做布局，所有元素尺寸都是 0，量出来只会得到 0 比 0。
@@ -2387,14 +2387,14 @@ describe("多目录与列宽复位", () => {
       expect(m, `第 ${i} 列应带宽度：${style}`).toBeTruthy();
       return Number(m![1]);
     };
-    // 顺序：选择列、名称、制作版本、尺寸、方块总数、占位列
+    // 顺序：选择列、文件名、制作版本、尺寸、方块总数、占位列
     const name = widthOf(1);
     const others = [widthOf(2), widthOf(3), widthOf(4)];
     // 用关系而不是绝对值：绝对值会随后续样式微调而失效，
-    // 这里要保证的是「名称确实是被加宽的那一列」。
+    // 这里要保证的是「文件名确实是被加宽的那一列」。
     expect(
       name,
-      `名称列(${name}) 应比其余各列(${others.join("/")})都宽出一倍以上`,
+      `文件名列(${name}) 应比其余各列(${others.join("/")})都宽出一倍以上`,
     ).toBeGreaterThan(Math.max(...others) * 2);
     w.unmount();
   });
@@ -2642,7 +2642,7 @@ describe("界面状态记忆", () => {
     // jsdom 没有布局，量不到像素；改读 colgroup 里的内联宽度（Arco 会写进去）
     const cols = w.findAll(".sidebar colgroup col");
     const widths = cols.map((c) => (c.element as HTMLElement).style.width);
-    expect(widths, "名称列应恢复为用户拖过的 420px").toContain("420px");
+    expect(widths, "文件名列应恢复为用户拖过的 420px").toContain("420px");
     expect(widths, "制作版本列应恢复为用户拖过的 120px").toContain("120px");
     w.unmount();
   });
@@ -4355,7 +4355,7 @@ describe("投影列表排序", () => {
     return w;
   }
 
-  /** 表格里当前的名称列顺序（只取数据行） */
+  /** 表格里当前的文件名列顺序（只取数据行） */
   function order(w: ReturnType<typeof mountApp>): string[] {
     // 第一列是行选择复选框列（文本为空），文件名不在第一列；
     // 直接按整行里的 .litematic 片段取，稳定且与列顺序无关
@@ -4506,6 +4506,26 @@ it("默认按路径排序，未选字段时就是文件系统的扫描顺序", a
     ]);
     w2.unmount();
   });
+});
+describe("界面术语一致性", () => {
+  it("投影列表的列标题说「文件名」，不与「投影名称」混淆", async () => {
+    // 这一列绑定的是 fileName，而投影名称是另一个可编辑字段。
+    // 标题若只写「名称」，用户会以为改这里就是改投影名称。
+    stubInvoke();
+    const w = mountApp();
+    await flushPromises();
+    mockOpen.mockResolvedValue(["/p"]);
+    const btn = w.findAll("button").find((b) => b.text().includes("添加目录"));
+    await btn!.trigger("click");
+    await flushPromises();
+
+    const headers = w.findAll(".sidebar .arco-table-th").map((h) => h.text().trim());
+    expect(headers, "文件名列的标题应写明是文件名").toContain("文件名");
+    expect(headers, "不应再有笼统的「名称」列标题").not.toContain("名称");
+    w.unmount();
+  });
+
+
 });
 describe("预览控制条", () => {
   /** 挂载并选中一个文件，让控制条出现 */
