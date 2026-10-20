@@ -11,7 +11,12 @@ import SceneViewer from "./SceneViewer.vue";
 import BlockStatTable from "./BlockStatTable.vue";
 import EntityTable from "./EntityTable.vue";
 import { EXPORT_SIZES } from "../render/scene3d";
-import { PREVIEW_MAX_H, PREVIEW_MIN_H } from "../composables/usePreviewResize";
+import {
+  PREVIEW_MAX_H,
+  PREVIEW_MAX_W,
+  PREVIEW_MIN_H,
+  PREVIEW_MIN_W,
+} from "../composables/usePreviewResize";
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { displayName } from "../i18n";
@@ -22,12 +27,17 @@ const { t } = useI18n();
 
 const {
   previewHeight,
-  previewStage,
+  previewWidth,
+  previewStageHeight,
   measurePreviewRowHeight,
-  previewResizing,
-  startPreviewResize,
+  previewHorizResizing,
+  previewVertResizing,
+  startPreviewHeightResize,
+  startPreviewWidthResize,
   togglePreviewHeight,
-  onPreviewSplitterKey,
+  togglePreviewWidth,
+  onPreviewHeightKey,
+  onPreviewWidthKey,
   viewer,
   scene,
   sceneLoading,
@@ -75,17 +85,24 @@ onBeforeUnmount(() => {
   rowObserver?.disconnect();
   rowObserver = null;
 });
+
 </script>
 
 <template>
-  <div class="detail" :class="{ 'is-resizing': previewResizing }">
+  <div
+    class="detail"
+    :class="{
+      'is-resizing-h': previewHorizResizing,
+      'is-resizing-v': previewVertResizing,
+    }"
+  >
     <div class="preview" :style="{ height: previewHeight + 'px' }">
       <!-- 预览与信息并排：左边是 3D 视图，右边是该投影的基本信息与元数据。
            用横向 flex 让「信息在预览右侧」这条要求不随窗口宽度漂移。 -->
       <div ref="previewRowEl" class="preview__main">
         <div
           class="preview__stage"
-          :style="{ width: previewStage.w + 'px', height: previewStage.h + 'px' }"
+          :style="{ width: previewWidth + 'px', height: previewStageHeight + 'px' }"
         >
           <!-- 方块数超过阈值：默认不生成几何，等用户点「开始渲染」。
                三万块以上的场景建几何并上传显存会明显卡顿，何时做由用户定。 -->
@@ -113,6 +130,26 @@ onBeforeUnmount(() => {
             />
           </a-spin>
         </div>
+
+        <!-- 舞台与信息列之间的垂直分隔条：拖动它改舞台宽度，
+             信息列吃掉剩余宽度，两者合起来占满预览行、右侧不留空白。
+             只在有信息列时出现——没有可分隔的对象时留一条空条没有意义。 -->
+        <div
+          v-if="selected"
+          class="splitter"
+          role="separator"
+          aria-orientation="vertical"
+          :aria-label="t('detail.previewWidthSplitterAria')"
+          :aria-valuenow="previewWidth"
+          :aria-valuemin="PREVIEW_MIN_W"
+          :aria-valuemax="PREVIEW_MAX_W"
+          tabindex="0"
+          :title="t('detail.previewWidthSplitterTitle')"
+          @pointerdown="startPreviewWidthResize"
+          @dblclick="togglePreviewWidth"
+          @keydown="onPreviewWidthKey"
+        />
+
         <div class="preview__info" v-if="selected">
           <!-- 可编辑区：文件名、投影名称、作者、描述。操作行在它外面，
                因此内容再长也不会把保存按钮挤出可视范围。
@@ -264,7 +301,7 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 预览区与页签区之间的水平分隔条：往上拖让预览占更多高度，
-         往下拖把空间让给页签区。舞台尺寸随之等比缩放，窗口本身不改变它。 -->
+         往下拖把空间让给页签区。它只改高度，舞台宽度由上面那条垂直分隔条控制。 -->
     <div
       class="splitter splitter--horizontal"
       role="separator"
@@ -275,9 +312,9 @@ onBeforeUnmount(() => {
       :aria-valuemax="PREVIEW_MAX_H"
       tabindex="0"
       :title="t('detail.previewSplitterTitle')"
-      @pointerdown="startPreviewResize"
+      @pointerdown="startPreviewHeightResize"
       @dblclick="togglePreviewHeight"
-      @keydown="onPreviewSplitterKey"
+      @keydown="onPreviewHeightKey"
     />
 
     <a-tabs

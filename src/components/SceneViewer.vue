@@ -385,7 +385,7 @@ defineExpose({
   overflow: hidden;
 
   &__canvas {
-    // 画布容器：尺寸由外部样式决定（默认 200×200，见 .preview__stage）
+    // 画布容器：占满父容器（预览舞台），实际宽高由 .preview__stage 决定
     width: 100%;
     height: 100%;
     overflow: hidden;

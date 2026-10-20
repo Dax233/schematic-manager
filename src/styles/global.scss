@@ -421,11 +421,17 @@ body[arco-theme='dark'] .titlebar__logo {
   min-height: 0;
   background: var(--color-bg-2);
 
-  // 拖动预览区分隔条期间：屏蔽文本选择并统一光标，
-  // 否则指针移到信息列上时光标会跳回默认样式
-  &.is-resizing {
+  // 拖动分隔条期间：屏蔽文本选择并统一光标，
+  // 否则指针移到舞台或信息列上时光标会跳回默认样式。
+  // 水平与垂直各一个类：同一时刻只会拖其中一条。
+  &.is-resizing-h {
     user-select: none;
     cursor: row-resize;
+  }
+
+  &.is-resizing-v {
+    user-select: none;
+    cursor: col-resize;
   }
 }
 
@@ -559,22 +565,27 @@ $preview-stage-h: 344px;
   //
   // 不能再写 max-width / max-height：内联尺寸变大时会被它们截回默认值，
   // 舞台就永远停在 398×344 而拖动无效。
+  //
+  // align-self 用 stretch 而不是 flex-start：舞台高度由内联样式给出，
+  // 但让它在行内纵向拉伸可以保证行高变化时不留缝隙。
   &__stage {
     flex: 0 0 auto;
     width: $preview-stage-w;
     height: $preview-stage-h;
     min-width: 0;
-    align-self: flex-start;
+    align-self: stretch;
     overflow: hidden;
     background: var(--color-fill-1);
   }
 
   // 预览与信息并排：占满面板剩余高度（面板高度减去控制条）。
   // 这里必须是 flex 撑满而不是写死行高，否则面板被拖矮后内容会溢出到控制条上。
+  //
+  // 不设 gap：舞台与信息列之间就是那条可拖动的垂直分隔条，它自己占位。
+  // 加 gap 会在分隔条两侧各留一段空白，看起来像断开的线。
   &__main {
     display: flex;
     align-items: stretch;
-    gap: 12px;
     padding: 8px;
     flex: 1 1 auto;
     min-height: 0;
@@ -582,20 +593,19 @@ $preview-stage-h: 344px;
     box-sizing: border-box;
   }
 
-  // 信息列：占满预览右侧的剩余宽度，并在很宽的窗口下拉住上限，
-  // 否则单行文字会长到难以阅读。
+  // 信息列：吃掉舞台之外的剩余宽度，与舞台一起占满预览行。
   //
-  // 用 flex:0 1 auto 而不是 flex:1 1 auto：两列都按 flex-grow 分空间时，
-  // 信息列会白白吃掉一半宽度。让它按内容宽度取（上限 620px），其余留白。
+  // 这里不再给最大宽度：早期为了「单行文字别太长」封顶 620px，但那样舞台
+  // 加信息列在宽窗口下填不满预览行，右侧留出一片空白。宽度现在由用户拖
+  // 垂直分隔条决定——想让信息列窄一点，把舞台拖宽即可。
   //
-  // 高度由行高决定（align-items: stretch），并且**必须 overflow: hidden**：
-  // 内容超出时若任其溢出，它会画到下面的控制条上（用户实测到的重叠）。
+  // **必须 overflow: hidden**：内容超出时若任其溢出，它会画到下面的控制条上
+  // （用户实测到的重叠）。内容过高由内部滚动条消化（见 &__info-body）。
   &__info {
     display: flex;
     flex-direction: column;
     flex: 1 1 auto;
     min-width: 0;
-    max-width: 620px;
     min-height: 0;
     overflow: hidden;
   }

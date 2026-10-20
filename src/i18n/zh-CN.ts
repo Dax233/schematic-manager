@@ -69,6 +69,8 @@ export default {
   detail: {
     previewSplitterAria: "调整预览区高度",
     previewSplitterTitle: "拖动调整预览区高度，双击复位",
+    previewWidthSplitterAria: "调整预览区宽度",
+    previewWidthSplitterTitle: "拖动调整预览区宽度，双击复位",
     /** 版本转换按钮在投影信息区，文案因此归 detail */
     convert: "版本转换",
     gateWarning:

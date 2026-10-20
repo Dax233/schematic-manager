@@ -4507,7 +4507,7 @@ it("默认按路径排序，未选字段时就是文件系统的扫描顺序", a
     w2.unmount();
   });
 });
-describe("预览区高度调整", () => {
+describe("预览区尺寸调整", () => {
   /** 面板当前高度（由组件内联样式给出） */
   function panelHeight(w: ReturnType<typeof mountApp>): number {
     const el = w.find(".preview").element as HTMLElement;
@@ -4520,58 +4520,111 @@ describe("预览区高度调整", () => {
     return { w: parseFloat(el.style.width || "0"), h: parseFloat(el.style.height || "0") };
   }
 
-  function splitter(w: ReturnType<typeof mountApp>): HTMLElement {
+  function horizSplitter(w: ReturnType<typeof mountApp>): HTMLElement {
     const el = w.find(".splitter--horizontal");
-    expect(el.exists(), "应有预览区分隔条").toBe(true);
+    expect(el.exists(), "应有预览区高度分隔条").toBe(true);
     return el.element as HTMLElement;
   }
 
-  it("默认高度下舞台是 398×344，分隔条可键盘操作", async () => {
+  /** 垂直分隔条只在有选中文件时存在（信息列本身是条件渲染的） */
+  function vertSplitter(w: ReturnType<typeof mountApp>): HTMLElement {
+    const el = w.find(".preview__main .splitter");
+    expect(el.exists(), "应有预览区宽度分隔条").toBe(true);
+    return el.element as HTMLElement;
+  }
+
+  /** 挂载 → 添加目录 → 选中第一个文件，得到带信息列的完整预览行 */
+  async function mountWithSelection() {
+    stubInvoke();
     const w = mountApp();
     await flushPromises();
-    const s = stageSize(w);
-    // 默认值必须与用户标注的尺寸一致，否则一打开界面就和设计要求不符
-    expect(s.w, "舞台默认宽度").toBe(398);
-    expect(s.h, "舞台默认高度").toBe(344);
-    expect(panelHeight(w), "面板高度应容得下舞台与控制条").toBeGreaterThan(344);
+    mockOpen.mockResolvedValue(["/p"]);
+    const btn = w.findAll("button").find((b) => b.text().includes("添加目录"));
+    await btn!.trigger("click");
+    await flushPromises();
+    const row = w.findAll("tr").find((r) => r.text().includes("测试.litematic"));
+    expect(row, "应能找到文件所在的行").toBeTruthy();
+    await row!.trigger("click");
+    await flushPromises();
+    return w;
+  }
 
-    const sp = w.find(".splitter--horizontal");
-    expect(sp.attributes("role"), "分隔条要有 separator 角色").toBe("separator");
-    expect(sp.attributes("aria-orientation")).toBe("horizontal");
-    expect(sp.attributes("tabindex"), "键盘可用的前提").toBe("0");
+  it("默认尺寸与两条分隔条的无障碍属性", async () => {
+    const w = await mountWithSelection();
+    const s = stageSize(w);
+    expect(s.w, "舞台默认宽度应与用户标注一致").toBe(398);
+    expect(panelHeight(w), "面板高度应容得下舞台与控制条").toBeGreaterThan(200);
+
+    const hSp = w.find(".splitter--horizontal");
+    expect(hSp.attributes("role")).toBe("separator");
+    expect(hSp.attributes("aria-orientation")).toBe("horizontal");
+    expect(hSp.attributes("tabindex"), "键盘可用的前提").toBe("0");
+
+    const vSp = w.find(".preview__main .splitter");
+    expect(vSp.attributes("role")).toBe("separator");
+    expect(vSp.attributes("aria-orientation")).toBe("vertical");
+    expect(vSp.attributes("tabindex"), "键盘可用的前提").toBe("0");
     w.unmount();
   });
 
-  it("往上拖让预览变高，舞台等比放大", async () => {
-    const w = mountApp();
-    await flushPromises();
-    const before = panelHeight(w);
+  it("拖高度分隔条：只改高度，不动宽度", async () => {
+    const w = await mountWithSelection();
+    const beforePanel = panelHeight(w);
     const beforeStage = stageSize(w);
 
-    const el = splitter(w);
-    // 分隔条在面板下方：指针上移（clientY 变小）应让面板变高
+    const el = horizSplitter(w);
+    // 分隔条在面板下方：指针上移应让面板变高
     el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientY: 400 }));
     window.dispatchEvent(new PointerEvent("pointermove", { clientY: 250 }));
     await flushPromises();
 
-    const after = panelHeight(w);
-    const afterStage = stageSize(w);
-    expect(after, "往上拖应让面板变高").toBeGreaterThan(before);
-    expect(afterStage.h, "舞台应跟着变高").toBeGreaterThan(beforeStage.h);
-
-    // 等比：宽高比必须保持 398/344，否则画面会被拉扁
-    const ratio = afterStage.w / afterStage.h;
-    expect(Math.abs(ratio - 398 / 344), "舞台宽高比应保持").toBeLessThan(0.01);
+    expect(panelHeight(w), "往上拖应让面板变高").toBeGreaterThan(beforePanel);
+    const after = stageSize(w);
+    expect(after.h, "舞台高度应跟着变").toBeGreaterThan(beforeStage.h);
+    // 这条是「拖高度却改了宽度」的回归防护
+    expect(after.w, "拖高度不应改变舞台宽度").toBe(beforeStage.w);
 
     window.dispatchEvent(new PointerEvent("pointerup", { clientY: 250 }));
     await flushPromises();
     w.unmount();
   });
 
-  it("高度被夹在上下限内，舞台不会被拖到不可用", async () => {
-    const w = mountApp();
+  it("拖宽度分隔条：只改宽度，不动高度", async () => {
+    const w = await mountWithSelection();
+    const before = stageSize(w);
+
+    const el = vertSplitter(w);
+    el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 500 }));
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 620 }));
     await flushPromises();
-    const el = splitter(w);
+
+    const after = stageSize(w);
+    expect(after.w, "向右拖应让舞台变宽").toBeGreaterThan(before.w);
+    expect(after.h, "拖宽度不应改变舞台高度").toBe(before.h);
+
+    window.dispatchEvent(new PointerEvent("pointerup", { clientX: 620 }));
+    await flushPromises();
+    w.unmount();
+  });
+
+  it("信息列不写死宽度，靠伸缩吃掉剩余空间", async () => {
+    const w = await mountWithSelection();
+    // jsdom 不加载样式表，量不到真实像素，因此这里核对结构约束：
+    // 预览行里只有舞台有内联宽度，信息列不能有内联宽度或上限
+    // ——一旦给它写死宽度，剩余宽度就没人吃，右侧会空出一条。
+    // 真实的「占满」在真机上用截图核对。
+    const stage = w.find(".preview__stage").element as HTMLElement;
+    expect(stage.style.width, "舞台宽度由状态给出").toBe("398px");
+
+    const info = w.find(".preview__info").element as HTMLElement;
+    expect(info.style.width, "信息列不应写死宽度").toBe("");
+    expect(info.style.maxWidth, "信息列不应写死最大宽度").toBe("");
+    w.unmount();
+  });
+
+  it("高度被夹在上下限内", async () => {
+    const w = await mountWithSelection();
+    const el = horizSplitter(w);
 
     const dragTo = async (clientY: number) => {
       el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientY: 0 }));
@@ -4580,31 +4633,105 @@ describe("预览区高度调整", () => {
       await flushPromises();
     };
 
-    // 往下拖到极远：面板不能缩到看不见
     await dragTo(99999);
     expect(panelHeight(w), "往下拖到底应停在下限").toBeGreaterThanOrEqual(200);
 
-    // 往上拖到极远：不能把页签区挤没
     await dragTo(-99999);
-    const h = panelHeight(w);
-    expect(h, "往上拖到底不应超出可用高度").toBeLessThanOrEqual(window.innerHeight);
+    expect(panelHeight(w), "往上拖到底不应超出可用高度").toBeLessThanOrEqual(window.innerHeight);
     w.unmount();
   });
 
-  it("双击分隔条在默认高度与最小高度之间切换", async () => {
-    const w = mountApp();
-    await flushPromises();
+  it("宽度被夹在上下限内", async () => {
+    const w = await mountWithSelection();
+    const el = vertSplitter(w);
+
+    const dragTo = async (clientX: number) => {
+      el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 0 }));
+      window.dispatchEvent(new PointerEvent("pointermove", { clientX }));
+      window.dispatchEvent(new PointerEvent("pointerup", { clientX }));
+      await flushPromises();
+    };
+
+    await dragTo(-99999);
+    expect(stageSize(w).w, "向左拖到底应停在最小宽度").toBeGreaterThanOrEqual(160);
+
+    await dragTo(99999);
+    expect(stageSize(w).w, "向右拖到底不应吃掉信息列").toBeLessThanOrEqual(window.innerWidth);
+    w.unmount();
+  });
+
+  it("双击高度分隔条在默认高度与最小高度之间切换", async () => {
+    const w = await mountWithSelection();
     const def = panelHeight(w);
-    const el = splitter(w);
+    const el = horizSplitter(w);
 
     el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     await flushPromises();
-    const collapsed = panelHeight(w);
-    expect(collapsed, "双击应收起到最小高度").toBeLessThan(def);
+    expect(panelHeight(w), "双击应收起到最小高度").toBeLessThan(def);
 
     el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     await flushPromises();
     expect(panelHeight(w), "再双击应回到默认高度").toBe(def);
     w.unmount();
+  });
+
+  it("双击宽度分隔条在默认宽度与最小宽度之间切换", async () => {
+    const w = await mountWithSelection();
+    const def = stageSize(w).w;
+    const el = vertSplitter(w);
+
+    el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await flushPromises();
+    expect(stageSize(w).w, "双击应收起到最小宽度").toBeLessThan(def);
+
+    el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await flushPromises();
+    expect(stageSize(w).w, "再双击应回到默认宽度").toBe(def);
+    w.unmount();
+  });
+
+  it("宽高分别写入界面状态，重开应用后都恢复", async () => {
+    const w = await mountWithSelection();
+    // 改高度
+    const hSp = horizSplitter(w);
+    hSp.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientY: 400 }));
+    window.dispatchEvent(new PointerEvent("pointermove", { clientY: 300 }));
+    window.dispatchEvent(new PointerEvent("pointerup", { clientY: 300 }));
+    await flushPromises();
+    // 改宽度
+    const vSp = vertSplitter(w);
+    vSp.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 500 }));
+    window.dispatchEvent(new PointerEvent("pointermove", { clientX: 560 }));
+    window.dispatchEvent(new PointerEvent("pointerup", { clientX: 560 }));
+    await flushPromises();
+
+    const want = { h: panelHeight(w), w: stageSize(w).w };
+
+    // 卸载会立刻把防抖中的改动写出
+    w.unmount();
+    await flushPromises();
+
+    const saved = mockInvoke.mock.calls
+      .filter((c) => c[0] === "save_ui_state")
+      .map((c) => JSON.parse(String((c[1] as { json: string }).json)) as Record<string, unknown>);
+    const last = saved[saved.length - 1];
+    expect(last.previewHeight, "写出的状态应含高度").toBe(want.h);
+    expect(last.previewWidth, "写出的状态应含宽度").toBe(want.w);
+
+    // 用同一份状态重新挂载
+    stubInvoke({ load_ui_state: JSON.stringify(last) });
+    const w2 = mountApp();
+    await flushPromises();
+    mockOpen.mockResolvedValue(["/p"]);
+    const btn = w2.findAll("button").find((b) => b.text().includes("添加目录"));
+    await btn!.trigger("click");
+    await flushPromises();
+    const row = w2.findAll("tr").find((r) => r.text().includes("测试.litematic"));
+    await row!.trigger("click");
+    await flushPromises();
+
+    expect(panelHeight(w2), "重开后高度应恢复").toBe(want.h);
+    expect(stageSize(w2).w, "重开后宽度应恢复").toBe(want.w);
+    w2.unmount();
   });
 });
