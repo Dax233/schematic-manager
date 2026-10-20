@@ -69,6 +69,8 @@ const enUS: typeof zhCN = {
     column: "Display name",
   },
   detail: {
+    previewSplitterAria: "Adjust the preview height",
+    previewSplitterTitle: "Drag to adjust the preview height; double-click to reset",
     gateWarning:
       "This schematic contains {count} “{name}”, which is over the {limit} limit, so it is not rendered automatically.",
     startRender: "Start rendering",

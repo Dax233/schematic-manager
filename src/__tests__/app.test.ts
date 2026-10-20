@@ -4496,3 +4496,104 @@ it("默认按路径排序，未选字段时就是文件系统的扫描顺序", a
     w2.unmount();
   });
 });
+describe("预览区高度调整", () => {
+  /** 面板当前高度（由组件内联样式给出） */
+  function panelHeight(w: ReturnType<typeof mountApp>): number {
+    const el = w.find(".preview").element as HTMLElement;
+    return parseFloat(el.style.height || "0");
+  }
+
+  /** 舞台当前宽高（由组件内联样式给出） */
+  function stageSize(w: ReturnType<typeof mountApp>): { w: number; h: number } {
+    const el = w.find(".preview__stage").element as HTMLElement;
+    return { w: parseFloat(el.style.width || "0"), h: parseFloat(el.style.height || "0") };
+  }
+
+  function splitter(w: ReturnType<typeof mountApp>): HTMLElement {
+    const el = w.find(".splitter--horizontal");
+    expect(el.exists(), "应有预览区分隔条").toBe(true);
+    return el.element as HTMLElement;
+  }
+
+  it("默认高度下舞台是 398×344，分隔条可键盘操作", async () => {
+    const w = mountApp();
+    await flushPromises();
+    const s = stageSize(w);
+    // 默认值必须与用户标注的尺寸一致，否则一打开界面就和设计要求不符
+    expect(s.w, "舞台默认宽度").toBe(398);
+    expect(s.h, "舞台默认高度").toBe(344);
+    expect(panelHeight(w), "面板高度应容得下舞台与控制条").toBeGreaterThan(344);
+
+    const sp = w.find(".splitter--horizontal");
+    expect(sp.attributes("role"), "分隔条要有 separator 角色").toBe("separator");
+    expect(sp.attributes("aria-orientation")).toBe("horizontal");
+    expect(sp.attributes("tabindex"), "键盘可用的前提").toBe("0");
+    w.unmount();
+  });
+
+  it("往上拖让预览变高，舞台等比放大", async () => {
+    const w = mountApp();
+    await flushPromises();
+    const before = panelHeight(w);
+    const beforeStage = stageSize(w);
+
+    const el = splitter(w);
+    // 分隔条在面板下方：指针上移（clientY 变小）应让面板变高
+    el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientY: 400 }));
+    window.dispatchEvent(new PointerEvent("pointermove", { clientY: 250 }));
+    await flushPromises();
+
+    const after = panelHeight(w);
+    const afterStage = stageSize(w);
+    expect(after, "往上拖应让面板变高").toBeGreaterThan(before);
+    expect(afterStage.h, "舞台应跟着变高").toBeGreaterThan(beforeStage.h);
+
+    // 等比：宽高比必须保持 398/344，否则画面会被拉扁
+    const ratio = afterStage.w / afterStage.h;
+    expect(Math.abs(ratio - 398 / 344), "舞台宽高比应保持").toBeLessThan(0.01);
+
+    window.dispatchEvent(new PointerEvent("pointerup", { clientY: 250 }));
+    await flushPromises();
+    w.unmount();
+  });
+
+  it("高度被夹在上下限内，舞台不会被拖到不可用", async () => {
+    const w = mountApp();
+    await flushPromises();
+    const el = splitter(w);
+
+    const dragTo = async (clientY: number) => {
+      el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientY: 0 }));
+      window.dispatchEvent(new PointerEvent("pointermove", { clientY }));
+      window.dispatchEvent(new PointerEvent("pointerup", { clientY }));
+      await flushPromises();
+    };
+
+    // 往下拖到极远：面板不能缩到看不见
+    await dragTo(99999);
+    expect(panelHeight(w), "往下拖到底应停在下限").toBeGreaterThanOrEqual(200);
+
+    // 往上拖到极远：不能把页签区挤没
+    await dragTo(-99999);
+    const h = panelHeight(w);
+    expect(h, "往上拖到底不应超出可用高度").toBeLessThanOrEqual(window.innerHeight);
+    w.unmount();
+  });
+
+  it("双击分隔条在默认高度与最小高度之间切换", async () => {
+    const w = mountApp();
+    await flushPromises();
+    const def = panelHeight(w);
+    const el = splitter(w);
+
+    el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await flushPromises();
+    const collapsed = panelHeight(w);
+    expect(collapsed, "双击应收起到最小高度").toBeLessThan(def);
+
+    el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await flushPromises();
+    expect(panelHeight(w), "再双击应回到默认高度").toBe(def);
+    w.unmount();
+  });
+});

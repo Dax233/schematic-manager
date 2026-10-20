@@ -71,6 +71,8 @@ export default {
     column: "显示名称",
   },
   detail: {
+    previewSplitterAria: "调整预览区高度",
+    previewSplitterTitle: "拖动调整预览区高度，双击复位",
     gateWarning:
       "该投影里「{name}」有 {count} 个，超过 {limit} 个时不会自动渲染。",
     startRender: "开始渲染",

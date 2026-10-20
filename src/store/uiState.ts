@@ -27,6 +27,8 @@ import type { SchematicSummary } from "../types";
 interface UiState {
   version: 1;
   sidebarWidth: number;
+  /** 预览面板高度；缺失时用默认值 */
+  previewHeight?: number;
   /** 已添加的目录（顺序保持），下次启动自动重新扫描 */
   dirs: string[];
   /** 已勾选显示的目录；缺失时视为全部显示 */
@@ -74,6 +76,10 @@ export interface UiStateDeps {
   sidebarWidth: Ref<number>;
   /** 侧栏宽度钳制（composables/useSidebarResize） */
   clampSidebar: (w: number) => number;
+  /** 预览面板高度（composables/usePreviewResize） */
+  previewHeight: Ref<number>;
+  /** 预览面板高度钳制（composables/usePreviewResize） */
+  clampPreviewHeight: (h: number) => number;
   /** 各目录的文件清单（fileList） */
   dirItems: Ref<Record<string, SchematicSummary[]>>;
   /** 已加载目录列表（fileList） */
@@ -108,6 +114,7 @@ export function createUiStateSlice(s: UiStateDeps) {
     return {
       version: UI_STATE_VERSION,
       sidebarWidth: s.sidebarWidth.value,
+      previewHeight: s.previewHeight.value,
       dirs: s.loadedDirs.value,
       enabledDirs: Array.from(s.enabledDirs.value),
       columnWidths: { ...s.colWidths.value },
@@ -195,6 +202,9 @@ export function createUiStateSlice(s: UiStateDeps) {
     if (typeof st.sidebarWidth === "number") {
       s.sidebarWidth.value = s.clampSidebar(st.sidebarWidth);
     }
+    if (typeof st.previewHeight === "number") {
+      s.previewHeight.value = s.clampPreviewHeight(st.previewHeight);
+    }
     if (typeof st.activeView === "string" && st.activeView in VIEW_PRESETS) {
       s.activeView.value = st.activeView;
     }
@@ -269,6 +279,7 @@ export function createUiStateSlice(s: UiStateDeps) {
   // 记住界面改动。逐个监听而不是 watch 一个大对象：后者要么深比较整棵状态树，
   // 要么在 restoreUiState 写入时也触发一次无谓回写。
   watch(s.sidebarWidth, persistUiState);
+  watch(s.previewHeight, persistUiState);
   watch(s.activeView, persistUiState);
   watch(s.brightness, persistUiState);
   watch(s.exportSize, persistUiState);

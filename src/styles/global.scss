@@ -389,6 +389,18 @@ body[arco-theme='dark'] .titlebar__logo {
     // 键盘聚焦时给一条可见的提示，颜色交给主题变量
     box-shadow: 0 0 0 2px rgb(var(--primary-3));
   }
+
+  // 横放的分隔条：用于预览区与页签区之间，拖动改高度而不是宽度
+  &--horizontal {
+    width: auto;
+    height: 5px;
+    cursor: row-resize;
+
+    // 命中区域向上下各扩 2px
+    &::after {
+      inset: -2px 0;
+    }
+  }
 }
 
 .detail {
@@ -398,6 +410,13 @@ body[arco-theme='dark'] .titlebar__logo {
   min-width: 0;
   min-height: 0;
   background: var(--color-bg-2);
+
+  // 拖动预览区分隔条期间：屏蔽文本选择并统一光标，
+  // 否则指针移到信息列上时光标会跳回默认样式
+  &.is-resizing {
+    user-select: none;
+    cursor: row-resize;
+  }
 }
 
 .statusbar {
@@ -498,35 +517,26 @@ $info-min-w: 300px;
 $preview-stage-w: 398px;
 $preview-stage-h: 344px;
 
-// 预览行的固定高度 = 舞台高度 + 上下内边距（各 8px）。
+// 预览面板与舞台的尺寸关系（这几项推导出窗口的最小尺寸要求，改动前先读一遍）：
 //
-// 用户要求「界面不许自行变化尺寸」：此前信息列用 max-height: calc(100vh - …)
-// 单独约束，被夹短之后内容**溢出可见**，而下面的控制条紧接着被夹短的盒子
-// 排版，于是盖在信息内容上（实测「投影名称」被控制条压住）。
-//
-// 现在整行高度由舞台尺寸推出、不再依赖视口：信息列由 align-items: stretch
-// 跟着行高走，装不下的部分在自己的滚动区里滚，绝不溢出到控制条上；
-// 切换页签、选中文件也不会让分割线移动。
-//
-// 高度写死带来的**必要条件**是窗口足够大，这不是实现细节而是这条需求的
-// 直接后果，因此要在 tauri.conf.json 里如实声明：
-//
-//   预览面板 = 预览行 360 + 控制条 40 + 分隔线 1 = 401
+//   预览面板高度 = 舞台高 + 上下内边距 16 + 控制条 40 + 分隔线 1
+//   默认 401，与用户截图里标注的红框一致（舞台 398×344）
 //   页签区下限 = 160（再小就放不下统计条与一行表格）
 //   详情区高度实测 = 窗口高 − 199
 //
 // 要让「方块表至少露出一行」还需要页签区约 184px（表头 31 + 一行 41 +
 // 统计条与提示），即详情区 ≥ 622，对应窗口高 ≥ 821。
-// 因此 minHeight 提到 820、minWidth 提到 1400（舞台 398 加信息列
-// 至少 300 需要约 1397）。
+// 因此 tauri.conf.json 里 minHeight 为 820、minWidth 为 1400（舞台 398 加
+// 信息列至少 300 需要约 1397）。
 //
-// 注意：这是固定尺寸的代价。若将来要支持 768 高的屏幕，只能让舞台
-// 在窗口过矮时收缩，而那就与「固定尺寸」这条要求相冲突了。
-$preview-row-h: $preview-stage-h + 16px;
+// 面板高度本身由用户拖分隔条调整（见 composables/usePreviewResize），
+// 舞台按 398:344 等比缩放；窗口缩放时两者都不自动变化，只有拖动才改变，
+// 因此「界面不自行变化尺寸」与「允许用户调整」可以同时成立。
 
 .preview {
-  // 固定高度、不参与伸缩：下面页签区拿到的是「详情区高度 − 本面板高度」，
-  // 与预览内容多少无关，因此页签高度不会随页签切换而跳动。
+  // 高度由 DetailPanel 内联给出（用户可拖分隔条调整），不参与伸缩：
+  // 下面页签区拿到的是「详情区高度 − 本面板高度」，与预览内容多少无关，
+  // 因此页签高度不会随页签切换而跳动。
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
@@ -534,26 +544,30 @@ $preview-row-h: $preview-stage-h + 16px;
   background: var(--color-bg-2);
   overflow: hidden;
 
-  // 预览舞台：固定尺寸，见上面的 $preview-stage-*。
+  // 预览舞台：宽高由 DetailPanel 内联给出，随面板高度等比缩放。
+  // 这里的 $preview-stage-* 只是没有内联值时的兜底。
+  //
+  // 不能再写 max-width / max-height：内联尺寸变大时会被它们截回默认值，
+  // 舞台就永远停在 398×344 而拖动无效。
   &__stage {
     flex: 0 0 auto;
     width: $preview-stage-w;
     height: $preview-stage-h;
     min-width: 0;
-    max-width: $preview-stage-w;
-    max-height: $preview-stage-h;
     align-self: flex-start;
     overflow: hidden;
     background: var(--color-fill-1);
   }
 
-  // 预览与信息并排。行高写死，与窗口高度无关。
+  // 预览与信息并排：占满面板剩余高度（面板高度减去控制条）。
+  // 这里必须是 flex 撑满而不是写死行高，否则面板被拖矮后内容会溢出到控制条上。
   &__main {
     display: flex;
     align-items: stretch;
     gap: 12px;
     padding: 8px;
-    height: $preview-row-h;
+    flex: 1 1 auto;
+    min-height: 0;
     min-width: 0;
     box-sizing: border-box;
   }

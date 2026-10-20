@@ -11,6 +11,7 @@ import SceneViewer from "./SceneViewer.vue";
 import BlockStatTable from "./BlockStatTable.vue";
 import EntityTable from "./EntityTable.vue";
 import { EXPORT_SIZES } from "../render/scene3d";
+import { PREVIEW_MAX_H, PREVIEW_MIN_H } from "../composables/usePreviewResize";
 import { useI18n } from "vue-i18n";
 import { displayName } from "../i18n";
 import { useAppStore } from "../store";
@@ -19,6 +20,12 @@ import { formatDims, formatSize } from "../utils/format";
 const { t } = useI18n();
 
 const {
+  previewHeight,
+  previewStage,
+  previewResizing,
+  startPreviewResize,
+  togglePreviewHeight,
+  onPreviewSplitterKey,
   viewer,
   scene,
   sceneLoading,
@@ -47,12 +54,15 @@ const {
 </script>
 
 <template>
-  <div class="detail">
-    <div class="preview">
+  <div class="detail" :class="{ 'is-resizing': previewResizing }">
+    <div class="preview" :style="{ height: previewHeight + 'px' }">
       <!-- 预览与信息并排：左边是 3D 视图，右边是该投影的基本信息与元数据。
            用横向 flex 让「信息在预览右侧」这条要求不随窗口宽度漂移。 -->
       <div class="preview__main">
-        <div class="preview__stage">
+        <div
+          class="preview__stage"
+          :style="{ width: previewStage.w + 'px', height: previewStage.h + 'px' }"
+        >
           <!-- 方块数超过阈值：默认不生成几何，等用户点「开始渲染」。
                三万块以上的场景建几何并上传显存会明显卡顿，何时做由用户定。 -->
           <div v-if="sceneGate" class="scene-gate">
@@ -138,8 +148,8 @@ const {
           </a-scrollbar>
           </div>
           <!-- 操作行钉在面板底部，不随内容一起滚。
-               面板高度是固定的（$preview-row-h），不钉住的话保存按钮会
-               落到折叠线以下，用户得先滚动才能保存，等于按钮藏起来了。 -->
+               面板高度由用户拖动决定，不钉住的话保存按钮会落到折叠线以下，
+               用户得先滚动才能保存，等于按钮藏起来了。 -->
           <div class="preview__actions">
             <a-button
               type="primary"
@@ -224,6 +234,24 @@ const {
         <span v-else-if="sceneInfo" class="preview__info">{{ sceneInfo }}</span>
       </div>
     </div>
+
+    <!-- 预览区与页签区之间的水平分隔条：往上拖让预览占更多高度，
+         往下拖把空间让给页签区。舞台尺寸随之等比缩放，窗口本身不改变它。 -->
+    <div
+      class="splitter splitter--horizontal"
+      role="separator"
+      aria-orientation="horizontal"
+      :aria-label="t('detail.previewSplitterAria')"
+      :aria-valuenow="previewHeight"
+      :aria-valuemin="PREVIEW_MIN_H"
+      :aria-valuemax="PREVIEW_MAX_H"
+      tabindex="0"
+      :title="t('detail.previewSplitterTitle')"
+      @pointerdown="startPreviewResize"
+      @dblclick="togglePreviewHeight"
+      @keydown="onPreviewSplitterKey"
+    />
+
     <a-tabs
       class="detail__tabs"
       default-active-key="info"
