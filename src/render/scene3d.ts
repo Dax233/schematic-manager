@@ -439,9 +439,7 @@ export function frameOrthoBox(
   const diag = Math.max(size.length(), 1e-3);
   // 站在对角线外两倍处：任何朝向都在相机前方
   camera.position.copy(center).addScaledVector(dir.clone().normalize(), -diag * 2);
-  camera.up.set(0, 1, 0);
-  // 俯视/仰视到底时 lookAt 与 up 平行，换一个 up 免得朝向退化
-  if (Math.abs(dir.clone().normalize().y) > 0.99) camera.up.set(0, 0, 1);
+  camera.up.copy(cameraUpFor(dir));
   camera.lookAt(center);
 
   // 朝向必须**先**摆好再算视景体：fitOrthoHalfExtents 读的是相机矩阵里的
@@ -459,6 +457,28 @@ export function frameOrthoBox(
 }
 
 /**
+ * 由视线方向求相机该用的 up 向量。
+ *
+ * 平时用世界 +Y；但俯视/仰视到底时视线与 +Y 平行，`lookAt` 会退化（three
+ * 内部靠 up 与视线叉乘求右方向，平行时叉乘为零向量，得到 NaN 或任意朝向）。
+ *
+ * 退化时改用 +Z 还是 -Z 必须按「屏幕右方应当是 +X」来定：
+ *   - 顶视（相机在上方朝下看，dir 的 y 为负）：right = up × (-dir)。
+ *     取 up = (0,0,-1) 得 right = (+1,0,0)，即 +X 朝右，与俯视图的通行画法一致；
+ *     取 up = (0,0,+1) 会得到 -X 朝右，画面成了左右镜像
+ *     （实测文字「TiPlus9100」被镜像成「-0019sulPiT」）。
+ *   - 底视方向相反，up 也要反过来，才能保持 +X 仍然朝右。
+ */
+export function cameraUpFor(dir: THREE.Vector3): THREE.Vector3 {
+  const d = dir.clone().normalize();
+  if (Math.abs(d.y) > 0.99) {
+    // 相机朝下看（d.y < 0）时 up 取 -Z；朝上看时取 +Z
+    return new THREE.Vector3(0, 0, d.y < 0 ? -1 : 1);
+  }
+  return new THREE.Vector3(0, 1, 0);
+}
+
+/**
  * 把相机摆到「整个网格装进视口」的位置。
  *
  * 保持调用方给的视线方向，因此换视角后再自适应也不会把用户的视角掰回默认。
@@ -471,6 +491,7 @@ export function frameBox(
   const center = box.getCenter(new THREE.Vector3());
   const dist = fitDistance(box, dir, camera.fov, camera.aspect);
   camera.position.copy(center).addScaledVector(dir.clone().normalize(), -dist);
+  camera.up.copy(cameraUpFor(dir));
   camera.lookAt(center);
   // 近裁剪面按距离给，缩放时不会切掉模型；远裁剪面留足余量
   camera.near = Math.max(dist / 100, 0.02);

@@ -1008,8 +1008,14 @@ $preview-stage-h: 344px;
     flex-direction: column;
   }
 
-  // 页签：作为 flex 子项吃掉内容项的高度（不再依赖 height:100%）
-  .arco-tabs-pane,
+  // 页签：作为 flex 子项吃掉内容项的高度（不再依赖 height:100%）。
+  //
+  // 选择器必须限定在**活动**内容项之下。Arco 用 `.arco-tabs-content-item`
+  // 的 display 切换活动页签（非活动的算 block、高度 0，靠外层裁切隐藏），
+  // 这里若对所有 pane 无条件设 display:flex，非活动 pane 的 flex 会让它
+  // 按内容撑开、从高度为 0 的父级里溢出来，结果是三个页签的内容叠在一起
+  // （实测「方块」「实体」的表格压在了「信息」明细上）。
+  .arco-tabs-content-item-active .arco-tabs-pane,
   .arco-spin,
   .arco-spin-children {
     display: flex;

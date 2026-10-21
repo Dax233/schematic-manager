@@ -4,6 +4,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
   applyPreset,
   buildSceneGroup,
+  cameraUpFor,
   exportPixelSize,
   fitCamera,
   fitDistance,
@@ -833,5 +834,70 @@ describe("正交相机的取景", () => {
     const { min, max } = orthoZoomLimits();
     expect(min, "最小 zoom 应为正").toBeGreaterThan(0);
     expect(max, "最大 zoom 应大于最小").toBeGreaterThan(min);
+  });
+});
+describe("轴向视角的相机 up 向量", () => {
+  /** 由相机的世界矩阵取「屏幕右方」 */
+  function screenRight(cam: THREE.Camera): THREE.Vector3 {
+    cam.updateMatrixWorld(true);
+    return new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0).normalize();
+  }
+
+  it("顶视角下 +X 朝屏幕右方，画面不镜像", () => {
+    // 这是实际踩到的 bug：up 取 (0,0,+1) 时屏幕右方成了 -X，
+    // 预览里的文字「TiPlus9100」被镜像成「-0019sulPiT」
+    const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
+    cam.position.set(0, 100, 0);
+    cam.up.copy(cameraUpFor(new THREE.Vector3(0, -1, 0)));
+    cam.lookAt(0, 0, 0);
+    const right = screenRight(cam);
+    expect(right.x, "顶视时屏幕右方应是 +X").toBeGreaterThan(0.99);
+  });
+
+  it("顶视角下 +Z 朝屏幕下方", () => {
+    // 与俯视图的通行画法一致：从上方往下看，南（+Z）在画面下方
+    const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
+    cam.position.set(0, 100, 0);
+    cam.up.copy(cameraUpFor(new THREE.Vector3(0, -1, 0)));
+    cam.lookAt(0, 0, 0);
+    cam.updateMatrixWorld(true);
+    const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1).normalize();
+    // 屏幕上方对应世界 -Z，因此 up 的 z 应为负
+    expect(up.z, "顶视时屏幕上方应是 -Z").toBeLessThan(-0.99);
+  });
+
+  it("底视角同样保持 +X 朝右", () => {
+    const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
+    cam.position.set(0, -100, 0);
+    cam.up.copy(cameraUpFor(new THREE.Vector3(0, 1, 0)));
+    cam.lookAt(0, 0, 0);
+    const right = screenRight(cam);
+    expect(right.x, "底视时屏幕右方也应是 +X").toBeGreaterThan(0.99);
+  });
+
+  it("非轴向视角沿用世界 +Y 作为 up", () => {
+    for (const dir of [
+      new THREE.Vector3(-1, -1, -1).normalize(),
+      new THREE.Vector3(0, -1, -1).normalize(),
+      new THREE.Vector3(1, 0, 0),
+    ]) {
+      const up = cameraUpFor(dir);
+      expect(up.x, `${dir.toArray()} 的 up 应为世界 +Y`).toBeCloseTo(0, 5);
+      expect(up.y).toBeCloseTo(1, 5);
+      expect(up.z).toBeCloseTo(0, 5);
+    }
+  });
+
+  it("透视取景在顶视角下也不镜像", () => {
+    // frameBox 原本没有设置 up，顶视角时 lookAt 与默认 up 平行，朝向由
+    // three 的内部兜底决定，结果不可预期。这里钉死它同样走 cameraUpFor
+    const cam = new THREE.PerspectiveCamera(45, 1, 0.1, 10000);
+    const box = new THREE.Box3(
+      new THREE.Vector3(-5, -1, -5),
+      new THREE.Vector3(5, 1, 5),
+    );
+    frameBox(cam, box, new THREE.Vector3(0, -1, 0));
+    const right = screenRight(cam);
+    expect(right.x, "顶视角经 frameBox 后屏幕右方仍是 +X").toBeGreaterThan(0.99);
   });
 });
