@@ -9,6 +9,11 @@ import {
   fitDistance,
   frameBox,
   defaultViewDir,
+  dirFromAngles,
+  anglesFromPosition,
+  presetIsOrtho,
+  GIZMO_AXES,
+  PRESET_MENU,
   presetDir,
   syncClipPlanes,
   VIEW_PRESETS,
@@ -531,14 +536,14 @@ describe("取景按投影包围盒拟合", () => {
       return cam.position.clone().normalize();
     }
 
-    const [fy, fp] = VIEW_PRESETS.front;
-    expect(offsetOf("front").dot(offsetDir(fy, fp)), "front 方位不符").toBeGreaterThan(0.999);
-    const [by, bp] = VIEW_PRESETS.back;
-    expect(offsetOf("back").dot(offsetDir(by, bp)), "back 方位不符").toBeGreaterThan(0.999);
-    const [ly, lp] = VIEW_PRESETS.left45;
-    expect(offsetOf("left45").dot(offsetDir(ly, lp)), "left45 方位不符").toBeGreaterThan(0.999);
-    const [ry, rp] = VIEW_PRESETS.right45;
-    expect(offsetOf("right45").dot(offsetDir(ry, rp)), "right45 方位不符").toBeGreaterThan(0.999);
+    const front = VIEW_PRESETS.front;
+    expect(offsetOf("front").dot(offsetDir(front.yaw, front.pitch)), "front 方位不符").toBeGreaterThan(0.999);
+    const back = VIEW_PRESETS.back;
+    expect(offsetOf("back").dot(offsetDir(back.yaw, back.pitch)), "back 方位不符").toBeGreaterThan(0.999);
+    const l45 = VIEW_PRESETS.left45;
+    expect(offsetOf("left45").dot(offsetDir(l45.yaw, l45.pitch)), "left45 方位不符").toBeGreaterThan(0.999);
+    const r45 = VIEW_PRESETS.right45;
+    expect(offsetOf("right45").dot(offsetDir(r45.yaw, r45.pitch)), "right45 方位不符").toBeGreaterThan(0.999);
 
     // 再钉一层语义：front 与 back 在 z 上相反，left45 与 right45 在 x 上相反。
     // 这两条即使角度表的数值被改也仍然成立，能挡住「整体取反」这类错误。
@@ -673,3 +678,81 @@ describe("滚轮缩放", () => {
   });
 });
 
+
+describe("视角预设与方向换算", () => {
+  it("六个轴向指向各自的坐标轴正负方向", () => {
+    // axialDir 断言 presetDir 结果落在某个坐标轴上：
+    // 轴向视角是精确核对用的，不能有一点偏，因此非零的那个分量应为 ±1
+    function expectAxis(name: string, axis: "x" | "y" | "z", sign: 1 | -1) {
+      const d = presetDir(name);
+      const comp = { x: d.x, y: d.y, z: d.z };
+      expect(comp[axis] * sign, `${name} 的 ${axis} 分量`).toBeCloseTo(1, 5);
+      for (const other of ["x", "y", "z"] as const) {
+        if (other === axis) continue;
+        expect(comp[other], `${name} 的 ${other} 分量应为 0`).toBeCloseTo(0, 5);
+      }
+    }
+    // 顶视：相机在上方朝下看，「相机 → 目标」的 y 为负
+    expectAxis("top", "y", -1);
+    expectAxis("bottom", "y", 1);
+    expectAxis("south", "z", 1);
+    expectAxis("north", "z", -1);
+    expectAxis("east", "x", 1);
+    expectAxis("west", "x", -1);
+  });
+
+  it("所有预设都给单位方向向量，没有一个退化成零向量", () => {
+    // 零向量会让 frameBox 里的归一化得到 NaN，相机直接失效
+    for (const name of Object.keys(VIEW_PRESETS)) {
+      const d = presetDir(name);
+      expect(d.length(), `${name} 应是单位向量`).toBeCloseTo(1, 5);
+      expect(Number.isFinite(d.x + d.y + d.z), `${name} 不应含 NaN`).toBe(true);
+    }
+  });
+
+  it("角度与方向可以互相换算", () => {
+    // 保存自定义预设要用 anglesFromPosition 从相机位置反推角度，
+    // 存进去后再用 dirFromAngles 还原，两者必须一致
+    for (const [yaw, pitch] of [
+      [0, 12],
+      [45, 30],
+      [-45, 30],
+      [90, 0],
+      [180, -20],
+      [0, 89],
+    ]) {
+      // dirFromAngles 给「相机 → 目标」，相机因此站在它的反方向
+      const cameraPos = dirFromAngles(yaw, pitch).negate().multiplyScalar(10);
+      const back = anglesFromPosition(cameraPos, new THREE.Vector3(0, 0, 0));
+      expect(back.pitch, `pitch 应还原（${yaw},${pitch}）`).toBeCloseTo(pitch, 3);
+      // pitch 到 ±90 时水平分量消失，yaw 无意义
+      if (Math.abs(pitch) < 89) {
+        const yawDiff = ((back.yaw - yaw + 540) % 360) - 180;
+        expect(yawDiff, `yaw 应还原（${yaw},${pitch}）`).toBeCloseTo(0, 3);
+      }
+    }
+  });
+
+  it("只有真等距预设标记为正射", () => {
+    expect(presetIsOrtho("isoRight"), "真等距右应是正射").toBe(true);
+    expect(presetIsOrtho("isoLeft"), "真等距左应是正射").toBe(true);
+    expect(presetIsOrtho("right45"), "普通等距应是透视").toBe(false);
+    expect(presetIsOrtho("top"), "轴向视角默认透视").toBe(false);
+  });
+
+  it("右键菜单列全十个预设，且方向标覆盖六个轴向", () => {
+    expect(PRESET_MENU.length, "菜单应有十个预设").toBe(10);
+    for (const item of PRESET_MENU) {
+      expect(VIEW_PRESETS[item.key], `${item.key} 应存在于预设表`).toBeTruthy();
+    }
+    expect(GIZMO_AXES.length, "方向标应有六个轴向");
+    expect(GIZMO_AXES.map((a) => a.axis).sort()).toEqual([
+      "+x",
+      "+y",
+      "+z",
+      "-x",
+      "-y",
+      "-z",
+    ]);
+  });
+});

@@ -11,13 +11,69 @@ import * as THREE from "three";
 import { t } from "../i18n";
 import type { SceneData } from "../types";
 
-/** 视角预设，与界面上的四个按钮一致 */
-export const VIEW_PRESETS: Record<string, [number, number]> = {
-  front: [0, 12],
-  left45: [-45, 30],
-  right45: [45, 30],
-  back: [180, 12],
+/** 一个视角预设：朝哪个方向看，以及用透视还是正射 */
+export interface ViewPreset {
+  /** 偏航角（度）。绕 Y 轴，0 表示朝向 +Z */
+  yaw: number;
+  /** 俯角（度）。正数表示相机在上方俯视 */
+  pitch: number;
+  /** 是否用正射投影 */
+  ortho: boolean;
+}
+
+/**
+ * 内置视角预设。
+ *
+ * 键名是持久化用的标识，**不要改名**：ui-state.json 里存的就是这些键，
+ * 改掉会让用户上次停留的视角在重启后失效。新增可以，重命名不行。
+ *
+ * 六个轴向（顶/底/南/北/东/西）与等距视角并存：轴向用于精确对齐核对，
+ * 等距用于看整体。其中「真等距」是等距角度 + 正射，工程制图上常用。
+ */
+export const VIEW_PRESETS: Record<string, ViewPreset> = {
+  // 旧有的四个：默认视角、正对、两个等距（透视）
+  left45: { yaw: -45, pitch: 30, ortho: false },
+  right45: { yaw: 45, pitch: 30, ortho: false },
+  front: { yaw: 0, pitch: 12, ortho: false },
+  back: { yaw: 180, pitch: 12, ortho: false },
+
+  // 六个轴向：正对着某一根坐标轴看。俯角取 ±90 时偏航会退化，
+  // 此时方向由 pitch 单独决定，presetDir 里已按此处理。
+  top: { yaw: 0, pitch: 90, ortho: false },
+  bottom: { yaw: 0, pitch: -90, ortho: false },
+  south: { yaw: 0, pitch: 0, ortho: false },
+  north: { yaw: 180, pitch: 0, ortho: false },
+  east: { yaw: 90, pitch: 0, ortho: false },
+  west: { yaw: -90, pitch: 0, ortho: false },
+
+  // 两个真等距：与上面两个等距同角度，只是换成正射
+  isoRight: { yaw: 45, pitch: 30, ortho: true },
+  isoLeft: { yaw: -45, pitch: 30, ortho: true },
 };
+
+/** 右键菜单里「预设角度」分组的显示顺序与 i18n 键 */
+export const PRESET_MENU: Array<{ key: string; labelKey: string }> = [
+  { key: "top", labelKey: "view.top" },
+  { key: "bottom", labelKey: "view.bottom" },
+  { key: "south", labelKey: "view.south" },
+  { key: "north", labelKey: "view.north" },
+  { key: "east", labelKey: "view.east" },
+  { key: "west", labelKey: "view.west" },
+  { key: "right45", labelKey: "view.isoRight" },
+  { key: "left45", labelKey: "view.isoLeft" },
+  { key: "isoRight", labelKey: "view.trueIsoRight" },
+  { key: "isoLeft", labelKey: "view.trueIsoLeft" },
+];
+
+/** 方向标六个轴向的键，顺序与小球绘制一致 */
+export const GIZMO_AXES = [
+  { key: "east", axis: "+x" },
+  { key: "west", axis: "-x" },
+  { key: "top", axis: "+y" },
+  { key: "bottom", axis: "-y" },
+  { key: "south", axis: "+z" },
+  { key: "north", axis: "-z" },
+] as const;
 
 /** 一组已构建的网格及其需要释放的资源 */
 export interface SceneGroup {
@@ -170,10 +226,19 @@ export function defaultViewDir(): THREE.Vector3 {
   return new THREE.Vector3(-1, -1, -1).normalize();
 }
 
-/** 由预设角度（偏航、俯角，单位为度）求「相机 → 目标」的方向向量 */
+/**
+ * 由预设角度（偏航、俯角，单位为度）求「相机 → 目标」的方向向量。
+ *
+ * pitch 取 ±90 时 cos(pitch) 为 0，yaw 不再影响方向——顶视与底视因此
+ * 写成 (0,∓1,0)，这是正确行为而不是退化 bug。
+ */
 export function presetDir(name: string): THREE.Vector3 {
-  const angles = VIEW_PRESETS[name] ?? VIEW_PRESETS.front;
-  const [yawDeg, pitchDeg] = angles;
+  const preset = VIEW_PRESETS[name] ?? VIEW_PRESETS.front;
+  return dirFromAngles(preset.yaw, preset.pitch);
+}
+
+/** 由角度求方向向量。与 presetDir 同源，自定义预设走这里。 */
+export function dirFromAngles(yawDeg: number, pitchDeg: number): THREE.Vector3 {
   const yaw = (yawDeg * Math.PI) / 180;
   const pitch = (pitchDeg * Math.PI) / 180;
   return new THREE.Vector3(
@@ -181,6 +246,37 @@ export function presetDir(name: string): THREE.Vector3 {
     -Math.sin(pitch),
     Math.cos(pitch) * Math.cos(yaw),
   );
+}
+
+/** 由相机位置与观察目标反求 yaw / pitch（度）。用于把当前视角存成预设。
+ *
+ * 两个角度的符号都容易搞错，这里一次说清：presetDir 给的是「相机 → 目标」，
+ * 而 `position - target` 得到的是「目标 → 相机」，两者互为反向。反向意味着
+ * x、y、z 三个分量同时取反，于是
+ *   - pitch：y = -sin(pitch) 在反向侧变成 y = sin(pitch)，取 +asin；
+ *   - yaw：x 与 z 同时取反，等价于 yaw 加 180°（atan2(-x,-z) = atan2(x,z)+π）。
+ * 漏掉任何一处，保存下来的预设用一次就会跑到模型另一侧。
+ */
+export function anglesFromPosition(
+  position: THREE.Vector3,
+  target: THREE.Vector3,
+): { yaw: number; pitch: number } {
+  const dir = new THREE.Vector3().subVectors(position, target);
+  if (dir.lengthSq() === 0) return { yaw: 0, pitch: 0 };
+  dir.normalize();
+  const pitch = (Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1)) * 180) / Math.PI;
+  // 俯视/仰视到底时水平分量为 0，yaw 无意义，沿用 0
+  const horiz = Math.hypot(dir.x, dir.z);
+  if (horiz < 1e-6) return { yaw: 0, pitch };
+  let yaw = (Math.atan2(dir.x, dir.z) * 180) / Math.PI + 180;
+  // 归一到 [-180, 180)，与界面里自定义预设的角度表示保持一致
+  yaw = (((yaw + 180) % 360) + 360) % 360 - 180;
+  return { yaw, pitch };
+}
+
+/** 某个预设是否用正射投影 */
+export function presetIsOrtho(name: string): boolean {
+  return (VIEW_PRESETS[name] ?? VIEW_PRESETS.front).ortho;
 }
 
 /**
