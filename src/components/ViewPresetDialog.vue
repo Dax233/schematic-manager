@@ -84,7 +84,11 @@ function round1(v: number) {
   return Math.round(v * 10) / 10;
 }
 
-/** 从输入框读出位置三元组；有任一格留空或非数时返回 null */
+/** 从输入框读出位置三元组；有任一格留空或非数时返回 null。
+ *
+ * 面板拿到的是可写副本，用户可能把某格清空。此时不能拿旧值顶上——
+ * 那等于「改了却没生效」，用户看不出发生了什么。
+ */
 function readPosition(): [number, number, number] | null {
   const [x, y, z] = posModel.value;
   if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
@@ -117,12 +121,19 @@ watch(viewPresetOpen, (open) => {
   pitch.value = round1(a.pitch);
 });
 
-const canSave = computed(() => name.value.trim().length > 0 && ready.value);
+const canSave = computed(
+  () => name.value.trim().length > 0 && ready.value && readPosition() !== null,
+);
 
 function confirm() {
+  const pos = readPosition();
+  if (!pos) {
+    Message.warning(t("view.saveInvalidPose"));
+    return;
+  }
   const err = saveCurrentView(name.value, {
     ortho: ortho.value,
-    position: readPosition() ?? position.value,
+    position: pos,
     target: target.value,
   });
   if (err) {

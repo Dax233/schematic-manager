@@ -15,7 +15,7 @@
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import * as THREE from "three";
-import { GIZMO_RADIUS, GIZMO_VIEW_RADIUS, gizmoDots } from "../render/view_gizmo";
+import { GIZMO_CENTER_HALF, GIZMO_RADIUS, GIZMO_VIEW_RADIUS, gizmoDots } from "../render/view_gizmo";
 
 const { t } = useI18n();
 
@@ -101,12 +101,12 @@ function ariaOf(axis: string): string {
         {{ d.axis }}
       </text>
     </g>
-    <!-- 中心复位：回到默认等距视角 -->
+    <!-- 中心复位：回到默认等距视角。命中区与它一致，见 GIZMO_CENTER_HALF -->
     <rect
-      x="-7"
-      y="-7"
-      width="14"
-      height="14"
+      :x="-GIZMO_CENTER_HALF"
+      :y="-GIZMO_CENTER_HALF"
+      :width="GIZMO_CENTER_HALF * 2"
+      :height="GIZMO_CENTER_HALF * 2"
       rx="2"
       class="view-gizmo__center"
     >

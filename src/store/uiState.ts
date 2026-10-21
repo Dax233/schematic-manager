@@ -17,7 +17,7 @@ import type { SortKey, SortOrder, StatusText } from "./fileList";
 import {
   EXPORT_ASPECTS,
   EXPORT_SHORT_EDGES,
-  VIEW_PRESETS,
+  isBuiltinView,
   sanitizeViewPresets,
 } from "../render/scene3d";
 import { isLogLevel } from "../utils/run_log";
@@ -232,7 +232,11 @@ export function createUiStateSlice(s: UiStateDeps) {
     if (typeof st.previewWidth === "number") {
       s.previewWidth.value = s.clampPreviewWidth(st.previewWidth);
     }
-    if (typeof st.activeView === "string" && st.activeView in VIEW_PRESETS) {
+    // 只认内置预设的键。不能写成 `st.activeView in VIEW_PRESETS`：`in` 会
+    // 沿原型链查到 constructor、toString 这类键，放进来会让取景算出 NaN。
+    // 自定义预设的 `custom:` 键在这里被排除——它要连 savedViews 一起校验，
+    // 而恢复顺序上没法保证两者对得上，不如回到默认视角更可预期。
+    if (typeof st.activeView === "string" && isBuiltinView(st.activeView)) {
       s.activeView.value = st.activeView;
     }
     if (typeof st.brightness === "number") {

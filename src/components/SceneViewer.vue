@@ -15,7 +15,9 @@ import {
 import {
   adaptOrthoAspect,
   buildSceneGroup,
+  cameraUpFor,
   defaultViewDir,
+  dirFromAngles,
   fitCamera as fitCameraTo,
   frameBox,
   frameOrthoBox,
@@ -230,6 +232,9 @@ function applyPreset(name: string) {
     frameBox(cam, box, dir);
   }
   // 换视角同样要把轴心留在模型中心，否则换完视角再拖动就会绕错点
+  // 顶视/底视会把 up 换成 ±Z，而 controls 的极轴是构造时定死的：
+  // 不重建的话，接下来水平拖动会变成抬降镜头
+  ensureControlsUp();
   controls?.target.copy(center);
   rememberFit();
   controls?.update();
@@ -563,6 +568,27 @@ function makeControls(cam: THREE.Camera, dom: HTMLElement): OrbitControls {
   return c;
 }
 
+/** 记下 controls 构造时的相机 up 与极轴。
+ *
+ * OrbitControls 在构造时把 `object.up` 换算成内部的一套旋转基准（`_quat`），
+ * 之后 `camera.up` 再改它也不会跟着变。顶视/底视会把 up 换成 ±Z，
+ * 若不重建 controls，水平拖动就变成抬降镜头（本该只绕竖轴转）。
+ */
+let controlsUp = new THREE.Vector3();
+
+/** 相机换过 up（顶视↔斜视）后重建 controls，让极轴对上新的 up。 */
+function ensureControlsUp(dom?: HTMLElement) {
+  const cam = activeCamera();
+  const el = dom ?? renderer.value?.domElement;
+  if (!cam || !el) return;
+  if (controls && cam.up.distanceTo(controlsUp) < 1e-6) return;
+  const target = controls?.target.clone();
+  controls?.dispose();
+  controls = makeControls(cam, el);
+  if (target) controls.target.copy(target);
+  controlsUp.copy(cam.up);
+}
+
 /** 切换正射投影与透视投影。
  *
  * 两个相机共享位置、朝向与「看到的范围」：切换时先量出当前可见范围，
@@ -604,6 +630,7 @@ function setOrtho(ortho: boolean) {
   if (dom) {
     controls?.dispose();
     controls = makeControls(to, dom);
+    controlsUp.copy(to.up);
     if (prevTarget) controls.target.copy(prevTarget);
   }
 
@@ -634,6 +661,8 @@ function setOrtho(ortho: boolean) {
   }
 
   rememberFit();
+  // 重建 controls 会新造一个 target，先把轴心补回去再 update
+  if (prevTarget) controls?.target.copy(prevTarget);
   controls?.update();
   syncOrientation();
   renderSoon();
@@ -694,6 +723,9 @@ function applySavedView(preset: SavedViewPreset) {
   if (!cam || !controls) return;
   cam.position.set(...preset.position);
   controls.target.set(...preset.target);
+  // up 必须按新朝向校正：上一台相机可能停在顶视/底视，把 up 留成 (0,0,∓1)，
+  // 此时 lookAt 会绕视线把画面滚一个角度——模型是斜的，用户只会觉得「歪了」
+  cam.up.copy(cameraUpFor(presetDirFrom(preset)));
   cam.lookAt(controls.target);
   if (cam instanceof THREE.OrthographicCamera && built) {
     // 正交相机的位置不影响成像大小，但视景体要按当前朝向重算，
@@ -703,16 +735,35 @@ function applySavedView(preset: SavedViewPreset) {
       const dir = new THREE.Vector3().subVectors(controls.target, cam.position);
       if (dir.lengthSq() > 0) {
         frameOrthoBox(cam, box, dir.normalize(), orthoAspect());
-        // 位置被 frameOrthoBox 改写了，按存档再摆回来
+        // 位置与 up 都被 frameOrthoBox 改写了，按存档再摆回来
         cam.position.set(...preset.position);
+        cam.up.copy(cameraUpFor(presetDirFrom(preset)));
         cam.lookAt(controls.target);
       }
     }
   }
+  // up 变了 polar 基准也要跟着换，否则之后水平拖动会抬降镜头
+  ensureControlsUp();
+  controls.target.set(...preset.target);
   rememberFit();
   controls.update();
   syncOrientation();
   renderSoon();
+}
+
+/** 一条自定义预设的「相机 → 目标」方向。
+ *
+ * 优先用存下来的位置与目标点算，两者重合（数据异常）时退回用 yaw/pitch 推，
+ * 保证任何情况下都能给 up 一个可用的视线方向。
+ */
+function presetDirFrom(preset: SavedViewPreset): THREE.Vector3 {
+  const dir = new THREE.Vector3(
+    preset.target[0] - preset.position[0],
+    preset.target[1] - preset.position[1],
+    preset.target[2] - preset.position[2],
+  );
+  if (dir.lengthSq() > 1e-12) return dir.normalize();
+  return dirFromAngles(preset.yaw, preset.pitch).multiplyScalar(-1);
 }
 
 /** 按预设键切换视角：投影方式由预设自己决定（真等距是正射，其余是透视）。

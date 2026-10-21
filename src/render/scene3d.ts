@@ -320,10 +320,34 @@ export function defaultViewDir(): THREE.Vector3 {
  *
  * pitch 取 ±90 时 cos(pitch) 为 0，yaw 不再影响方向——顶视与底视因此
  * 写成 (0,∓1,0)，这是正确行为而不是退化 bug。
+ *
+ * 界面上的取景路径用它；未知键退回默认方向，因为调用方已经在处理
+ * 「这个视角不存在」的兜底（见 tryPresetDir 说明）。
  */
 export function presetDir(name: string): THREE.Vector3 {
-  const preset = VIEW_PRESETS[name] ?? VIEW_PRESETS.front;
+  return tryPresetDir(name) ?? dirFromAngles(VIEW_PRESETS.front.yaw, VIEW_PRESETS.front.pitch);
+}
+
+/**
+ * 查表取预设方向；键不存在时返回 null。
+ *
+ * 用 hasOwnProperty 而不是 `name in VIEW_PRESETS`：后者会被原型链击穿，
+ * `"constructor"`、`"toString"` 这类键都会被判成「存在」，再一路算出 NaN。
+ * 只认表里自己声明的键。
+ */
+export function tryPresetDir(name: string): THREE.Vector3 | null {
+  if (!isBuiltinView(name)) return null;
+  const preset = VIEW_PRESETS[name];
   return dirFromAngles(preset.yaw, preset.pitch);
+}
+
+/** 某个键是不是内置视角预设。
+ *
+ * 不用 `Object.hasOwn`（要求 ES2022，本项目目标是 ES2021）；
+ * `name in obj` 也不行，它认原型链上的 `constructor`、`toString` 等键。
+ */
+export function isBuiltinView(name: string): boolean {
+  return Object.prototype.hasOwnProperty.call(VIEW_PRESETS, name);
 }
 
 /** 由角度求方向向量。与 presetDir 同源，自定义预设走这里。 */
@@ -363,9 +387,14 @@ export function anglesFromPosition(
   return { yaw, pitch };
 }
 
-/** 某个预设是否用正射投影 */
+/** 某个预设是否用正射投影。
+ *
+ * 未知键返回 false（按透视处理）：这只决定「切过去用哪台相机」，
+ * 退到透视不会让画面指向错误的角度，而未知道具在取景那一步会被挡下。
+ */
 export function presetIsOrtho(name: string): boolean {
-  return (VIEW_PRESETS[name] ?? VIEW_PRESETS.front).ortho;
+  if (!isBuiltinView(name)) return false;
+  return VIEW_PRESETS[name].ortho;
 }
 
 /**
@@ -450,6 +479,8 @@ export function frameOrthoBox(
   camera.top = halfH;
   camera.bottom = -halfH;
   camera.zoom = 1;
+  // 记下取景基准：之后换宽高比在这个半高上重算，不吃掉用户已经看到的范围
+  camera.userData.orthoBaseHalfHeight = halfH;
   camera.near = diag * 0.05;
   camera.far = diag * 5;
   camera.updateProjectionMatrix();
@@ -520,18 +551,49 @@ export function fitCamera(camera: THREE.PerspectiveCamera, group: THREE.Group) {
  *
  * 与界面上的「正面 / 左侧 45° / 右侧 45° / 背面」使用同一套角度定义，
  * 导出结果才会和用户在界面上看到的一致。
+ *
+ * 未知的视角名直接抛错：这个函数给批量导出用，静默退回某个默认视角会让
+ * 用户拿到一整批角度不对的图，却以为是自己选了那个角度。
  */
 export function applyPreset(
   camera: THREE.PerspectiveCamera,
   group: THREE.Group,
   name: string,
 ) {
+  const dir = tryPresetDir(name);
+  if (!dir) throw new Error(`未知的视角预设：${name}`);
   const box = new THREE.Box3().setFromObject(group);
   if (box.isEmpty()) {
     fitCamera(camera, group);
     return;
   }
-  frameBox(camera, box, presetDir(name));
+  frameBox(camera, box, dir);
+}
+
+/**
+ * 按一条自定义预设的位姿摆放导出相机。
+ *
+ * 与内置预设的区别：内置预设按模型重新算距离（「完整装下」），自定义预设
+ * 存的是用户当时的位置，照原样还原才是他要的那个画面。
+ */
+export function applySavedPose(
+  camera: THREE.PerspectiveCamera,
+  preset: SavedViewPreset,
+) {
+  const target = new THREE.Vector3(...preset.target);
+  const position = new THREE.Vector3(...preset.position);
+  const dir = new THREE.Vector3().subVectors(target, position);
+  if (dir.lengthSq() < 1e-12) {
+    // 位姿退化（位置与目标重合）不该静默出一张随机角度的图
+    throw new Error(`自定义预设「${preset.name}」的位置与注视点重合`);
+  }
+  camera.position.copy(position);
+  camera.up.copy(cameraUpFor(dir));
+  camera.lookAt(target);
+  const dist = position.distanceTo(target);
+  camera.near = Math.max(dist / 1000, 0.01);
+  camera.far = Math.max(dist * 12, 100);
+  camera.updateProjectionMatrix();
 }
 
 /**
@@ -594,6 +656,8 @@ export function setOrthoViewExtent(
 ): void {
   const h = Math.max(halfH, 1e-3);
   const w = h * Math.max(aspect, 1e-3);
+  // 记下取景基准：之后换宽高比只在这个基准上重算，不拿当前视景体反复推
+  cam.userData.orthoBaseHalfHeight = h;
   const zoom = Math.max(cam.zoom, 1e-6);
   cam.left = -w * zoom;
   cam.right = w * zoom;
@@ -603,18 +667,31 @@ export function setOrthoViewExtent(
 }
 
 /**
- * 按新的画布宽高比重设正交视景体，保证原先可见的范围仍然全部可见。
+ * 按新的画布宽高比重设正交视景体。
  *
- * 补的是「不够的那一边」，绝不缩小任何一边：否则拖动一次分隔条，
- * 已经取好的景就被重新裁一遍。
+ * 竖直方向的取景是基准，水平方向交给宽高比决定——这是正交投影的通行做法，
+ * 也是唯一稳定的做法：若每次都拿「当前视景体」去推下一次，撑大的宽度会被
+ * 当成新基准，反复拖动分隔条就会让画面越缩越小且不可逆。
+ *
+ * 基准半高由取景函数写下（`frameOrthoBox` / `setOrthoViewExtent`），
+ * 这里只读不改，因此同一宽高比无论经历多少次 resize 都回到同一个视景体。
  */
 export function adaptOrthoAspect(cam: THREE.OrthographicCamera, aspect: number): void {
   const a = Math.max(aspect, 1e-3);
-  const { halfW, halfH } = orthoVisibleExtent(cam);
-  // 两个方向都必须「不小于原来」：宽高比只能在多出来的那一边补空白，
-  // 不能为了凑比例把已经看得见的范围裁掉
-  const w = Math.max(halfW, halfH * a);
-  setOrthoViewExtent(cam, w / a, a);
+  setOrthoViewExtent(cam, orthoBaseHalfHeight(cam), a);
+}
+
+/** 正交相机的取景基准半高（不含 zoom）。
+ *
+ * 取景函数会写进 `userData`；没写过时（例如外部直接给了视景体）退回当前
+ * 可见半高，并把它记成基准，后续 resize 才有稳定的参照。
+ */
+export function orthoBaseHalfHeight(cam: THREE.OrthographicCamera): number {
+  const stored = cam.userData.orthoBaseHalfHeight;
+  if (typeof stored === "number" && Number.isFinite(stored) && stored > 0) return stored;
+  const halfH = Math.max(orthoVisibleExtent(cam).halfH, 1e-3);
+  cam.userData.orthoBaseHalfHeight = halfH;
+  return halfH;
 }
 
 /**
@@ -705,19 +782,28 @@ export class OffscreenRenderer {
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10000);
   }
 
-  /** 渲染一个场景并返回 PNG 字节。view 为视角预设名，w / h 为像素宽高。 */
+  /** 渲染一个场景并返回 PNG 字节。
+   *
+   * `view` 可以是内置视角名，也可以是自定义预设的位姿——批量导出时用户
+   * 可能正停在一条自定义预设上，那时只有位姿能还原他要的角度。
+   * 两样都不给才退回正面。
+   */
   async renderPng(
     data: SceneData,
     w: number,
     h: number,
-    view = "front",
+    view: string | SavedViewPreset = "front",
   ): Promise<Uint8Array> {
     const built = buildSceneGroup(data);
     try {
       this.scene.add(built.group);
       this.renderer.setSize(w, h, false);
       this.camera.aspect = w / h;
-      applyPreset(this.camera, built.group, view);
+      if (typeof view === "string") {
+        applyPreset(this.camera, built.group, view);
+      } else {
+        applySavedPose(this.camera, view);
+      }
       this.renderer.render(this.scene, this.camera);
 
       const blob: Blob = await new Promise((resolve, reject) => {

@@ -101,8 +101,12 @@ describe("方向标的坐标换算", () => {
 });
 
 describe("方向标的点击命中", () => {
-  /** 正视角下的方向标：六枚小球落在 ±R 的坐标轴上 */
-  const dots = gizmoDots(new THREE.Quaternion(), GIZMO_RADIUS);
+  /** 等距视角下的方向标：六枚小球围在四周，中心留给复位方块 */
+  const iso = (() => {
+    const dir = new THREE.Vector3(-1, -1, -1).normalize();
+    return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
+  })();
+  const dots = gizmoDots(iso, GIZMO_RADIUS);
 
   it("点在小球中心切到该轴", () => {
     const px = dots.find((d) => d.axis === "+x")!;
@@ -112,6 +116,19 @@ describe("方向标的点击命中", () => {
 
   it("点在中心方块上触发复位", () => {
     expect(hitGizmo(dots, 0, 0), "中心应触发复位").toEqual({ kind: "center" });
+  });
+
+  it("轴向视角下正对视线的轴落在中心，点它切该轴而非复位", () => {
+    // 正南视角（+Z 朝观察者）里 +Z 球的投影就在中心，与复位方块重叠。
+    // 这时它压住中心是必然的：小球半径比方块大，用户看到的就是那枚球。
+    const south = new THREE.Quaternion();
+    const dotsSouth = gizmoDots(south, GIZMO_RADIUS);
+    const pz = dotsSouth.find((d) => d.axis === "+z")!;
+    expect(Math.hypot(pz.x, pz.y), "+Z 球应落在中心").toBeLessThan(1e-6);
+    expect(hitGizmo(dotsSouth, pz.x, pz.y), "应切到该轴").toEqual({
+      kind: "axis",
+      key: "south",
+    });
   });
 
   it("点在小球边缘之内仍命中，超出半径则不命中", () => {
@@ -126,6 +143,21 @@ describe("方向标的点击命中", () => {
     // 对角线方向离六枚小球都远，那里应当什么都不触发，
     // 使拖拽按在空白处时不会误切视角
     expect(hitGizmo(dots, GIZMO_RADIUS * 0.7, GIZMO_RADIUS * 0.7)).toBeNull();
+  });
+
+  it("俯角很大时 +Y 小球压在中心上，仍应切顶视而不是复位", () => {
+    // 俯角 ≥72° 时 +Y 小球会落进中心方块的范围里。若中心判定优先，
+    // 用户越接近顶视越点不动顶视按钮，只能被复位
+    const almostTop = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(-Math.PI / 2 + 0.08, 0, 0),
+    );
+    const dots = gizmoDots(almostTop, GIZMO_RADIUS);
+    const py = dots.find((d) => d.axis === "+y")!;
+    expect(py.y, "此时 +Y 小球应落在中心附近").toBeLessThan(9);
+    expect(hitGizmo(dots, py.x, py.y), "应切顶视而非复位").toEqual({
+      kind: "axis",
+      key: "top",
+    });
   });
 
   it("两枚小球重叠时取更近的那一枚", () => {

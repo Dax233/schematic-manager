@@ -5855,4 +5855,40 @@ describe("自定义视角预设", () => {
     expect(footer!.textContent, "不应露出未翻译的键").not.toContain("common.cancel");
     w.unmount();
   });
+
+  it("把位置与注视点改成重合时不允许保存", async () => {
+    // 这种位姿算不出朝向。旧实现会照存不误，重启后又被校验丢掉，
+    // 用户看到的是「自己存的预设没了」
+    const w = await setup();
+    await openMenu(w);
+    menuItem("保存为预设角度")!.click();
+    await flushPromises();
+
+    const numbers = [
+      ...document.querySelectorAll<HTMLInputElement>(".view-preset .arco-input-number input"),
+    ];
+    // 面板打开时位置取自实时相机，注视点是模型的中心；
+    // 把位置的三个分量都填成同一组数才会重合，这里直接把三格清空更简单
+    for (const el of numbers.slice(0, 3)) {
+      el.value = "";
+      el.dispatchEvent(new Event("input"));
+      el.dispatchEvent(new FocusEvent("blur"));
+    }
+    await flushPromises();
+
+    const input = document.querySelector<HTMLInputElement>(".view-preset input[type=text]")!;
+    input.value = "坏视角";
+    input.dispatchEvent(new Event("input"));
+    await flushPromises();
+
+    const ok = [...document.querySelectorAll<HTMLElement>(".arco-modal-footer button")].find(
+      (b) => (b.textContent ?? "").trim() === "保存",
+    )!;
+    expect(ok, "坐标留空时保存按钮应禁用").toBeTruthy();
+    expect(
+      (ok as HTMLButtonElement).disabled,
+      "坐标不完整时不能保存",
+    ).toBe(true);
+    w.unmount();
+  });
 });

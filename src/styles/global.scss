@@ -1869,7 +1869,6 @@ body[arco-theme='dark'] {
   &__dot {
     stroke: var(--color-bg-2);
     stroke-width: 1.5;
-    transition: r 0.12s ease;
   }
 
   &__label {
@@ -1883,9 +1882,5 @@ body[arco-theme='dark'] {
     fill: var(--color-fill-3);
     stroke: var(--color-border-2);
     stroke-width: 1;
-
-    &:hover {
-      fill: var(--color-fill-4);
-    }
   }
 }

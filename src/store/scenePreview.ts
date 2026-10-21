@@ -24,8 +24,10 @@ import {
   OffscreenRenderer,
   anglesFromPosition,
   exportPixelSize,
+  isBuiltinView,
   isPresetNameUsable,
   presetIsOrtho,
+  sanitizeViewPreset,
 } from "../render/scene3d";
 import type { ExportAspect, SavedViewPreset } from "../render/scene3d";
 import { NamePool, joinPath, previewStem } from "../render/export_name";
@@ -182,6 +184,10 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
    * 位姿可传可不传：不传就取当前相机的快照（「照我现在看到的存」），
    * 传了就按传入的值存（面板里改过角度之后存的就是改后的值）。
    *
+   * 候选预设必须过一遍 `sanitizeViewPreset`——那是从磁盘读回来时用的同一套
+   * 校验。写读两侧用同一条规则，才不会出现「存得进、重启后被静默丢弃」：
+   * 位置与目标重合、坐标里有 NaN 这类值当次看着正常，重开就没了。
+   *
    * 返回失败原因（用于提示），成功返回空字符串。名字不可用、或场景还没就绪
    * 时不能存——存一条点下去没反应的预设比不存更糟。
    */
@@ -207,17 +213,16 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
       new THREE.Vector3(...pose.position),
       new THREE.Vector3(...pose.target),
     );
-    savedViews.value = [
-      ...savedViews.value,
-      {
-        name: name.trim(),
-        ortho,
-        position: pose.position,
-        target: pose.target,
-        yaw,
-        pitch,
-      },
-    ];
+    const candidate = sanitizeViewPreset({
+      name: name.trim(),
+      ortho,
+      position: pose.position,
+      target: pose.target,
+      yaw,
+      pitch,
+    });
+    if (!candidate) return t("view.saveInvalidPose");
+    savedViews.value = [...savedViews.value, candidate];
     return "";
   }
 
@@ -290,6 +295,24 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   }
 
   /**
+   * 批量导出该用哪个视角。
+   *
+   * `activeView` 有两种取值：内置预设的键，或 `custom:<名字>`。
+   * 后者要去 `savedViews` 里查出实际位姿——把 `custom:xxx` 当内置键传下去
+   * 会被查表兜底成正面透视，用户拿到一整批角度不对的图却没有任何提示。
+   *
+   * 查不到（预设被删、状态脏了）时返回 null，由调用方明确报错。
+   */
+  function currentExportView(): string | SavedViewPreset | null {
+    const name = activeView.value;
+    if (!name.startsWith("custom:")) {
+      return isBuiltinView(name) ? name : null;
+    }
+    const preset = savedViews.value.find((p) => `custom:${p.name}` === name);
+    return preset ?? null;
+  }
+
+  /**
    * 批量导出预览图。
    *
    * 用独立的离屏渲染器逐个渲染，而不是把界面切到每个文件再导出：
@@ -308,7 +331,13 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     if (!dir) return;
 
     const px = size ?? exportPixels.value;
-    const view = activeView.value;
+    // 当前视角可能是一条自定义预设：那时 activeView 是 `custom:名字`，
+    // 不能当内置视角名传下去，否则会静默退回正面透视
+    const view = currentExportView();
+    if (view === null) {
+      Message.warning(t("export.viewUnavailable"));
+      return;
+    }
     exporting.value = true;
     exportingProgress.value = { done: 0, total: list.length };
     let renderer: OffscreenRenderer | null = null;

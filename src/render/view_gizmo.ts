@@ -36,6 +36,12 @@ export interface GizmoDot {
 /** 方向标命中的目标 */
 export type GizmoHit = { kind: "axis"; key: string } | { kind: "center" };
 
+/** 中心复位方块的半边长（SVG 用户单位）。模板按它画，命中检测也按它判。 */
+export const GIZMO_CENTER_HALF = 7;
+
+/** 中心方块的命中容差（SVG 用户单位） */
+const CENTER_SLOP = 2;
+
 /**
  * 判断点落在方向标的哪个可点击目标上。
  *
@@ -43,8 +49,14 @@ export type GizmoHit = { kind: "axis"; key: string } | { kind: "center" };
  * 画面」也能用：若事件被 SVG 收下，画布就收不到 pointerdown，拖动直接失效。
  * 因此 SVG 整块不接收指针事件，改由画布在 click 时把坐标喂进来查一遍。
  *
- * 多个小球在屏幕上可能重叠（斜视角时前后轴几乎重在一起），按距离取最近的，
- * 点哪个就切哪个，不会出现「点在 A 上却切到 B」。
+ * 先判小球、后判中心：俯角大的时候 +Y/−Y 小球几乎压在中心方块上，
+ * 若中心优先，用户想切顶视却会触发复位。中心方块比小球小，
+ * 让小球优先既符合「点哪个是哪个」，也不会让中心区域变得难以点中。
+ *
+ * 多个小球在屏幕上可能重叠（斜视角时前后轴几乎重在一起），按距离取最近的。
+ * 正对某根轴看过去时，这根轴的两端会投影到同一点，距离完全相等——此时取
+ * 朝向观察者的那一端（depth 大），因为它画在另一个上面，用户看到并想点的
+ * 就是它。
  */
 export function hitGizmo(
   dots: readonly GizmoDot[],
@@ -52,15 +64,20 @@ export function hitGizmo(
   y: number,
   dotRadius = GIZMO_DOT_RADIUS,
 ): GizmoHit | null {
-  // 中心复位方块半边长 7，给一点容差
-  if (Math.abs(x) <= 9 && Math.abs(y) <= 9) return { kind: "center" };
-  let best: { key: string; dist: number } | null = null;
+  let best: GizmoDot | null = null;
+  let bestDist = Infinity;
   for (const d of dots) {
     const dist = Math.hypot(x - d.x, y - d.y);
     if (dist > dotRadius) continue;
-    if (!best || dist < best.dist) best = { key: d.key, dist };
+    if (dist < bestDist - 1e-9 || (Math.abs(dist - bestDist) <= 1e-9 && best && d.depth > best.depth)) {
+      best = d;
+      bestDist = dist;
+    }
   }
-  return best ? { kind: "axis", key: best.key } : null;
+  if (best) return { kind: "axis", key: best.key };
+  const reach = GIZMO_CENTER_HALF + CENTER_SLOP;
+  if (Math.abs(x) <= reach && Math.abs(y) <= reach) return { kind: "center" };
+  return null;
 }
 
 /** 轴向标识转单位向量。只在这里用，因此不对外导出。 */
