@@ -19,7 +19,7 @@ import { writeFile } from "@tauri-apps/plugin-fs";
 import { displayName, t } from "../i18n";
 import { buildScene, renderBlockIcons } from "../api";
 import type SceneViewer from "../components/SceneViewer.vue";
-import { OffscreenRenderer, exportPixelSize } from "../render/scene3d";
+import { OffscreenRenderer, exportPixelSize, presetIsOrtho } from "../render/scene3d";
 import type { ExportAspect } from "../render/scene3d";
 import { NamePool, joinPath, previewStem } from "../render/export_name";
 import type { AnalysisResult, BlockRow, SceneData, SchematicSummary } from "../types";
@@ -54,6 +54,19 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   const sceneError = ref("");
   const brightness = ref(1.45);
   const activeView = ref("left45");
+  /** 预览区右键菜单的位置；open 为 false 时不显示。
+   *
+   * 与投影列表的行右键菜单分开存放：那个作用于文件行，这个作用于 3D 画布，
+   * 两者同时在屏上没有任何意义，混用一份状态会让它们互相顶掉。
+   */
+  const viewMenu = ref<{ open: boolean; x: number; y: number }>({
+    open: false,
+    x: 0,
+    y: 0,
+  });
+  /** 当前是否正射投影。与 activeView 分开记录：用户可以手动切投影而
+   *  不换角度，此时 activeView 仍然是原来那个键。 */
+  const orthoView = ref(false);
   const exportSize = ref<number>(1024);
   /** 导出尺寸的宽高比；与 exportSize（短边像素）一起决定实际宽高 */
   const exportAspect = ref<ExportAspect>("1x1");
@@ -130,7 +143,29 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
    */
   function setView(name: string) {
     activeView.value = name;
+    // 记下这次切换带上了投影方式：右键菜单里「正射投影」的勾选状态、
+    // 以及下次保存自定义预设都要读它
+    orthoView.value = presetIsOrtho(name);
     viewer.value?.applyViewPreset(name);
+  }
+
+  /** 手动切换正射/透视，不改角度。
+   *
+   * 与 setView 的区别：它只换投影方式，当前朝向保持不变。
+   * 用户想「用同一个角度看看正射什么效果」时用这个。
+   */
+  function setOrthoView(ortho: boolean) {
+    orthoView.value = ortho;
+    viewer.value?.setOrtho(ortho);
+  }
+
+  /** 在预览区某处打开右键菜单 */
+  function openViewMenu(x: number, y: number) {
+    viewMenu.value = { open: true, x, y };
+  }
+
+  function closeViewMenu() {
+    if (viewMenu.value.open) viewMenu.value = { ...viewMenu.value, open: false };
   }
 
   /** 导出当前视角为透明背景 PNG（单个文件）。
@@ -563,6 +598,11 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     sceneError,
     brightness,
     activeView,
+    viewMenu,
+    orthoView,
+    setOrthoView,
+    openViewMenu,
+    closeViewMenu,
     exportSize,
     exportAspect,
     exportPixels,

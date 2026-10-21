@@ -44,11 +44,21 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 // SceneViewer 依赖 WebGL，jsdom 没有。挂载测试关心的是外壳界面，
 // 因此用空组件替代，避免把 WebGL 缺失误判成界面故障。
+// 方法要与真实组件的 defineExpose 保持一致：store 会直接调用它们，
+// 少一个就会在点视角时抛「is not a function」，而那是替身的错、不是代码的错。
 vi.mock("../components/SceneViewer.vue", () => ({
   default: {
     name: "SceneViewer",
     template: "<div class='scene-viewer-stub' />",
-    methods: { exportPng: () => null, applyPreset: () => {} },
+    methods: {
+      exportPng: () => null,
+      applyPreset: () => {},
+      applyViewPreset: () => {},
+      setOrtho: () => {},
+      isOrtho: () => false,
+      fitCamera: () => {},
+      cameraQuaternion: () => null,
+    },
   },
 }));
 
@@ -5494,6 +5504,125 @@ describe("保存语义（未保存草稿与另存为）", () => {
     expect(modals.join("||"), "应弹出未保存确认").toContain("未保存的修改");
     expect(modals.join("||"), "确认框里应说明关窗会丢弃修改").toContain("丢弃");
     expect(document.querySelector(".arco-modal"), "确认框应可见").toBeTruthy();
+    w.unmount();
+  });
+});
+describe("预览区的右键菜单", () => {
+  /** 挂载并选中文件，让预览舞台出现 */
+  async function setup() {
+    stubInvoke({
+      analyze_schematic: () => ({
+        blocks: [],
+        entities: [],
+        tileEntities: [],
+        nonAirTotal: 0,
+        airTotal: 0,
+        distinctBlockTypes: 0,
+        distinctStates: 0,
+      }),
+      build_scene: () => scene,
+    });
+    const w = mountApp();
+    await flushPromises();
+    mockOpen.mockResolvedValue("/p");
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+    return w;
+  }
+
+  /** 在预览舞台上右键 */
+  async function rightClick(w: ReturnType<typeof mountApp>) {
+    const stage = w.find(".preview__stage");
+    expect(stage.exists(), "应有预览舞台").toBe(true);
+    await stage.trigger("contextmenu", { clientX: 300, clientY: 200 });
+    await flushPromises();
+    return stage;
+  }
+
+  it("右键预览区弹出视角菜单，含投影切换与十个预设", async () => {
+    const w = await setup();
+    await rightClick(w);
+
+    const menu = document.querySelector(".view-menu");
+    expect(menu, "右键应弹出视角菜单").toBeTruthy();
+    const text = menu!.textContent ?? "";
+    expect(text, "应有正射投影开关").toContain("正射投影");
+    expect(text, "应有预设角度分组").toContain("预设角度");
+    // 十个预设一个都不能少
+    for (const name of [
+      "顶（Y+）",
+      "底（Y−）",
+      "南（Z+）",
+      "北（Z−）",
+      "东（X+）",
+      "西（X−）",
+      "等距右",
+      "等距左",
+      "真等距右",
+      "真等距左",
+    ]) {
+      expect(text, `菜单里应有「${name}」`).toContain(name);
+    }
+    w.unmount();
+  });
+
+  it("点菜单里的预设后菜单关闭", async () => {
+    const w = await setup();
+    await rightClick(w);
+
+    const items = [...document.querySelectorAll<HTMLElement>(".view-menu .ctx-menu__item")];
+    const top = items.find((el) => (el.textContent ?? "").includes("顶（Y+）"));
+    expect(top, "应有顶视角项").toBeTruthy();
+    top!.click();
+    await flushPromises();
+
+    expect(document.querySelector(".view-menu"), "选完之后菜单应关闭").toBeNull();
+    w.unmount();
+  });
+
+  it("点菜单外面会关闭菜单", async () => {
+    const w = await setup();
+    await rightClick(w);
+    expect(document.querySelector(".view-menu"), "菜单应已打开").toBeTruthy();
+
+    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    await flushPromises();
+    expect(document.querySelector(".view-menu"), "点别处应关闭菜单").toBeNull();
+    w.unmount();
+  });
+
+  it("按 Esc 关闭菜单", async () => {
+    const w = await setup();
+    await rightClick(w);
+    expect(document.querySelector(".view-menu"), "菜单应已打开").toBeTruthy();
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flushPromises();
+    expect(document.querySelector(".view-menu"), "按 Esc 应关闭菜单").toBeNull();
+    w.unmount();
+  });
+
+  it("点「正射投影」会打上勾，再点取消", async () => {
+    const w = await setup();
+    const stage = w.find(".preview__stage");
+
+    await stage.trigger("contextmenu", { clientX: 300, clientY: 200 });
+    await flushPromises();
+    const orthoItem = () =>
+      [...document.querySelectorAll<HTMLElement>(".view-menu .ctx-menu__item")].find((el) =>
+        (el.textContent ?? "").includes("正射投影"),
+      )!;
+
+    expect(orthoItem().textContent, "初始未勾选").not.toContain("✓");
+    orthoItem().click();
+    await flushPromises();
+
+    // 再开一次菜单看勾选状态
+    await stage.trigger("contextmenu", { clientX: 300, clientY: 200 });
+    await flushPromises();
+    expect(orthoItem().textContent, "点过之后应显示勾选").toContain("✓");
     w.unmount();
   });
 });

@@ -11,6 +11,7 @@ import SceneViewer from "./SceneViewer.vue";
 import BlockStatTable from "./BlockStatTable.vue";
 import EntityTable from "./EntityTable.vue";
 import ExportDialog from "./ExportDialog.vue";
+import { PRESET_MENU } from "../render/scene3d";
 import {
   PREVIEW_MAX_H,
   PREVIEW_MAX_W,
@@ -64,11 +65,49 @@ const {
   checkedCount,
   hasChecked,
   openConvert,
+  viewMenu,
+  orthoView,
+  setOrthoView,
+  openViewMenu,
+  closeViewMenu,
 } = useAppStore();
 
 /** 预览行的 DOM，用于实测它拿到的高度 */
 const previewRowEl = ref<HTMLElement | null>(null);
 let rowObserver: ResizeObserver | null = null;
+
+/** 在预览舞台上右键：打开视角菜单。
+ *
+ * 菜单靠下/靠右时向内翻，避免被窗口边缘裁掉。菜单宽高取的是实测值，
+ * 写死常数在语言切换后（中文比英文短）会算偏。
+ */
+function onStageContextMenu(e: MouseEvent) {
+  e.preventDefault();
+  const MENU_W = 168;
+  const MENU_H = 300;
+  const x = e.clientX + MENU_W > window.innerWidth ? e.clientX - MENU_W : e.clientX;
+  const y = e.clientY + MENU_H > window.innerHeight ? e.clientY - MENU_H : e.clientY;
+  openViewMenu(x, y);
+}
+
+/** 点在菜单外面或按 Esc 时关闭 */
+function onDocPointerDown(e: Event) {
+  if (!viewMenu.value.open) return;
+  const target = e.target as HTMLElement | null;
+  if (target?.closest(".view-menu")) return;
+  closeViewMenu();
+}
+
+function onDocKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") closeViewMenu();
+}
+
+/** 从菜单里选一个预设角度：先关菜单再切视角，
+ *  否则菜单会停在原地挡住刚换好的画面。 */
+function pickViewFromMenu(key: string) {
+  closeViewMenu();
+  setView(key);
+}
 
 onMounted(() => {
   // 舞台尺寸必须按实测高度算：控制条是 flex-wrap 的，预览区窄到放不下
@@ -80,11 +119,18 @@ onMounted(() => {
   });
   rowObserver.observe(el);
   measurePreviewRowHeight(el.getBoundingClientRect().height);
+
+  // 关闭视角菜单的两个入口：点别处、按 Esc。绑在 document 上而不是菜单上，
+  // 否则点在画布上时事件根本到不了这里，菜单会一直挂着。
+  document.addEventListener("pointerdown", onDocPointerDown, true);
+  document.addEventListener("keydown", onDocKeydown);
 });
 
 onBeforeUnmount(() => {
   rowObserver?.disconnect();
   rowObserver = null;
+  document.removeEventListener("pointerdown", onDocPointerDown, true);
+  document.removeEventListener("keydown", onDocKeydown);
 });
 
 </script>
@@ -104,6 +150,7 @@ onBeforeUnmount(() => {
         <div
           class="preview__stage"
           :style="{ width: previewWidth + 'px', height: previewStageHeight + 'px' }"
+          @contextmenu="onStageContextMenu"
         >
           <!-- 方块数超过阈值：默认不生成几何，等用户点「开始渲染」。
                三万块以上的场景建几何并上传显存会明显卡顿，何时做由用户定。 -->
@@ -389,5 +436,37 @@ onBeforeUnmount(() => {
 
     <!-- 导出尺寸面板：点「导出预览图」先在这里定尺寸，确认后才走系统保存框 -->
     <ExportDialog />
+
+    <!-- 预览区右键菜单：投影方式与十个预设角度。
+         定位用 fixed，跟着鼠标走；点击别处或按 Esc 关闭（见 onDocPointerDown）。 -->
+    <div
+      v-if="viewMenu.open"
+      class="view-menu ctx-menu"
+      :style="{ left: viewMenu.x + 'px', top: viewMenu.y + 'px' }"
+      role="menu"
+      @contextmenu.prevent
+    >
+      <div
+        class="ctx-menu__item"
+        role="menuitem"
+        tabindex="0"
+        @click="setOrthoView(!orthoView)"
+      >
+        <span class="view-menu__check">{{ orthoView ? "✓" : "" }}</span>
+        {{ t("view.menuOrtho") }}
+      </div>
+      <div class="ctx-menu__sep" role="separator" />
+      <div class="ctx-menu__label">{{ t("view.menuPresets") }}</div>
+      <div
+        v-for="item in PRESET_MENU"
+        :key="item.key"
+        class="ctx-menu__item"
+        role="menuitem"
+        tabindex="0"
+        @click="pickViewFromMenu(item.key)"
+      >
+        {{ t(item.labelKey) }}
+      </div>
+    </div>
   </div>
 </template>
