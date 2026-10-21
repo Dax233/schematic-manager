@@ -6,14 +6,25 @@ import { t } from "../i18n";
 import type { SceneData } from "../types";
 import ViewGizmo from "./ViewGizmo.vue";
 import {
+  GIZMO_RADIUS,
+  GIZMO_VIEW_RADIUS,
+  gizmoDots,
+  hitGizmo,
+  type GizmoHit,
+} from "../render/view_gizmo";
+import {
+  adaptOrthoAspect,
   buildSceneGroup,
   defaultViewDir,
   fitCamera as fitCameraTo,
   frameBox,
   frameOrthoBox,
+  orthoVisibleExtent,
   orthoZoomLimits,
+  perspectiveViewHalfHeight,
   presetDir,
   presetIsOrtho,
+  setOrthoViewExtent,
   syncClipPlanes,
   zoomLimits,
   type SavedViewPreset,
@@ -41,6 +52,15 @@ const emit = defineEmits<{
 
 const host = ref<HTMLDivElement | null>(null);
 const error = ref("");
+
+/** 方向标元素，供命中检测读取它在屏幕上的位置 */
+const gizmoEl = ref<InstanceType<typeof ViewGizmo> | null>(null);
+
+/** 按下与松开的最大位移（像素）：超过就当成拖拽，不触发方向标点击 */
+const GIZMO_CLICK_SLOP = 4;
+
+/** 画布上按下的位置，用来区分「点击」与「拖拽后松开」 */
+let pressAt: { x: number; y: number } | null = null;
 
 // three 的对象不需要响应式代理（会被深度追踪，既慢又可能出错）
 const renderer = shallowRef<THREE.WebGLRenderer | null>(null);
@@ -216,6 +236,62 @@ function applyPreset(name: string) {
   renderSoon();
 }
 
+/**
+ * 方向标点击：把画布坐标换算成方向标内部坐标后做命中检测。
+ *
+ * 方向标是 SVG，用 viewBox 等比缩放，因此「画布像素 → SVG 用户单位」要按
+ * 实际显示尺寸与 viewBox 尺寸的比例换算。命中后按轴向切视角，点中心则取景复位。
+ */
+function onCanvasPointerDown(e: PointerEvent) {
+  // 只记左键，右键留给右键菜单
+  if (e.button !== 0) {
+    pressAt = null;
+    return;
+  }
+  pressAt = { x: e.clientX, y: e.clientY };
+}
+
+function onCanvasPointerUp(e: PointerEvent) {
+  const start = pressAt;
+  pressAt = null;
+  if (!start) return;
+  // 拖拽过就不算点击：OrbitControls 已经把画面转过，再切轴线视角会很突兀
+  if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > GIZMO_CLICK_SLOP) return;
+  const hit = hitGizmoAt(e.clientX, e.clientY);
+  if (!hit) return;
+  if (hit.kind === "center") {
+    fitCamera();
+    return;
+  }
+  emit("pickView", hit.key);
+}
+
+/** 把一次屏幕点的位置换算成方向标坐标系里的命中结果。
+ *
+ * 取方向标元素的包围盒做换算，而不是把六个小球的屏幕位置另算一遍：
+ * 方向标由 CSS 固定在左下角，位置由布局决定，DOM 的盒子里就已经包含了
+ * 内边距与边框，直接从盒子读最省事也最不会出错。
+ */
+function hitGizmoAt(clientX: number, clientY: number): GizmoHit | null {
+  const el = gizmoEl.value?.$el as HTMLElement | undefined;
+  if (!el) return null;
+  const rect = el.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return null;
+  if (
+    clientX < rect.left ||
+    clientX > rect.right ||
+    clientY < rect.top ||
+    clientY > rect.bottom
+  ) {
+    return null;
+  }
+  // 显示尺寸 → viewBox 尺寸（viewBox 边长是 GIZMO_VIEW_RADIUS * 2）
+  const unit = (GIZMO_VIEW_RADIUS * 2) / rect.width;
+  const x = (clientX - rect.left) * unit - GIZMO_VIEW_RADIUS;
+  const y = (clientY - rect.top) * unit - GIZMO_VIEW_RADIUS;
+  return hitGizmo(gizmoDots(orientation.value, GIZMO_RADIUS), x, y);
+}
+
 /** 正交相机的宽高比：它不存 aspect，要由视景体反推。
  *
  * 视景体在 onResize 里按容器宽高与上一个 aspect 重新算，因此这里读的是
@@ -255,30 +331,14 @@ function onResize() {
   if (w === 0 || h === 0) return;
   renderer.value.setSize(w, h, false);
   if (cam instanceof THREE.OrthographicCamera) {
-    // 正交相机的成像大小由视景体与 zoom 决定，宽高比变化时必须重算左右边界，
+    // 正交相机的成像大小由视景体与 zoom 决定，宽高比变化时必须重算边界，
     // 否则窗口一变宽画面就会被横向拉伸
-    resizeOrthoFrustum(cam, w / h);
+    adaptOrthoAspect(cam, w / h);
   } else {
     cam.aspect = w / h;
     cam.updateProjectionMatrix();
   }
   renderSoon();
-}
-
-/** 按新的宽高比重设正交视景体，保持当前水平可视范围不变。
- *
- * 只改 top/bottom 并让 zoom 参与：直接改 left/right 会把用户的缩放一并抹掉。
- */
-function resizeOrthoFrustum(cam: THREE.OrthographicCamera, aspect: number) {
-  const halfH = cam.top / cam.zoom;
-  const halfW = cam.right / cam.zoom;
-  // 以「较宽的一侧为准」重算另一半，保证模型不被裁掉
-  const newHalfH = halfW / aspect < halfH ? halfW / aspect : halfH;
-  cam.left = -halfW;
-  cam.right = halfW;
-  cam.top = newHalfH;
-  cam.bottom = -newHalfH;
-  cam.updateProjectionMatrix();
 }
 
 /** 重建网格并刷新画面 */
@@ -326,6 +386,13 @@ onMounted(() => {
     // 正交相机先给一个占位视景体，真正的尺寸在 fitCamera 里按模型算
     orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10000);
     controls = makeControls(perspCamera, r.domElement);
+
+    // 方向标的点击：事件必须由画布接，方向标自己不能收——否则在它上面
+    // 按住拖动会被它吃掉，画布收不到 pointerdown，拖不动视角。
+    // pointerup 时用移动距离区分「点击」与「拖拽后的松开」。
+    const dom = r.domElement;
+    dom.addEventListener("pointerdown", onCanvasPointerDown);
+    dom.addEventListener("pointerup", onCanvasPointerUp);
 
     const loop = () => {
       raf = requestAnimationFrame(loop);
@@ -447,7 +514,7 @@ async function exportPng(w: number, h: number): Promise<Uint8Array> {
     r.setPixelRatio(1);
     r.setSize(w, h, false);
     if (isOrtho) {
-      resizeOrthoFrustum(cam, w / h);
+      adaptOrthoAspect(cam, w / h);
     } else {
       cam.aspect = w / h;
       cam.updateProjectionMatrix();
@@ -493,15 +560,31 @@ function makeControls(cam: THREE.Camera, dom: HTMLElement): OrbitControls {
 
 /** 切换正射投影与透视投影。
  *
- * 两个相机共享位置与朝向：切换时把当前相机的位姿拷给另一个，让用户看到的是
- * 「同一角度换了投影」，画面不会跳位置。OrbitControls 绑在具体相机实例上，
- * 因此必须重建它——顺序上先重建、再按新相机取景，否则会拿着旧 controls 的
- * target 去算朝向。
+ * 两个相机共享位置、朝向与「看到的范围」：切换时先量出当前可见范围，
+ * 换到新相机后按同一个范围摆好，用户看到的是「同一构图换了投影」。
+ * 透视的可见范围由距离与 FOV 决定，正交的由视景体除以 zoom 决定，
+ * 两者都是世界坐标长度，可以互相换算。
+ *
+ * OrbitControls 绑在具体相机实例上，没有换相机的接口，必须重建。
  */
 function setOrtho(ortho: boolean) {
   if (useOrtho === ortho) return;
   const from = activeCamera();
-  const prevTarget = controls?.target.clone() ?? new THREE.Vector3();
+  // 没有 controls 时（初始化中途）无从换算可见范围，退回按模型重新取景
+  const prevTarget = controls?.target.clone() ?? null;
+
+  let prevHalfH = 0;
+  if (from && prevTarget) {
+    if (from instanceof THREE.PerspectiveCamera) {
+      prevHalfH = perspectiveViewHalfHeight(
+        from.position.distanceTo(prevTarget),
+        from.fov,
+      );
+    } else if (from instanceof THREE.OrthographicCamera) {
+      prevHalfH = orthoVisibleExtent(from).halfH;
+    }
+  }
+
   useOrtho = ortho;
   const to = activeCamera();
   if (!to) return;
@@ -516,23 +599,55 @@ function setOrtho(ortho: boolean) {
   if (dom) {
     controls?.dispose();
     controls = makeControls(to, dom);
-    controls.target.copy(prevTarget);
+    if (prevTarget) controls.target.copy(prevTarget);
   }
 
-  if (to instanceof THREE.OrthographicCamera && built) {
-    const box = new THREE.Box3().setFromObject(built.group);
-    if (!box.isEmpty()) {
-      // 沿用当前朝向（相机 → 目标），只把视景体按新宽高比重算
-      const dir = new THREE.Vector3().subVectors(prevTarget, to.position);
-      if (dir.lengthSq() > 0) {
-        frameOrthoBox(to, box, dir.normalize(), orthoAspect());
+  if (prevHalfH > 0 && prevTarget) {
+    const aspect = orthoAspect();
+    if (to instanceof THREE.OrthographicCamera) {
+      // 正交下没有距离概念，位置只影响裁剪：沿用透视那个位置即可
+      // （它离模型足够远），裁剪面按模型尺寸给足余量。
+      fitOrthoClipPlanes(to, prevTarget);
+      to.zoom = 1;
+      setOrthoViewExtent(to, prevHalfH, aspect);
+    } else if (to instanceof THREE.PerspectiveCamera) {
+      // 透视保持自己的 FOV 不变，改用距离去凑同一个可见范围。
+      // 换 FOV 会连透视的远近感一起变掉，那是另一个视角而不是换投影。
+      const halfH = Math.max(prevHalfH, 1e-6);
+      const dist =
+        halfH / Math.tan((to.fov * Math.PI) / 360);
+      const dir = new THREE.Vector3().subVectors(to.position, prevTarget);
+      if (dir.lengthSq() > 1e-6) {
+        to.position.copy(prevTarget).addScaledVector(dir.normalize(), dist);
       }
+      to.aspect = aspect;
+      to.updateProjectionMatrix();
     }
+  } else {
+    // 没有可换算的可见范围（初始化中途）：按新相机自己的方式重新取景
+    fitCamera();
   }
 
   rememberFit();
   controls?.update();
+  syncOrientation();
   renderSoon();
+}
+
+/** 给正交相机摆一对足够覆盖模型的裁剪面。
+ *
+ * 正交相机的位置不影响成像大小，但 near/far 仍会裁掉相机前后的东西：
+ * 沿用透视那台相机算出来的值会在模型很大时把画面切掉。
+ */
+function fitOrthoClipPlanes(cam: THREE.OrthographicCamera, target: THREE.Vector3) {
+  if (!built) return;
+  const box = new THREE.Box3().setFromObject(built.group);
+  if (box.isEmpty()) return;
+  const diag = Math.max(box.getSize(new THREE.Vector3()).length(), 1e-3);
+  const dist = cam.position.distanceTo(target);
+  cam.near = Math.max(dist - diag * 2, 0.01);
+  cam.far = dist + diag * 2;
+  cam.updateProjectionMatrix();
 }
 
 /** 当前是否为正射投影 */
@@ -631,16 +746,24 @@ defineExpose({
     >
       {{ fps === 0 ? t("scene.fpsIdle") : t("scene.fps", { value: fps }) }}
     </div>
+    <!-- 三角形数：画面右下角，与右上的帧率读数对称。
+         它随场景变化而不随视角变化，因此只有一处读数、跟着 scene 走。 -->
+    <div
+      v-if="scene && !error"
+      class="scene-viewer__tris"
+      :title="t('scene.triangles', { count: scene.totalTriangles.toLocaleString() })"
+    >
+      {{ t("scene.triangles", { count: scene.totalTriangles.toLocaleString() }) }}
+    </div>
     <div v-if="error" class="scene-viewer__error">{{ error }}</div>
     <div v-else-if="!scene" class="scene-viewer__empty">{{ t("scene.empty") }}</div>
-    <!-- XYZ 方向标：显示当前朝向的三个坐标轴，点端点小球切到对应轴视角。
-         没有场景时不显示——那时没有任何东西可以「看」。 -->
+    <!-- XYZ 方向标：显示当前朝向的三个坐标轴。它不接收指针事件——
+         命中检测由画布统一做，这样在它上面按住拖动照样能转视角。 -->
     <ViewGizmo
       v-if="scene && !error"
+      ref="gizmoEl"
       class="scene-viewer__gizmo"
       :orientation="orientation"
-      @pick="(key) => emit('pickView', key)"
-      @reset="fitCamera()"
     />
   </div>
 </template>
@@ -708,7 +831,24 @@ defineExpose({
     color: rgb(var(--danger-6));
   }
 
-  // 方向标：画面左下角。放右下角会与 FPS 读数打架，
+  // 三角形数读数：与右上角的帧率读数同一套样式，放在右下角对称位置。
+  // 数字会到百万级，等宽字体让位数变化时宽度不跳。
+  &__tris {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    padding: 1px 6px;
+    border-radius: var(--border-radius-small);
+    background: var(--color-bg-popup);
+    color: var(--color-text-2);
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 11px;
+    line-height: 16px;
+    opacity: 0.7;
+    pointer-events: none;
+  }
+
+  // 方向标：画面左下角。放右下角会与读数打架，
   // 且左下角在多数投影图里是空白区（模型居中）。
   &__gizmo {
     position: absolute;

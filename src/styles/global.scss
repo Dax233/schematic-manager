@@ -1861,18 +1861,15 @@ body[arco-theme='dark'] {
 }
 
 .view-gizmo {
-  // 方向标是操作入口，要能点；同时不让它挡住画布的拖动
-  cursor: pointer;
+  // 方向标只是读数，不能收指针事件：收了以后在它上面按住拖动就转不动画面
+  // （画布拿不到 pointerdown）。点击由画布统一做命中检测，见 hitGizmo。
+  pointer-events: none;
   user-select: none;
 
   &__dot {
     stroke: var(--color-bg-2);
     stroke-width: 1.5;
     transition: r 0.12s ease;
-
-    &:hover {
-      r: 11;
-    }
   }
 
   &__label {

@@ -155,12 +155,12 @@ export default {
     empty: "尚无预览",
     fps: "FPS {value}",
     fpsIdle: "FPS 0 · 静止不重绘",
+    triangles: "{count} 个三角形",
   },
   logList: {
     timeUnknown: "时间未知",
   },
   export: {
-    triangles: "{count} 个三角形",
     unresolved: "{count} 种方块无贴图",
     previewTitle: "导出预览图",
     dialogTitle: "导出预览图",
@@ -184,8 +184,6 @@ export default {
     batchPartial: "成功 {ok} 张，失败 {fail} 张：\n{list}",
     iconRenderFailed: "渲染方块图失败：{error}",
     canvasEmpty: "导出图像失败：画布为空",
-    /** 场景信息里两段之间的分隔，中文用表意空格 */
-    infoSeparator: "　",
     /** 批量导出失败清单里的一条 */
     batchFailureEntry: "{name}：{error}",
     tableName: "显示名称",
@@ -309,6 +307,7 @@ export default {
     stacks: "{stacks}组",
     stacksPlus: "{stacks}组+{rest}",
     clipboardDenied: "浏览器拒绝了剪贴板写入",
+    cancel: "取消",
   },
   convert: {
     title: "转换游戏版本",

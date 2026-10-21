@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
+  adaptOrthoAspect,
   applyPreset,
   buildSceneGroup,
   cameraUpFor,
@@ -12,10 +13,13 @@ import {
   defaultViewDir,
   dirFromAngles,
   anglesFromPosition,
+  orthoVisibleExtent,
+  perspectiveViewHalfHeight,
   presetIsOrtho,
   fitOrthoHalfExtents,
   frameOrthoBox,
   orthoZoomLimits,
+  setOrthoViewExtent,
   GIZMO_AXES,
   PRESET_MENU,
   presetDir,
@@ -887,6 +891,53 @@ describe("正交相机的取景", () => {
     const { min, max } = orthoZoomLimits();
     expect(min, "最小 zoom 应为正").toBeGreaterThan(0);
     expect(max, "最大 zoom 应大于最小").toBeGreaterThan(min);
+  });
+
+  it("改宽高比后可见范围只增不减，反复 resize 不会越缩越小", () => {
+    // 这条钉的是「缩放只能在极小范围内、拖两次分隔条就越缩越小」：
+    // 视景体与 zoom 是两层缩放，若按 top / zoom 取值再乘回去，
+    // 每 resize 一次可见范围就会被再缩一圈
+    const cam = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 1000);
+    cam.zoom = 2.5;
+    const before = orthoVisibleExtent(cam);
+    for (const aspect of [1.8, 0.6, 3.2, 0.9]) {
+      adaptOrthoAspect(cam, aspect);
+      const now = orthoVisibleExtent(cam);
+      expect(now.halfH, `宽高比 ${aspect} 下半高不应变小`).toBeGreaterThanOrEqual(
+        before.halfH - 1e-9,
+      );
+      expect(now.halfW, `宽高比 ${aspect} 下半宽不应变小`).toBeGreaterThanOrEqual(
+        before.halfW - 1e-9,
+      );
+      expect(cam.zoom, "缩放值不该被 resize 改动").toBeCloseTo(2.5, 6);
+    }
+  });
+
+  it("设视景体时保持用户缩放", () => {
+    const cam = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 1000);
+    cam.zoom = 3;
+    setOrthoViewExtent(cam, 40, 1.5);
+    expect(cam.zoom, "zoom 应原样保留").toBeCloseTo(3, 6);
+    const extent = orthoVisibleExtent(cam);
+    expect(extent.halfH, "可见半高应为给定值").toBeCloseTo(40, 6);
+    expect(extent.halfW / extent.halfH, "可见宽高比应为给定值").toBeCloseTo(1.5, 6);
+  });
+
+  it("透视与正交的可见范围可以互相换算", () => {
+    // 换投影时靠这层换算保住构图：透视距离 dist、FOV 45° 下看到的半高，
+    // 设成正交视景体后必须看到同样大的一块
+    const cam = new THREE.PerspectiveCamera(45, 1.6, 0.1, 1000);
+    const dist = 120;
+    const halfH = perspectiveViewHalfHeight(dist, cam.fov);
+    const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
+    setOrthoViewExtent(ortho, halfH, 1.6);
+    expect(orthoVisibleExtent(ortho).halfH, "正交可见半高应与透视一致").toBeCloseTo(
+      halfH,
+      6,
+    );
+    // 反算：正交的范围换回透视距离，应与原距离一致
+    const backDist = halfH / Math.tan((cam.fov * Math.PI) / 360);
+    expect(backDist, "换回透视时距离应复原").toBeCloseTo(dist, 6);
   });
 });
 describe("轴向视角的相机 up 向量", () => {

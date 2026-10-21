@@ -152,12 +152,12 @@ const enUS: typeof zhCN = {
     empty: "No preview yet",
     fps: "FPS {value}",
     fpsIdle: "FPS 0 · idle, not redrawing",
+    triangles: "{count} triangles",
   },
   logList: {
     timeUnknown: "Time unknown",
   },
   export: {
-    triangles: "{count} triangles",
     unresolved: "{count} block types without textures",
     previewTitle: "Export preview",
     dialogTitle: "Export preview",
@@ -181,7 +181,6 @@ const enUS: typeof zhCN = {
     batchPartial: "{ok} succeeded, {fail} failed:\n{list}",
     iconRenderFailed: "Failed to render the block icons: {error}",
     canvasEmpty: "Export failed: the canvas is empty",
-    infoSeparator: " · ",
     batchFailureEntry: "{name}: {error}",
     tableName: "Display name",
     tableId: "Block ID",
@@ -305,6 +304,7 @@ const enUS: typeof zhCN = {
     stacks: "{stacks} stacks",
     stacksPlus: "{stacks} stacks + {rest}",
     clipboardDenied: "The browser refused the clipboard write",
+    cancel: "Cancel",
   },
   convert: {
     title: "Convert game version",

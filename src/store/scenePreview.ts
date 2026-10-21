@@ -137,13 +137,11 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   );
 
   const sceneInfo = computed(() => {
-    if (!scene.value) return "";
     const cur = scene.value;
-    const parts = [t("export.triangles", { count: cur.totalTriangles.toLocaleString() })];
-    if (cur.unresolvedBlocks > 0) {
-      parts.push(t("export.unresolved", { count: cur.unresolvedBlocks }));
-    }
-    return parts.join(t("export.infoSeparator"));
+    // 三角形数改到 3D 视图右下角常驻显示，这条只留「有哪些方块没贴图」
+    // 这类需要提醒的异常，正常时整条不显示
+    if (!cur || cur.unresolvedBlocks <= 0) return "";
+    return t("export.unresolved", { count: cur.unresolvedBlocks });
   });
 
   /** 切到某个视角预设。
@@ -181,13 +179,25 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
 
   /** 把当前视角存成一条自定义预设。
    *
+   * 位姿可传可不传：不传就取当前相机的快照（「照我现在看到的存」），
+   * 传了就按传入的值存（面板里改过角度之后存的就是改后的值）。
+   *
    * 返回失败原因（用于提示），成功返回空字符串。名字不可用、或场景还没就绪
    * 时不能存——存一条点下去没反应的预设比不存更糟。
    */
-  function saveCurrentView(name: string): string {
+  function saveCurrentView(
+    name: string,
+    edited?: {
+      ortho: boolean;
+      position: [number, number, number];
+      target: [number, number, number];
+    },
+  ): string {
     if (!scene.value) return t("view.saveNotReady");
-    const pose = viewer.value?.cameraPose();
+    const snapshot = viewer.value?.cameraPose() ?? null;
+    const pose = edited ?? snapshot;
     if (!pose) return t("view.saveNotReady");
+    const ortho = edited ? edited.ortho : orthoView.value;
     if (!isPresetNameUsable(name, savedViews.value)) {
       return savedViews.value.some((p) => p.name === name.trim())
         ? t("view.saveDuplicate")
@@ -201,7 +211,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
       ...savedViews.value,
       {
         name: name.trim(),
-        ortho: orthoView.value,
+        ortho,
         position: pose.position,
         target: pose.target,
         yaw,

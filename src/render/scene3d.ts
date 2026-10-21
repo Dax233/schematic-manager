@@ -558,6 +558,66 @@ export function orthoZoomLimits(): { min: number; max: number } {
 }
 
 /**
+ * 透视相机在距离 dist 处看到的画面半高（竖直方向）。
+ *
+ * 两种投影切换时靠它对齐视野：正交相机没有 FOV，只有把「透视此刻的可见
+ * 范围」换算成视景体，「同一角度换个投影」才真的只是换投影、画面不跳。
+ */
+export function perspectiveViewHalfHeight(dist: number, fovDeg: number): number {
+  return Math.max(dist, 1e-6) * Math.tan((fovDeg * Math.PI) / 360);
+}
+
+/**
+ * 正交相机当前「可见世界范围」的半宽 / 半高。
+ *
+ * 视景体（left/right/top/bottom）与 zoom 是两层缩放：最终可见范围是
+ * `right / zoom`，不是 `right`。混用这两者会让缩放过的视角在每次
+ * resize 后被再缩一遍。
+ */
+export function orthoVisibleExtent(cam: THREE.OrthographicCamera): {
+  halfW: number;
+  halfH: number;
+} {
+  const zoom = Math.max(cam.zoom, 1e-6);
+  return { halfW: cam.right / zoom, halfH: cam.top / zoom };
+}
+
+/**
+ * 把正交视景体设成「可见半高为 halfH、宽高比为 aspect」。
+ *
+ * 保持 zoom 不变：zoom 是用户滚轮调出来的缩放，取景函数不该把它抹掉。
+ */
+export function setOrthoViewExtent(
+  cam: THREE.OrthographicCamera,
+  halfH: number,
+  aspect: number,
+): void {
+  const h = Math.max(halfH, 1e-3);
+  const w = h * Math.max(aspect, 1e-3);
+  const zoom = Math.max(cam.zoom, 1e-6);
+  cam.left = -w * zoom;
+  cam.right = w * zoom;
+  cam.top = h * zoom;
+  cam.bottom = -h * zoom;
+  cam.updateProjectionMatrix();
+}
+
+/**
+ * 按新的画布宽高比重设正交视景体，保证原先可见的范围仍然全部可见。
+ *
+ * 补的是「不够的那一边」，绝不缩小任何一边：否则拖动一次分隔条，
+ * 已经取好的景就被重新裁一遍。
+ */
+export function adaptOrthoAspect(cam: THREE.OrthographicCamera, aspect: number): void {
+  const a = Math.max(aspect, 1e-3);
+  const { halfW, halfH } = orthoVisibleExtent(cam);
+  // 两个方向都必须「不小于原来」：宽高比只能在多出来的那一边补空白，
+  // 不能为了凑比例把已经看得见的范围裁掉
+  const w = Math.max(halfW, halfH * a);
+  setOrthoViewExtent(cam, w / a, a);
+}
+
+/**
  * 按当前相机距离更新近/远裁剪面。
  *
  * OrbitControls 只管位置，**不管裁剪面**：取景时把 near 设成 dist/100 之后，

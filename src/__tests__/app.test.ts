@@ -5750,4 +5750,109 @@ describe("自定义视角预设", () => {
     expect(menuText, "删除后不应再出现该预设").not.toContain("待删除");
     w.unmount();
   });
+
+  it("面板里的投影方式可以改成正射并生效", async () => {
+    const w = await setup();
+    await openMenu(w);
+    menuItem("保存为预设角度")!.click();
+    await flushPromises();
+
+    // 两种投影各有一个单选项，默认选中透视
+    const radios = [
+      ...document.querySelectorAll<HTMLInputElement>(".view-preset input[type=radio]"),
+    ];
+    expect(radios.length, "应给出透视与正射两种选择").toBe(2);
+    expect(radios[0].checked, "默认应是透视").toBe(true);
+
+    radios[1].click();
+    await flushPromises();
+    expect(radios[1].checked, "点过之后应选中正射").toBe(true);
+
+    // 填名保存，存下来的预设要带正射标记
+    const input = document.querySelector<HTMLInputElement>(".view-preset input[type=text]") ??
+      document.querySelector<HTMLInputElement>(".view-preset input")!;
+    input.value = "正射视角";
+    input.dispatchEvent(new Event("input"));
+    await flushPromises();
+    [...document.querySelectorAll<HTMLElement>(".arco-modal-footer button")]
+      .find((b) => (b.textContent ?? "").trim() === "保存")!
+      .click();
+    await flushPromises();
+
+    // 菜单里点它，应当把预览切成正射投影
+    await openMenu(w);
+    [...document.querySelectorAll<HTMLElement>(".view-menu .ctx-menu__item")]
+      .find((el) => (el.textContent ?? "").includes("正射视角"))!
+      .click();
+    await flushPromises();
+    // 再开菜单看「正射投影」这一项是否被勾上
+    await openMenu(w);
+    const orthoItem = [...document.querySelectorAll<HTMLElement>(".view-menu .ctx-menu__item")].find(
+      (el) => (el.textContent ?? "").includes("正射投影"),
+    )!;
+    expect(orthoItem.textContent, "应用该预设后应处于正射").toContain("✓");
+    w.unmount();
+  });
+
+  it("面板里的相机位置可以手改，保存的是改后的值", async () => {
+    const w = await setup();
+    await openMenu(w);
+    menuItem("保存为预设角度")!.click();
+    await flushPromises();
+
+    // 只取数字输入框：位置三个、角度两个
+    const numbers = [
+      ...document.querySelectorAll<HTMLInputElement>(".view-preset .arco-input-number input"),
+    ];
+    expect(numbers.length, "位置三项 + 角度两项").toBe(5);
+
+    // 改成「从正上方 100 格处往下看」。
+    // Arco 的数字输入框在失焦（或回车）时才提交，因此这里模拟真实操作：输完离开。
+    const set = async (el: HTMLInputElement, v: string) => {
+      el.value = v;
+      el.dispatchEvent(new Event("input"));
+      el.dispatchEvent(new FocusEvent("blur"));
+      await flushPromises();
+    };
+    await set(numbers[0], "0");
+    await set(numbers[1], "100");
+    await set(numbers[2], "0");
+
+    // 位置改了，角度必须跟着变成「正上方」：pitch 90
+    const pitch = numbers[4];
+    expect(Number(pitch.value), "正上方看下去 pitch 应为 90").toBeCloseTo(90, 0);
+
+    const input = document.querySelector<HTMLInputElement>(".view-preset input[type=text]")!;
+    input.value = "俯视";
+    input.dispatchEvent(new Event("input"));
+    await flushPromises();
+    [...document.querySelectorAll<HTMLElement>(".arco-modal-footer button")]
+      .find((b) => (b.textContent ?? "").trim() === "保存")!
+      .click();
+    await flushPromises();
+
+    // 菜单里出现该预设，点它之后相机应摆到正上方
+    await openMenu(w);
+    const item = [...document.querySelectorAll<HTMLElement>(".view-menu .ctx-menu__item")].find(
+      (el) => (el.textContent ?? "").includes("俯视"),
+    );
+    expect(item, "改过位置的预设应保存成功").toBeTruthy();
+    w.unmount();
+  });
+
+  it("取消按钮显示中文文案，不露出翻译键", async () => {
+    const w = await setup();
+    await openMenu(w);
+    menuItem("保存为预设角度")!.click();
+    await flushPromises();
+
+    const footer = document.querySelector(".arco-modal-footer");
+    expect(footer, "面板应有按钮栏").toBeTruthy();
+    const cancel = [...footer!.querySelectorAll<HTMLElement>("button")].find((b) =>
+      (b.textContent ?? "").includes("取消"),
+    );
+    expect(cancel, "取消按钮应有中文文案").toBeTruthy();
+    expect(footer!.textContent, "不应露出未翻译的键").not.toContain("common.cancel");
+    w.unmount();
+  });
 });

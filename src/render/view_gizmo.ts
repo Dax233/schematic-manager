@@ -10,6 +10,15 @@
 import * as THREE from "three";
 import { GIZMO_AXES } from "./scene3d";
 
+/** 方向标半径（SVG 用户单位）。绘制与命中检测必须用同一个值。 */
+export const GIZMO_RADIUS = 34;
+
+/** 方向标 SVG 的画布半径：半径再留一圈给小球与文字 */
+export const GIZMO_VIEW_RADIUS = GIZMO_RADIUS + 12;
+
+/** 端点小球的绘制半径（SVG 用户单位） */
+export const GIZMO_DOT_RADIUS = 9;
+
 /** 方向标上的一枚端点小球 */
 export interface GizmoDot {
   /** 视角预设的键，点击时用它切视角 */
@@ -24,8 +33,38 @@ export interface GizmoDot {
   depth: number;
 }
 
-/** 由轴向标识得到世界坐标里的单位向量 */
-export function axisVector(axis: string): THREE.Vector3 {
+/** 方向标命中的目标 */
+export type GizmoHit = { kind: "axis"; key: string } | { kind: "center" };
+
+/**
+ * 判断点落在方向标的哪个可点击目标上。
+ *
+ * 命中检测放在这里而不是靠 SVG 自己的事件，是因为方向标要让「按住拖动旋转
+ * 画面」也能用：若事件被 SVG 收下，画布就收不到 pointerdown，拖动直接失效。
+ * 因此 SVG 整块不接收指针事件，改由画布在 click 时把坐标喂进来查一遍。
+ *
+ * 多个小球在屏幕上可能重叠（斜视角时前后轴几乎重在一起），按距离取最近的，
+ * 点哪个就切哪个，不会出现「点在 A 上却切到 B」。
+ */
+export function hitGizmo(
+  dots: readonly GizmoDot[],
+  x: number,
+  y: number,
+  dotRadius = GIZMO_DOT_RADIUS,
+): GizmoHit | null {
+  // 中心复位方块半边长 7，给一点容差
+  if (Math.abs(x) <= 9 && Math.abs(y) <= 9) return { kind: "center" };
+  let best: { key: string; dist: number } | null = null;
+  for (const d of dots) {
+    const dist = Math.hypot(x - d.x, y - d.y);
+    if (dist > dotRadius) continue;
+    if (!best || dist < best.dist) best = { key: d.key, dist };
+  }
+  return best ? { kind: "axis", key: best.key } : null;
+}
+
+/** 轴向标识转单位向量。只在这里用，因此不对外导出。 */
+function axisVectorUnchecked(axis: string): THREE.Vector3 {
   return new THREE.Vector3(
     axis === "+x" ? 1 : axis === "-x" ? -1 : 0,
     axis === "+y" ? 1 : axis === "-y" ? -1 : 0,
@@ -48,7 +87,7 @@ export function gizmoDots(
 ): GizmoDot[] {
   const inv = orientation ? orientation.clone().invert() : null;
   const dots = GIZMO_AXES.map((entry) => {
-    const local = axisVector(entry.axis);
+    const local = axisVectorUnchecked(entry.axis);
     if (inv) local.applyQuaternion(inv);
     return {
       key: entry.key,
