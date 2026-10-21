@@ -52,6 +52,12 @@ watch(exportOpen, (open) => {
   }
 });
 
+/** 宽高比的显示文本：「16x9」写成「16 : 9」。在 script 里拼好，
+ *  模板里只做引用，避免属性表达式里塞字符串字面量引起解析歧义。 */
+function aspectLabel(key: ExportAspect): string {
+  return key.replace("x", " : ");
+}
+
 /** 从宽高反推当前是不是恰好等于某个预设，用于给按钮上高亮 */
 const activePreset = computed(() => {
   if (!pickedAspect.value || !pickedShortEdge.value) return null;
@@ -132,21 +138,26 @@ async function confirm() {
   >
     <div class="export-dialog">
       <div class="export-dialog__label">{{ t("export.presets") }}</div>
-      <!-- 5 种宽高比 × 4 档短边：每行一种比例，行内四个短边档位 -->
-      <div v-for="a in EXPORT_ASPECTS" :key="a.key" class="export-dialog__ratio" :data-aspect="a.key">
-        <span class="export-dialog__ratio-name">{{ a.key.replace("x", " : ") }}</span>
-        <a-space :size="6">
-          <a-button
-            v-for="edge in EXPORT_SHORT_EDGES"
-            :key="edge"
-            size="mini"
-            :type="activePreset === `${a.key}@${edge}` ? 'primary' : 'secondary'"
-            @click="applyPreset(a.key, edge)"
-          >
-            {{ edge }}
-          </a-button>
-        </a-space>
-      </div>
+      <!-- 5 种宽高比 × 4 档短边：每行一种比例，行内四个短边档位。
+           用 a-form-item 是为了让比例名有一个固定宽度的 label 位，
+           五行左边缘因此对齐，而不是各自按文字长短错开。 -->
+      <a-form :model="{}" layout="horizontal" size="small" class="export-dialog__presets">
+        <div v-for="a in EXPORT_ASPECTS" :key="a.key" :data-aspect="a.key">
+          <a-form-item :label="aspectLabel(a.key)">
+            <a-space :size="6">
+              <a-button
+                v-for="edge in EXPORT_SHORT_EDGES"
+                :key="edge"
+                size="mini"
+                :type="activePreset === `${a.key}@${edge}` ? 'primary' : 'secondary'"
+                @click="applyPreset(a.key, edge)"
+              >
+                {{ edge }} px
+              </a-button>
+            </a-space>
+          </a-form-item>
+        </div>
+      </a-form>
 
       <div class="export-dialog__label">{{ t("export.customSize") }}</div>
       <a-space :size="8" align="center">
