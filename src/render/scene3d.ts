@@ -280,6 +280,96 @@ export function presetIsOrtho(name: string): boolean {
 }
 
 /**
+ * 求把整个包围盒装进正交视锥所需的半宽 / 半高。
+ *
+ * 关键点：视线方向的横纵基**必须取自相机自身**（matrixWorld 的 x/y 轴），
+ * 不能在这里另算一套。否则 `frameOrthoBox` 里 `lookAt` 定出的朝向与这里
+ * 用 `cross(forward, up)` 算出的基可能左右相反，算出来的尺寸对不上实际视锥，
+ * 表现为「模型被裁掉一部分」——实测斜 45° 视角下横向溢出近 90%。
+ *
+ * 调用前相机的位置与朝向必须已经摆好（先 lookAt，再调这里）。
+ */
+export function fitOrthoHalfExtents(
+  camera: THREE.Camera,
+  box: THREE.Box3,
+  aspect: number,
+  margin = 1.08,
+): { halfW: number; halfH: number } {
+  // 相机矩阵要最新，否则取到的是上一次的朝向
+  camera.updateMatrixWorld(true);
+  const center = box.getCenter(new THREE.Vector3());
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+  const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+
+  let halfW = 0;
+  let halfH = 0;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < 8; i++) {
+    v.set(
+      i & 1 ? box.max.x : box.min.x,
+      i & 2 ? box.max.y : box.min.y,
+      i & 4 ? box.max.z : box.min.z,
+    ).sub(center);
+    halfW = Math.max(halfW, Math.abs(v.dot(right)));
+    halfH = Math.max(halfH, Math.abs(v.dot(up)));
+  }
+  // 视锥的宽高比必须等于画布宽高比，否则画面会被拉伸。
+  // 已算出的 halfW / halfH 是「装下模型至少需要多大」，因此只能往大里补：
+  // 模型比画布「更方」时补宽，比画布「更扁」时补高，绝不缩小任何一边。
+  const needRatio = halfW / Math.max(halfH, 1e-6);
+  let finalW: number;
+  let finalH: number;
+  if (needRatio < aspect) {
+    finalH = halfH;
+    finalW = halfH * aspect;
+  } else {
+    finalW = halfW;
+    finalH = halfW / Math.max(aspect, 1e-6);
+  }
+  return {
+    halfW: Math.max(finalW * margin, 1e-3),
+    halfH: Math.max(finalH * margin, 1e-3),
+  };
+}
+
+/**
+ * 把一个正交相机摆到能完整看到整个网格的位置。
+ *
+ * 相机位置离模型多远都行（正交投影下不影响成像大小），但仍要放到包围盒
+ * 外侧并留出足够距离，否则 near 会切到模型。距离取包围盒对角线长度，
+ * 足够包住任何朝向。
+ */
+export function frameOrthoBox(
+  camera: THREE.OrthographicCamera,
+  box: THREE.Box3,
+  dir: THREE.Vector3,
+  aspect: number,
+) {
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const diag = Math.max(size.length(), 1e-3);
+  // 站在对角线外两倍处：任何朝向都在相机前方
+  camera.position.copy(center).addScaledVector(dir.clone().normalize(), -diag * 2);
+  camera.up.set(0, 1, 0);
+  // 俯视/仰视到底时 lookAt 与 up 平行，换一个 up 免得朝向退化
+  if (Math.abs(dir.clone().normalize().y) > 0.99) camera.up.set(0, 0, 1);
+  camera.lookAt(center);
+
+  // 朝向必须**先**摆好再算视景体：fitOrthoHalfExtents 读的是相机矩阵里的
+  // 横纵轴，顺序反了就会按上一帧的朝向算
+  const { halfW, halfH } = fitOrthoHalfExtents(camera, box, aspect);
+  camera.left = -halfW;
+  camera.right = halfW;
+  camera.top = halfH;
+  camera.bottom = -halfH;
+  camera.zoom = 1;
+  camera.near = diag * 0.05;
+  camera.far = diag * 5;
+  camera.updateProjectionMatrix();
+  return { center, dist: diag * 2 };
+}
+
+/**
  * 把相机摆到「整个网格装进视口」的位置。
  *
  * 保持调用方给的视线方向，因此换视角后再自适应也不会把用户的视角掰回默认。
@@ -345,6 +435,16 @@ export function zoomLimits(fitDist: number): { min: number; max: number } {
     min: Math.max(fitDist * 0.06, 0.05),
     max: Math.max(fitDist * 6, 1),
   };
+}
+
+/**
+ * 正交相机的滚轮缩放区间。
+ *
+ * 正交相机没有「距离」这个概念，OrbitControls 改的是 camera.zoom，
+ * 因此上下限要按 zoom 给，而不是按距离给。范围与透视侧同样取六倍余量。
+ */
+export function orthoZoomLimits(): { min: number; max: number } {
+  return { min: 0.06, max: 6 };
 }
 
 /**

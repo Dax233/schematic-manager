@@ -12,6 +12,9 @@ import {
   dirFromAngles,
   anglesFromPosition,
   presetIsOrtho,
+  fitOrthoHalfExtents,
+  frameOrthoBox,
+  orthoZoomLimits,
   GIZMO_AXES,
   PRESET_MENU,
   presetDir,
@@ -754,5 +757,81 @@ describe("视角预设与方向换算", () => {
       "-y",
       "-z",
     ]);
+  });
+});
+describe("正交相机的取景", () => {
+  /** 造一个给定尺寸的包围盒，中心在原点 */
+  function boxOf(w: number, h: number, d: number): THREE.Box3 {
+    return new THREE.Box3(
+      new THREE.Vector3(-w / 2, -h / 2, -d / 2),
+      new THREE.Vector3(w / 2, h / 2, d / 2),
+    );
+  }
+
+  /** 把包围盒八个角点投到相机空间，返回最大 |x| 与 |y| */
+  function projectedExtent(cam: THREE.OrthographicCamera, box: THREE.Box3) {
+    const v = new THREE.Vector3();
+    let maxX = 0;
+    let maxY = 0;
+    for (let i = 0; i < 8; i++) {
+      v.set(
+        i & 1 ? box.max.x : box.min.x,
+        i & 2 ? box.max.y : box.min.y,
+        i & 4 ? box.max.z : box.min.z,
+      );
+      v.project(cam);
+      maxX = Math.max(maxX, Math.abs(v.x));
+      maxY = Math.max(maxY, Math.abs(v.y));
+    }
+    return { maxX, maxY };
+  }
+
+  it("细长模型按投影后尺寸取景，不按包围盒最长边", () => {
+    // 53×9×9 是实测里「画面空掉一大半」的那个形状：按最长边算会剩大片空白
+    const box = boxOf(53, 9, 9);
+    const dir = new THREE.Vector3(-1, -1, -1).normalize();
+    const probe = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10000);
+    probe.position.set(0, 0, 0);
+    probe.lookAt(dir);
+    const { halfW, halfH } = fitOrthoHalfExtents(probe, box, 1);
+    // 斜着看对角线会参与投影，因此可视范围必须能装下 53 那条边的一部分
+    expect(halfW, "水平可视范围应覆盖投影宽度").toBeGreaterThan(53 * 0.25);
+    expect(halfH, "垂直可视范围应为正").toBeGreaterThan(0);
+    // 不该大到把包围盒最长边整个当半径：那会留出成片空白
+    expect(halfW, "不应按最长边的一半以上给范围").toBeLessThan(53);
+  });
+
+  it("取景后整个模型都落在视锥内", () => {
+    // 这是取景的唯一实质要求：所有角点投影后 |x|、|y| 都不超过 1
+    for (const box of [boxOf(10, 10, 10), boxOf(53, 9, 9), boxOf(3, 40, 3)]) {
+      for (const dir of [
+        new THREE.Vector3(-1, -1, -1).normalize(),
+        new THREE.Vector3(0, -1, 0),
+        new THREE.Vector3(1, 0, 0),
+      ]) {
+        const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10000);
+        frameOrthoBox(cam, box, dir, 1.5);
+        const { maxX, maxY } = projectedExtent(cam, box);
+        expect(maxX, `宽 ${box.max.x * 2} 方向 ${dir.toArray()}: 横向不应超出`).toBeLessThanOrEqual(1.001);
+        expect(maxY, `宽 ${box.max.x * 2} 方向 ${dir.toArray()}: 纵向不应超出`).toBeLessThanOrEqual(1.001);
+      }
+    }
+  });
+
+  it("宽视口时补足宽度，竖视口时补足高度", () => {
+    const box = boxOf(10, 10, 10);
+    const probe = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10000);
+    probe.position.set(0, 0, 10);
+    probe.lookAt(0, 0, 0);
+    const wide = fitOrthoHalfExtents(probe, box, 2.0);
+    expect(wide.halfW / wide.halfH, "宽视口下宽高比应接近 2").toBeCloseTo(2.0, 1);
+    const tall = fitOrthoHalfExtents(probe, box, 0.5);
+    expect(tall.halfW / tall.halfH, "竖视口下宽高比应接近 0.5").toBeCloseTo(0.5, 1);
+  });
+
+  it("正交相机的缩放上下限是 zoom 区间", () => {
+    const { min, max } = orthoZoomLimits();
+    expect(min, "最小 zoom 应为正").toBeGreaterThan(0);
+    expect(max, "最大 zoom 应大于最小").toBeGreaterThan(min);
   });
 });

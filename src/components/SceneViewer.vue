@@ -5,9 +5,14 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { t } from "../i18n";
 import type { SceneData } from "../types";
 import {
-  applyPreset as applyPresetTo,
   buildSceneGroup,
+  defaultViewDir,
   fitCamera as fitCameraTo,
+  frameBox,
+  frameOrthoBox,
+  orthoZoomLimits,
+  presetDir,
+  presetIsOrtho,
   syncClipPlanes,
   zoomLimits,
   type SceneGroup,
@@ -29,7 +34,16 @@ const error = ref("");
 const renderer = shallowRef<THREE.WebGLRenderer | null>(null);
 let built: SceneGroup | null = null;
 let threeScene: THREE.Scene | null = null;
-let camera: THREE.PerspectiveCamera | null = null;
+/** 透视相机：默认使用 */
+let perspCamera: THREE.PerspectiveCamera | null = null;
+/** 正交相机：切到「正射投影」时使用 */
+let orthoCamera: THREE.OrthographicCamera | null = null;
+/** 当前参与渲染与交互的那一个。
+ *
+ * 两个相机共享同一套位置与朝向，切换投影方式时只换对象、不重算视角，
+ * 用户看到的是「同一个角度换了投影」，而不是画面忽然跳一下。
+ */
+let useOrtho = false;
 let controls: OrbitControls | null = null;
 // 按需渲染：只在场景或相机变化时重绘。持续跑 requestAnimationFrame
 // 会让笔记本常态占用 GPU，而这是静态预览，不操作时画面不会变。
@@ -94,12 +108,9 @@ function disposeScene() {
   built = null;
 }
 
-/** 模型包围盒的中心；没有模型时返回 null */
-function modelCenter(): THREE.Vector3 | null {
-  if (!built) return null;
-  const box = new THREE.Box3().setFromObject(built.group);
-  if (box.isEmpty()) return null;
-  return box.getCenter(new THREE.Vector3());
+/** 当前参与渲染与交互的相机。切换投影方式只换这一个。 */
+function activeCamera(): THREE.PerspectiveCamera | THREE.OrthographicCamera | null {
+  return useOrtho ? orthoCamera : perspCamera;
 }
 
 /**
@@ -108,42 +119,90 @@ function modelCenter(): THREE.Vector3 | null {
  * 轴心必须一起设：OrbitControls 绕 `target` 旋转，而 target 默认在原点。
  * 若只移动相机不改 target，结构偏离原点时就会「绕着世界原点转」——
  * 表现为拖动时模型绕着画面外的一个点甩动，越大的结构越明显。
+ *
+ * 两种相机的取景算法不同：透视按 FOV 解距离，正交按投影尺寸定视景体。
  */
 function fitCamera() {
-  if (!camera || !built) return;
-  fitCameraTo(camera, built.group);
-  const c = modelCenter();
-  if (c) controls?.target.copy(c);
+  const cam = activeCamera();
+  if (!cam || !built) return;
+  const box = new THREE.Box3().setFromObject(built.group);
+  if (box.isEmpty()) {
+    // 空场景（理论上不会走到，几何建好后包围盒就不空）：交给透视那套给个固定位置
+    if (cam instanceof THREE.OrthographicCamera) {
+      cam.position.set(12, 12, 12);
+      cam.lookAt(0, 0, 0);
+      cam.updateProjectionMatrix();
+    } else {
+      fitCameraTo(cam, built.group);
+    }
+    renderSoon();
+    return;
+  }
+  const center = box.getCenter(new THREE.Vector3());
+  if (cam instanceof THREE.OrthographicCamera) {
+    frameOrthoBox(cam, box, defaultViewDir(), orthoAspect());
+  } else {
+    fitCameraTo(cam, built.group);
+  }
+  controls?.target.copy(center);
   rememberFit();
   controls?.update();
   renderSoon();
 }
 
 /**
- * 记下本次自适应的距离，并据此定出滚轮缩放的上下限。
+ * 记下本次自适应的基准，并据此定出滚轮缩放的上下限。
  *
- * 上下限交给 OrbitControls 自己夹（它每次 update 都会 clampLength），
- * 因此不需要另写一套拨轮逻辑——实测它自带的滚轮缩放本身是好用的，
- * 真正缺的是「距离有界」与「裁剪面跟着距离走」这两件事。
+ * 两种相机限的不是同一个量：透视限的是到目标的距离（OrbitControls 每次
+ * update 都会 clampLength），正交限的是 camera.zoom（它没有距离概念）。
+ * 裁剪面也只有透视需要跟着距离走。
  */
 function rememberFit() {
-  if (!camera || !controls) return;
-  const dist = camera.position.distanceTo(controls.target);
+  const cam = activeCamera();
+  if (!cam || !controls) return;
+  if (cam instanceof THREE.OrthographicCamera) {
+    const { min, max } = orthoZoomLimits();
+    controls.minZoom = min;
+    controls.maxZoom = max;
+    controls.enableZoom = true;
+    return;
+  }
+  const dist = cam.position.distanceTo(controls.target);
   const { min, max } = zoomLimits(dist);
   controls.minDistance = min;
   controls.maxDistance = max;
-  syncClipPlanes(camera, controls.target);
+  syncClipPlanes(cam, controls.target);
 }
 
 function applyPreset(name: string) {
-  if (!camera || !built) return;
-  applyPresetTo(camera, built.group, name);
+  const cam = activeCamera();
+  if (!cam || !built) return;
+  const box = new THREE.Box3().setFromObject(built.group);
+  if (box.isEmpty()) return;
+  const dir = presetDir(name);
+  const center = box.getCenter(new THREE.Vector3());
+  if (cam instanceof THREE.OrthographicCamera) {
+    const aspect = orthoAspect();
+    frameOrthoBox(cam, box, dir, aspect);
+  } else {
+    frameBox(cam, box, dir);
+  }
   // 换视角同样要把轴心留在模型中心，否则换完视角再拖动就会绕错点
-  const c = modelCenter();
-  if (c) controls?.target.copy(c);
+  controls?.target.copy(center);
   rememberFit();
   controls?.update();
   renderSoon();
+}
+
+/** 正交相机的宽高比：它不存 aspect，要由视景体反推。
+ *
+ * 视景体在 onResize 里按容器宽高与上一个 aspect 重新算，因此这里读的是
+ * 当前画布的真实比例。取不到时退回 1。
+ */
+function orthoAspect(): number {
+  const el = host.value;
+  if (!el || el.clientHeight === 0) return 1;
+  return el.clientWidth / el.clientHeight;
 }
 
 /**
@@ -153,9 +212,10 @@ function applyPreset(name: string) {
  * 常规刷新走 requestRender，由渲染循环按需重绘。
  */
 function render() {
-  if (renderer.value && threeScene && camera) {
+  const cam = activeCamera();
+  if (renderer.value && threeScene && cam) {
     needsRender = false;
-    renderer.value.render(threeScene, camera);
+    renderer.value.render(threeScene, cam);
   }
 }
 
@@ -166,14 +226,37 @@ function renderSoon() {
 
 function onResize() {
   const el = host.value;
-  if (!el || !renderer.value || !camera) return;
+  const cam = activeCamera();
+  if (!el || !renderer.value || !cam) return;
   const w = el.clientWidth;
   const h = el.clientHeight;
   if (w === 0 || h === 0) return;
   renderer.value.setSize(w, h, false);
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
+  if (cam instanceof THREE.OrthographicCamera) {
+    // 正交相机的成像大小由视景体与 zoom 决定，宽高比变化时必须重算左右边界，
+    // 否则窗口一变宽画面就会被横向拉伸
+    resizeOrthoFrustum(cam, w / h);
+  } else {
+    cam.aspect = w / h;
+    cam.updateProjectionMatrix();
+  }
   renderSoon();
+}
+
+/** 按新的宽高比重设正交视景体，保持当前水平可视范围不变。
+ *
+ * 只改 top/bottom 并让 zoom 参与：直接改 left/right 会把用户的缩放一并抹掉。
+ */
+function resizeOrthoFrustum(cam: THREE.OrthographicCamera, aspect: number) {
+  const halfH = cam.top / cam.zoom;
+  const halfW = cam.right / cam.zoom;
+  // 以「较宽的一侧为准」重算另一半，保证模型不被裁掉
+  const newHalfH = halfW / aspect < halfH ? halfW / aspect : halfH;
+  cam.left = -halfW;
+  cam.right = halfW;
+  cam.top = newHalfH;
+  cam.bottom = -newHalfH;
+  cam.updateProjectionMatrix();
 }
 
 /** 重建网格并刷新画面 */
@@ -217,26 +300,25 @@ onMounted(() => {
     // 不加光源：材质是 MeshBasicMaterial，本就不参与光照计算，
     // 立体感完全来自逐顶点的明暗系数（写入 color 属性）。
 
-    camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10000);
-    controls = new OrbitControls(camera, r.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.15;
-    controls.screenSpacePanning = true;
-    // 滚轮缩放由 OrbitControls 提供（默认就开）。它每次 update 都会把距离
-    // 夹在 min/maxDistance 内，那两个值在 rememberFit 里按模型大小设定。
-    controls.enableZoom = true;
-    controls.zoomSpeed = 0.9;
+    perspCamera = new THREE.PerspectiveCamera(45, 1, 0.1, 10000);
+    // 正交相机先给一个占位视景体，真正的尺寸在 fitCamera 里按模型算
+    orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10000);
+    controls = makeControls(perspCamera, r.domElement);
 
     const loop = () => {
       raf = requestAnimationFrame(loop);
       let changed = controls?.update() ?? false;
-      // 距离变了就要跟着改裁剪面，否则一直拉近会穿进近裁剪面、模型被切没
-      if (camera && controls && syncClipPlanes(camera, controls.target)) changed = true;
+      const cam = activeCamera();
+      // 距离变了就要跟着改裁剪面，否则一直拉近会穿进近裁剪面、模型被切没。
+      // 这项只对透视相机有意义：正交的裁剪面不随视角变化
+      if (cam instanceof THREE.PerspectiveCamera && controls) {
+        if (syncClipPlanes(cam, controls.target)) changed = true;
+      }
       // 阻尼未停时必须每帧重绘，否则拖动动画会卡住
       if (needsRender || changed) {
         needsRender = false;
-        if (renderer.value && camera) {
-          renderer.value.render(scene, camera);
+        if (renderer.value && cam) {
+          renderer.value.render(scene, cam);
           countFrame(performance.now());
         }
       }
@@ -275,7 +357,8 @@ onBeforeUnmount(() => {
   renderer.value?.domElement.remove();
   renderer.value = null;
   threeScene = null;
-  camera = null;
+  perspCamera = null;
+  orthoCamera = null;
   controls = null;
 });
 
@@ -314,25 +397,37 @@ watch(
 /**
  * 按指定像素宽高导出当前画面为透明背景 PNG。
  *
- * 临时把渲染器调到目标尺寸、宽高比设为 w/h，渲染后立即恢复，
+ * 临时把渲染器调到目标尺寸、按目标宽高比调整相机，渲染后立即恢复，
  * 因此用户不会看到界面尺寸被改动。
+ *
+ * 两种相机调宽高比的方式不同：透视改 aspect，正交要按比例重算视景体
+ * （它没有 aspect 字段）。导出前后都要还原，否则界面里的构图会变。
  */
 async function exportPng(w: number, h: number): Promise<Uint8Array> {
   const r = renderer.value;
-  if (!r || !camera || !threeScene) {
+  const cam = activeCamera();
+  if (!r || !cam || !threeScene) {
     throw new Error(t("scene.notReady"));
   }
   const prev = new THREE.Vector2();
   r.getSize(prev);
   const prevRatio = r.getPixelRatio();
-  const prevAspect = camera.aspect;
+  const isOrtho = cam instanceof THREE.OrthographicCamera;
+  const prevAspect = isOrtho ? 0 : cam.aspect;
+  const prevFrustum = isOrtho
+    ? { l: cam.left, r: cam.right, t: cam.top, b: cam.bottom, z: cam.zoom }
+    : null;
 
   try {
     r.setPixelRatio(1);
     r.setSize(w, h, false);
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
-    r.render(threeScene, camera);
+    if (isOrtho) {
+      resizeOrthoFrustum(cam, w / h);
+    } else {
+      cam.aspect = w / h;
+      cam.updateProjectionMatrix();
+    }
+    r.render(threeScene, cam);
 
     const blob: Blob = await new Promise((resolve, reject) => {
       r.domElement.toBlob(
@@ -344,16 +439,100 @@ async function exportPng(w: number, h: number): Promise<Uint8Array> {
   } finally {
     r.setPixelRatio(prevRatio);
     r.setSize(prev.x, prev.y, false);
-    camera.aspect = prevAspect;
-    camera.updateProjectionMatrix();
+    if (isOrtho && prevFrustum) {
+      cam.left = prevFrustum.l;
+      cam.right = prevFrustum.r;
+      cam.top = prevFrustum.t;
+      cam.bottom = prevFrustum.b;
+      cam.zoom = prevFrustum.z;
+      cam.updateProjectionMatrix();
+    } else if (!isOrtho) {
+      cam.aspect = prevAspect;
+      cam.updateProjectionMatrix();
+    }
     render();
   }
+}
+
+/** 创建并配置一台 OrbitControls。切换相机时必须重建：
+ *  它在构造时绑死相机实例，没有换相机的接口。 */
+function makeControls(cam: THREE.Camera, dom: HTMLElement): OrbitControls {
+  const c = new OrbitControls(cam, dom);
+  c.enableDamping = true;
+  c.dampingFactor = 0.15;
+  c.screenSpacePanning = true;
+  c.enableZoom = true;
+  c.zoomSpeed = 0.9;
+  return c;
+}
+
+/** 切换正射投影与透视投影。
+ *
+ * 两个相机共享位置与朝向：切换时把当前相机的位姿拷给另一个，让用户看到的是
+ * 「同一角度换了投影」，画面不会跳位置。OrbitControls 绑在具体相机实例上，
+ * 因此必须重建它——顺序上先重建、再按新相机取景，否则会拿着旧 controls 的
+ * target 去算朝向。
+ */
+function setOrtho(ortho: boolean) {
+  if (useOrtho === ortho) return;
+  const from = activeCamera();
+  const prevTarget = controls?.target.clone() ?? new THREE.Vector3();
+  useOrtho = ortho;
+  const to = activeCamera();
+  if (!to) return;
+
+  if (from) {
+    to.position.copy(from.position);
+    to.quaternion.copy(from.quaternion);
+    to.up.copy(from.up);
+  }
+
+  const dom = renderer.value?.domElement;
+  if (dom) {
+    controls?.dispose();
+    controls = makeControls(to, dom);
+    controls.target.copy(prevTarget);
+  }
+
+  if (to instanceof THREE.OrthographicCamera && built) {
+    const box = new THREE.Box3().setFromObject(built.group);
+    if (!box.isEmpty()) {
+      // 沿用当前朝向（相机 → 目标），只把视景体按新宽高比重算
+      const dir = new THREE.Vector3().subVectors(prevTarget, to.position);
+      if (dir.lengthSq() > 0) {
+        frameOrthoBox(to, box, dir.normalize(), orthoAspect());
+      }
+    }
+  }
+
+  rememberFit();
+  controls?.update();
+  renderSoon();
+}
+
+/** 当前是否为正射投影 */
+function isOrtho(): boolean {
+  return useOrtho;
+}
+
+/** 当前相机的朝向（四元数副本），供方向标把三个轴投到屏幕 */
+function cameraQuaternion(): THREE.Quaternion | null {
+  const cam = activeCamera();
+  return cam ? cam.quaternion.clone() : null;
 }
 
 defineExpose({
   applyPreset,
   exportPng,
   fitCamera,
+  setOrtho,
+  isOrtho,
+  cameraQuaternion,
+  /** 按预设键切换，正射与否由预设自己决定 */
+  applyViewPreset(name: string) {
+    setOrtho(presetIsOrtho(name));
+    applyPreset(name);
+  },
 });
 </script>
 
