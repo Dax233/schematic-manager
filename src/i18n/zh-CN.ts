@@ -66,7 +66,20 @@ export default {
     missing: "语言表中没有这一项",
     column: "显示名称",
   },
-  detail: {
+  view: {
+    gizmoLabel: "坐标方向标：点端点切到该轴正视角，点中心复位",
+    reset: "回到默认视角",
+    top: "顶（Y+）",
+    bottom: "底（Y−）",
+    south: "南（Z+）",
+    north: "北（Z−）",
+    east: "东（X+）",
+    west: "西（X−）",
+    isoRight: "等距右",
+    isoLeft: "等距左",
+    trueIsoRight: "真等距右",
+    trueIsoLeft: "真等距左",
+  },  detail: {
     previewSplitterAria: "调整预览区高度",
     previewSplitterTitle: "拖动调整预览区高度，双击复位",
     previewWidthSplitterAria: "调整预览区宽度",

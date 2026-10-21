@@ -122,9 +122,15 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     return parts.join(t("export.infoSeparator"));
   });
 
+  /** 切到某个视角预设。
+   *
+   * 投影方式由预设自己决定（真等距是正射，其余是透视），因此统一走
+   * applyViewPreset 而不是 applyPreset——否则切到「真等距」时只会换角度、
+   * 投影仍是上一次的。
+   */
   function setView(name: string) {
     activeView.value = name;
-    viewer.value?.applyPreset(name);
+    viewer.value?.applyViewPreset(name);
   }
 
   /** 导出当前视角为透明背景 PNG（单个文件）。

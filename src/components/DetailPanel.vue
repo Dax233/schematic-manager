@@ -46,7 +46,6 @@ const {
   sceneGate,
   sceneBlockLimit,
   brightness,
-  activeView,
   exportOpen,
   exportBatchMode,
   exporting,
@@ -129,6 +128,7 @@ onBeforeUnmount(() => {
               ref="viewer"
               :scene="scene"
               :brightness="brightness"
+              @pick-view="setView"
             />
           </a-spin>
         </div>
@@ -245,18 +245,9 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="preview__bar">
-        <a-radio-group
-          v-model="activeView"
-          type="button"
-          size="small"
-          :disabled="!scene"
-          @change="setView(String(activeView))"
-        >
-          <a-radio value="front">{{ t("detail.viewFront") }}</a-radio>
-          <a-radio value="left45">{{ t("detail.viewLeft45") }}</a-radio>
-          <a-radio value="right45">{{ t("detail.viewRight45") }}</a-radio>
-          <a-radio value="back">{{ t("detail.viewBack") }}</a-radio>
-        </a-radio-group>
+        <!-- 视角切换改为画布里的 XYZ 方向标：它本身就是「当前朝向的读数」，
+             比一排文字按钮更直观，也不占控制条。等距与轴向视角的完整清单
+             在预览区的右键菜单里。 -->
         <span class="preview__label">{{ t("detail.brightness") }}</span>
         <!-- 关掉拖动手柄上的数值气泡：右侧已有常驻百分比，气泡是同一信息的第二份，
              拖动时还会挡住滑杆本身 -->

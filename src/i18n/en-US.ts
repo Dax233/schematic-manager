@@ -64,7 +64,20 @@ const enUS: typeof zhCN = {
     missing: "Not present in the language table",
     column: "Display name",
   },
-  detail: {
+  view: {
+    gizmoLabel: "Axis gizmo: click a dot for that axis, click the center to reset",
+    reset: "Back to default view",
+    top: "Top (Y+)",
+    bottom: "Bottom (Y−)",
+    south: "South (Z+)",
+    north: "North (Z−)",
+    east: "East (X+)",
+    west: "West (X−)",
+    isoRight: "Isometric right",
+    isoLeft: "Isometric left",
+    trueIsoRight: "True isometric right",
+    trueIsoLeft: "True isometric left",
+  },  detail: {
     previewSplitterAria: "Adjust the preview height",
     previewSplitterTitle: "Drag to adjust the preview height; double-click to reset",
     previewWidthSplitterAria: "Adjust the preview width",

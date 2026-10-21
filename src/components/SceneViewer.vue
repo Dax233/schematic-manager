@@ -4,6 +4,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { t } from "../i18n";
 import type { SceneData } from "../types";
+import ViewGizmo from "./ViewGizmo.vue";
 import {
   buildSceneGroup,
   defaultViewDir,
@@ -26,6 +27,16 @@ const props = withDefaults(
   }>(),
   { brightness: 1.0 },
 );
+
+/** 方向标点了某个轴向时通知父级。
+ *
+ * 视角状态（activeView）由 store 持有，这里不直接改它——否则同一次操作会
+ * 出现两条改状态的路径，界面上的高亮与实际视角迟早对不上。父级收到事件后
+ * 调 store 的 setView，再由 store 回头调用本组件的 applyViewPreset。
+ */
+const emit = defineEmits<{
+  (e: "pickView", key: string): void;
+}>();
 
 const host = ref<HTMLDivElement | null>(null);
 const error = ref("");
@@ -60,6 +71,16 @@ let fpsMark = 0;
  * 不计入 exportPng 里那一次离屏渲染：它不是主循环画的帧，
  * 算进去会让导出瞬间的读数虚高。 */
 const fps = ref(0);
+
+/** 相机朝向，供方向标绘制。只在朝向变化时更新——每帧写响应式 ref 会让
+ *  Vue 持续重渲染，而方向标只在相机转动时才需要重画。 */
+const orientation = ref<THREE.Quaternion | null>(null);
+
+/** 把当前相机朝向同步给方向标 */
+function syncOrientation() {
+  const cam = activeCamera();
+  orientation.value = cam ? cam.quaternion.clone() : null;
+}
 
 /** 累计一帧并每秒结算一次 */
 function countFrame(now: number) {
@@ -322,6 +343,9 @@ onMounted(() => {
           countFrame(performance.now());
         }
       }
+      // 方向标要跟着相机转：只在朝向真的变了时更新，
+      // 否则每帧都写响应式 ref 会让 Vue 持续重渲染
+      if (changed) syncOrientation();
     };
     loop();
     startFpsClock();
@@ -521,18 +545,24 @@ function cameraQuaternion(): THREE.Quaternion | null {
   return cam ? cam.quaternion.clone() : null;
 }
 
+/** 按预设键切换视角：投影方式由预设自己决定（真等距是正射，其余是透视）。
+ *
+ * 方向标与右键菜单都走这里，确保「同一个预设」在两条入口下行为一致。
+ */
+function applyViewPreset(name: string) {
+  setOrtho(presetIsOrtho(name));
+  applyPreset(name);
+  syncOrientation();
+}
+
 defineExpose({
   applyPreset,
+  applyViewPreset,
   exportPng,
   fitCamera,
   setOrtho,
   isOrtho,
   cameraQuaternion,
-  /** 按预设键切换，正射与否由预设自己决定 */
-  applyViewPreset(name: string) {
-    setOrtho(presetIsOrtho(name));
-    applyPreset(name);
-  },
 });
 </script>
 
@@ -551,6 +581,15 @@ defineExpose({
     </div>
     <div v-if="error" class="scene-viewer__error">{{ error }}</div>
     <div v-else-if="!scene" class="scene-viewer__empty">{{ t("scene.empty") }}</div>
+    <!-- XYZ 方向标：显示当前朝向的三个坐标轴，点端点小球切到对应轴视角。
+         没有场景时不显示——那时没有任何东西可以「看」。 -->
+    <ViewGizmo
+      v-if="scene && !error"
+      class="scene-viewer__gizmo"
+      :orientation="orientation"
+      @pick="(key) => emit('pickView', key)"
+      @reset="fitCamera()"
+    />
   </div>
 </template>
 
@@ -615,6 +654,14 @@ defineExpose({
 
   &__error {
     color: rgb(var(--danger-6));
+  }
+
+  // 方向标：画面左下角。放右下角会与 FPS 读数打架，
+  // 且左下角在多数投影图里是空白区（模型居中）。
+  &__gizmo {
+    position: absolute;
+    left: 6px;
+    bottom: 6px;
   }
 }
 </style>
