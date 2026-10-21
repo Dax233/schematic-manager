@@ -401,6 +401,29 @@ body[arco-theme='dark'] .titlebar__logo {
   min-width: 168px;
   max-height: 340px;
   overflow-y: auto;
+  // 滚动条按 Arco 的色板调成细条并去掉轨道，与项目里其它滚动区视觉一致。
+  // 这里没用 a-scrollbar：本菜单是 position: fixed 且高度由内容决定，
+  // 而 a-scrollbar 需要确定的像素高度才能算出可视区，套进来就得把菜单
+  // 写死 340px 高，内容少时也会空出一大块。将来若改成固定高度应换回去。
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-fill-4) transparent;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: var(--color-fill-4);
+    border-radius: 3px;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background: var(--color-fill-3);
+  }
 
   // 勾选标记占一个字符宽度，未选中时也留位，避免文字左右跳动
   &__check {
@@ -424,12 +447,32 @@ body[arco-theme='dark'] .titlebar__logo {
     font-size: 11px;
   }
 
-  // 子菜单：叠在主菜单之上，定位由 submenuStyle 算
+  // 子菜单：叠在主菜单之上，定位由 submenuStyle 算。
+  // 滚动条处理与主菜单同理（见上方 .view-menu 的说明）
   &__submenu {
     z-index: 2001;
     min-width: 150px;
     max-height: 340px;
     overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-fill-4) transparent;
+
+    &::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    &::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    &::-webkit-scrollbar-thumb {
+      background: var(--color-fill-4);
+      border-radius: 3px;
+    }
+
+    &::-webkit-scrollbar-thumb:hover {
+      background: var(--color-fill-3);
+    }
   }
 
   // 自定义预设那一行：名字占满，删除按钮挤在右侧
