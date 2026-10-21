@@ -11,6 +11,7 @@
  * 而不是整棵 store，避免类型上的循环引用（见 store/fileList.ts）。
  */
 import { computed, ref, watch } from "vue";
+import * as THREE from "three";
 import type { ComputedRef, Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import type { TableColumnData } from "@arco-design/web-vue";
@@ -19,8 +20,14 @@ import { writeFile } from "@tauri-apps/plugin-fs";
 import { displayName, t } from "../i18n";
 import { buildScene, renderBlockIcons } from "../api";
 import type SceneViewer from "../components/SceneViewer.vue";
-import { OffscreenRenderer, exportPixelSize, presetIsOrtho } from "../render/scene3d";
-import type { ExportAspect } from "../render/scene3d";
+import {
+  OffscreenRenderer,
+  anglesFromPosition,
+  exportPixelSize,
+  isPresetNameUsable,
+  presetIsOrtho,
+} from "../render/scene3d";
+import type { ExportAspect, SavedViewPreset } from "../render/scene3d";
 import { NamePool, joinPath, previewStem } from "../render/export_name";
 import type { AnalysisResult, BlockRow, SceneData, SchematicSummary } from "../types";
 import { itemsForState } from "../utils/material_items";
@@ -67,6 +74,10 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   /** 当前是否正射投影。与 activeView 分开记录：用户可以手动切投影而
    *  不换角度，此时 activeView 仍然是原来那个键。 */
   const orthoView = ref(false);
+  /** 用户保存的自定义视角预设 */
+  const savedViews = ref<SavedViewPreset[]>([]);
+  /** 「保存为预设」面板是否打开 */
+  const viewPresetOpen = ref(false);
   const exportSize = ref<number>(1024);
   /** 导出尺寸的宽高比；与 exportSize（短边像素）一起决定实际宽高 */
   const exportAspect = ref<ExportAspect>("1x1");
@@ -166,6 +177,52 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
 
   function closeViewMenu() {
     if (viewMenu.value.open) viewMenu.value = { ...viewMenu.value, open: false };
+  }
+
+  /** 把当前视角存成一条自定义预设。
+   *
+   * 返回失败原因（用于提示），成功返回空字符串。名字不可用、或场景还没就绪
+   * 时不能存——存一条点下去没反应的预设比不存更糟。
+   */
+  function saveCurrentView(name: string): string {
+    if (!scene.value) return t("view.saveNotReady");
+    const pose = viewer.value?.cameraPose();
+    if (!pose) return t("view.saveNotReady");
+    if (!isPresetNameUsable(name, savedViews.value)) {
+      return savedViews.value.some((p) => p.name === name.trim())
+        ? t("view.saveDuplicate")
+        : t("view.saveInvalidName");
+    }
+    const { yaw, pitch } = anglesFromPosition(
+      new THREE.Vector3(...pose.position),
+      new THREE.Vector3(...pose.target),
+    );
+    savedViews.value = [
+      ...savedViews.value,
+      {
+        name: name.trim(),
+        ortho: orthoView.value,
+        position: pose.position,
+        target: pose.target,
+        yaw,
+        pitch,
+      },
+    ];
+    return "";
+  }
+
+  /** 删除一条自定义预设 */
+  function removeSavedView(name: string) {
+    savedViews.value = savedViews.value.filter((p) => p.name !== name);
+  }
+
+  /** 应用一条自定义预设 */
+  function applySavedViewByName(name: string) {
+    const preset = savedViews.value.find((p) => p.name === name);
+    if (!preset) return;
+    orthoView.value = preset.ortho;
+    activeView.value = `custom:${name}`;
+    viewer.value?.applySavedView(preset);
   }
 
   /** 导出当前视角为透明背景 PNG（单个文件）。
@@ -600,6 +657,11 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     activeView,
     viewMenu,
     orthoView,
+    savedViews,
+    viewPresetOpen,
+    saveCurrentView,
+    removeSavedView,
+    applySavedViewByName,
     setOrthoView,
     openViewMenu,
     closeViewMenu,

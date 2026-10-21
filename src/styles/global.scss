@@ -409,6 +409,42 @@ body[arco-theme='dark'] .titlebar__logo {
     color: rgb(var(--primary-6));
     font-weight: 600;
   }
+
+  // 自定义预设那一行：名字占满，删除按钮挤在右侧
+  &__custom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  &__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  // 删除入口平时低调，鼠标移到该行才显出来——
+  // 常驻一个红叉会让菜单看起来像一列危险操作
+  &__del {
+    flex: 0 0 auto;
+    padding: 0 4px;
+    color: var(--color-text-3);
+    font-size: 14px;
+    line-height: 1;
+    border-radius: 3px;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+
+    &:hover {
+      background: var(--color-fill-3);
+      color: rgb(var(--danger-6));
+    }
+  }
+
+  &__custom:hover &__del {
+    opacity: 1;
+  }
 }
 
 // 拖动条：视觉上是一条细窄的分隔线，命中区域比看起来宽，便于抓取

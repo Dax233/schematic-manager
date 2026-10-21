@@ -11,6 +11,7 @@ import SceneViewer from "./SceneViewer.vue";
 import BlockStatTable from "./BlockStatTable.vue";
 import EntityTable from "./EntityTable.vue";
 import ExportDialog from "./ExportDialog.vue";
+import ViewPresetDialog from "./ViewPresetDialog.vue";
 import { PRESET_MENU } from "../render/scene3d";
 import {
   PREVIEW_MAX_H,
@@ -20,6 +21,7 @@ import {
 } from "../composables/usePreviewResize";
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { Message } from "@arco-design/web-vue";
 import { displayName } from "../i18n";
 import { useAppStore } from "../store";
 import { formatDims, formatSize } from "../utils/format";
@@ -66,6 +68,10 @@ const {
   hasChecked,
   openConvert,
   viewMenu,
+  savedViews,
+  viewPresetOpen,
+  applySavedViewByName,
+  removeSavedView,
   orthoView,
   setOrthoView,
   openViewMenu,
@@ -107,6 +113,24 @@ function onDocKeydown(e: KeyboardEvent) {
 function pickViewFromMenu(key: string) {
   closeViewMenu();
   setView(key);
+}
+
+/** 应用一条自定义预设 */
+function pickCustomPreset(name: string) {
+  closeViewMenu();
+  applySavedViewByName(name);
+}
+
+/** 删除一条自定义预设 */
+function deletePreset(name: string) {
+  removeSavedView(name);
+  Message.success(t("view.deletePresetDone", { name }));
+}
+
+/** 打开「保存为预设」面板：先关菜单，否则两个浮层叠在一起 */
+function openSavePreset() {
+  closeViewMenu();
+  viewPresetOpen.value = true;
 }
 
 onMounted(() => {
@@ -467,6 +491,42 @@ onBeforeUnmount(() => {
       >
         {{ t(item.labelKey) }}
       </div>
+
+      <!-- 自定义预设：存在时单独一组，每项带删除入口 -->
+      <template v-if="savedViews.length > 0">
+        <div class="ctx-menu__sep" role="separator" />
+        <div class="ctx-menu__label">{{ t("view.menuCustomPresets") }}</div>
+        <div
+          v-for="preset in savedViews"
+          :key="preset.name"
+          class="ctx-menu__item view-menu__custom"
+          role="menuitem"
+          tabindex="0"
+          @click="pickCustomPreset(preset.name)"
+        >
+          <span class="view-menu__name">{{ preset.name }}</span>
+          <a
+            class="view-menu__del"
+            role="button"
+            :title="t('view.menuDeletePreset')"
+            @click.stop="deletePreset(preset.name)"
+            >×</a
+          >
+        </div>
+      </template>
+
+      <div class="ctx-menu__sep" role="separator" />
+      <div
+        class="ctx-menu__item"
+        role="menuitem"
+        tabindex="0"
+        @click="openSavePreset"
+      >
+        {{ t("view.menuSavePreset") }}
+      </div>
     </div>
+
+    <!-- 保存为预设角度的面板 -->
+    <ViewPresetDialog />
   </div>
 </template>

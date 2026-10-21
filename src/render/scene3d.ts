@@ -81,6 +81,95 @@ export interface SceneGroup {
   dispose: () => void;
 }
 
+/** 用户保存的视角预设。
+ *
+ * 存的是完整的相机姿态而不是角度对：正交相机的位置与 zoom 都有意义，
+ * 而且以后若要支持「滚动缩放后的视角」也只需用同一份结构。
+ */
+export interface SavedViewPreset {
+  /** 用户起的名字，作为菜单里的显示文本与唯一标识 */
+  name: string;
+  /** 是否正射投影 */
+  ortho: boolean;
+  /** 相机位置 */
+  position: [number, number, number];
+  /** 相机注视的目标点 */
+  target: [number, number, number];
+  /** 偏航、俯角（度），与内置预设同一套表示 */
+  yaw: number;
+  pitch: number;
+}
+
+/** 名称长度上限。菜单里要横向排得下，也不至于把菜单撑得比屏幕还宽。 */
+const PRESET_NAME_MAX = 24;
+
+/** 校验并清洗一条从磁盘读回的自定义预设。
+ *
+ * 磁盘上的数据可能是旧版本写的、被手工改坏的、或者中途写了一半：
+ * 少字段、多余字段、数值为 NaN 都要拦下来。返回 null 表示这条不可用，
+ * 调用方丢弃它——把脏值套进相机只会得到一个指向 NaN 的画面。
+ */
+export function sanitizeViewPreset(raw: unknown): SavedViewPreset | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const name = typeof o.name === "string" ? o.name.trim() : "";
+  if (!name || name.length > PRESET_NAME_MAX) return null;
+
+  const finiteTriple = (v: unknown): [number, number, number] | null => {
+    if (!Array.isArray(v) || v.length !== 3) return null;
+    const out = v.map((x) => (typeof x === "number" && Number.isFinite(x) ? x : NaN));
+    if (out.some((x) => Number.isNaN(x))) return null;
+    return [out[0], out[1], out[2]];
+  };
+
+  const position = finiteTriple(o.position);
+  const target = finiteTriple(o.target);
+  if (!position || !target) return null;
+  if (typeof o.yaw !== "number" || !Number.isFinite(o.yaw)) return null;
+  if (typeof o.pitch !== "number" || !Number.isFinite(o.pitch)) return null;
+  // 位置与目标重合时相机没有朝向可言，取景会得到 NaN
+  if (Math.hypot(position[0] - target[0], position[1] - target[1], position[2] - target[2]) < 1e-6) {
+    return null;
+  }
+
+  return {
+    name,
+    ortho: o.ortho === true,
+    position,
+    target,
+    yaw: o.yaw,
+    pitch: o.pitch,
+  };
+}
+
+/** 校验一批自定义预设：逐条清洗，重名的只留第一条。 */
+export function sanitizeViewPresets(raw: unknown): SavedViewPreset[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: SavedViewPreset[] = [];
+  for (const item of raw) {
+    const clean = sanitizeViewPreset(item);
+    if (!clean) continue;
+    if (seen.has(clean.name)) continue;
+    seen.add(clean.name);
+    out.push(clean);
+  }
+  return out;
+}
+
+/** 名称是否可用：非空、不超长、不与已有预设重名。
+ *
+ * 重名必须挡住：自定义预设以名字作为菜单项标识，重名会得到两个看起来
+ * 一模一样、实际不同的条目，用户无从分辨点的是哪个。
+ */
+export function isPresetNameUsable(
+  name: string,
+  existing: readonly SavedViewPreset[],
+): boolean {
+  const n = name.trim();
+  return n.length > 0 && n.length <= PRESET_NAME_MAX && !existing.some((p) => p.name === n);
+}
+
 /**
  * 由场景数据构建网格。
  *

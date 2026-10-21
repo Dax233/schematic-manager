@@ -58,6 +58,8 @@ vi.mock("../components/SceneViewer.vue", () => ({
       isOrtho: () => false,
       fitCamera: () => {},
       cameraQuaternion: () => null,
+      cameraPose: () => ({ position: [10, 20, 30], target: [0, 0, 0] }),
+      applySavedView: () => {},
     },
   },
 }));
@@ -5623,6 +5625,115 @@ describe("预览区的右键菜单", () => {
     await stage.trigger("contextmenu", { clientX: 300, clientY: 200 });
     await flushPromises();
     expect(orthoItem().textContent, "点过之后应显示勾选").toContain("✓");
+    w.unmount();
+  });
+});
+describe("自定义视角预设", () => {
+  /** 挂载并选中文件，让预览舞台出现 */
+  async function setup() {
+    stubInvoke({
+      analyze_schematic: () => ({
+        blocks: [],
+        entities: [],
+        tileEntities: [],
+        nonAirTotal: 0,
+        airTotal: 0,
+        distinctBlockTypes: 0,
+        distinctStates: 0,
+      }),
+      build_scene: () => scene,
+    });
+    const w = mountApp();
+    await flushPromises();
+    mockOpen.mockResolvedValue("/p");
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+    return w;
+  }
+
+  /** 打开预览区的右键菜单 */
+  async function openMenu(w: ReturnType<typeof mountApp>) {
+    await w.find(".preview__stage").trigger("contextmenu", { clientX: 300, clientY: 200 });
+    await flushPromises();
+    expect(document.querySelector(".view-menu"), "菜单应已打开").toBeTruthy();
+  }
+
+  /** 点菜单里文字包含 label 的那一项 */
+  function menuItem(label: string): HTMLElement | undefined {
+    return [...document.querySelectorAll<HTMLElement>(".view-menu .ctx-menu__item")].find((el) =>
+      (el.textContent ?? "").includes(label),
+    );
+  }
+
+  it("菜单里有「保存为预设角度」入口", async () => {
+    const w = await setup();
+    await openMenu(w);
+    expect(menuItem("保存为预设角度"), "菜单应有保存入口").toBeTruthy();
+    w.unmount();
+  });
+
+  it("保存预设后出现在菜单的自定义分组里", async () => {
+    const w = await setup();
+    await openMenu(w);
+    menuItem("保存为预设角度")!.click();
+    await flushPromises();
+
+    // 面板应打开
+    const dialog = document.querySelector(".view-preset");
+    expect(dialog, "应打开保存面板").toBeTruthy();
+    expect(dialog!.textContent, "面板应展示投影方式").toContain("投影");
+    expect(dialog!.textContent, "面板应展示相机位置").toContain("相机位置");
+    expect(dialog!.textContent, "面板应展示相机角度").toContain("yaw");
+
+    // 填名字并保存
+    const input = document.querySelector<HTMLInputElement>(".view-preset input")!;
+    input.value = "我的视角";
+    input.dispatchEvent(new Event("input"));
+    await flushPromises();
+    const ok = [...document.querySelectorAll<HTMLElement>(".arco-modal-footer button")].find(
+      (b) => (b.textContent ?? "").trim() === "保存",
+    );
+    expect(ok, "面板应有保存按钮").toBeTruthy();
+    ok!.click();
+    await flushPromises();
+
+    // 再开菜单，自定义分组里应出现刚才那条
+    await openMenu(w);
+    const menuText = document.querySelector(".view-menu")!.textContent ?? "";
+    expect(menuText, "应出现自定义预设分组").toContain("自定义预设");
+    expect(menuText, "应出现刚保存的预设名").toContain("我的视角");
+    w.unmount();
+  });
+
+  it("删除自定义预设后菜单里不再出现", async () => {
+    const w = await setup();
+    // 先存一条
+    await openMenu(w);
+    menuItem("保存为预设角度")!.click();
+    await flushPromises();
+    const input = document.querySelector<HTMLInputElement>(".view-preset input")!;
+    input.value = "待删除";
+    input.dispatchEvent(new Event("input"));
+    await flushPromises();
+    [...document.querySelectorAll<HTMLElement>(".arco-modal-footer button")]
+      .find((b) => (b.textContent ?? "").trim() === "保存")!
+      .click();
+    await flushPromises();
+
+    // 打开菜单点删除
+    await openMenu(w);
+    const del = document.querySelector<HTMLElement>(".view-menu .view-menu__del");
+    expect(del, "自定义预设应有删除入口").toBeTruthy();
+    del!.click();
+    await flushPromises();
+
+    // 再开菜单应看不到它
+    await w.find(".preview__stage").trigger("contextmenu", { clientX: 300, clientY: 200 });
+    await flushPromises();
+    const menuText = document.querySelector(".view-menu")?.textContent ?? "";
+    expect(menuText, "删除后不应再出现该预设").not.toContain("待删除");
     w.unmount();
   });
 });

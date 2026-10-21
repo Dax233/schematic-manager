@@ -12,9 +12,14 @@ import type { ComputedRef, Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { loadUiState, saveUiState, scanLitematics } from "../api";
 import { currentLocale, isLocale, locale, setLocale, t } from "../i18n";
-import type { ExportAspect } from "../render/scene3d";
+import type { ExportAspect, SavedViewPreset } from "../render/scene3d";
 import type { SortKey, SortOrder, StatusText } from "./fileList";
-import { EXPORT_ASPECTS, EXPORT_SHORT_EDGES, VIEW_PRESETS } from "../render/scene3d";
+import {
+  EXPORT_ASPECTS,
+  EXPORT_SHORT_EDGES,
+  VIEW_PRESETS,
+  sanitizeViewPresets,
+} from "../render/scene3d";
 import { isLogLevel } from "../utils/run_log";
 import type { LogLevel } from "../utils/run_log";
 import { reportUiWarning } from "../utils/run_log_report";
@@ -44,6 +49,8 @@ interface UiState {
   exportSize: number;
   /** 导出尺寸的宽高比标识；缺失时按 1:1 处理 */
   exportAspect?: string;
+  /** 用户保存的自定义视角预设；读回时逐条校验 */
+  savedViews?: unknown;
   searchText: string;
   /** 界面语言；认不出来的值按默认语言处理 */
   locale?: string;
@@ -106,6 +113,8 @@ export interface UiStateDeps {
   exportSize: Ref<number>;
   /** 预览导出尺寸的宽高比（scenePreview） */
   exportAspect: Ref<ExportAspect>;
+  /** 用户保存的自定义视角预设（scenePreview） */
+  savedViews: Ref<SavedViewPreset[]>;
   /** 文件搜索词（fileList） */
   searchText: Ref<string>;
   /** 列表排序字段（fileList）；null 表示按路径 */
@@ -135,6 +144,7 @@ export function createUiStateSlice(s: UiStateDeps) {
       brightness: s.brightness.value,
       exportSize: s.exportSize.value,
       exportAspect: s.exportAspect.value,
+      savedViews: s.savedViews.value,
       searchText: s.searchText.value,
       locale: currentLocale(),
       logLevel: s.logLevel.value,
@@ -239,6 +249,11 @@ export function createUiStateSlice(s: UiStateDeps) {
     if (typeof st.exportAspect === "string" && EXPORT_ASPECTS.some((a) => a.key === st.exportAspect)) {
       s.exportAspect.value = st.exportAspect as ExportAspect;
     }
+    // 自定义视角预设逐条过校验：磁盘上的数据可能是旧版本写的或被手工改坏，
+    // 把脏值套进相机会得到一个指向 NaN 的画面，且用户看不出是数据坏了
+    if (st.savedViews !== undefined) {
+      s.savedViews.value = sanitizeViewPresets(st.savedViews);
+    }
     if (typeof st.searchText === "string") {
       s.searchText.value = st.searchText;
     }
@@ -309,6 +324,9 @@ export function createUiStateSlice(s: UiStateDeps) {
   watch(s.activeView, persistUiState);
   watch(s.brightness, persistUiState);
   watch(s.exportSize, persistUiState);
+  watch(s.exportAspect, persistUiState);
+  // 预设是数组：deep 才能感知增删与改名
+  watch(s.savedViews, persistUiState, { deep: true });
   watch(s.searchText, persistUiState);
   // 排序：点一次列头就换一种顺序，属于用户对界面的调整
   watch([s.sortKey, s.sortOrder], persistUiState);

@@ -16,6 +16,7 @@ import {
   presetIsOrtho,
   syncClipPlanes,
   zoomLimits,
+  type SavedViewPreset,
   type SceneGroup,
 } from "../render/scene3d";
 
@@ -545,6 +546,55 @@ function cameraQuaternion(): THREE.Quaternion | null {
   return cam ? cam.quaternion.clone() : null;
 }
 
+/** 当前相机的位姿，供「保存为预设」记录。
+ *
+ * 直接给位置与目标点而不是只给角度：位置决定了透视下的观感（距离远近），
+ * 只存角度会让存下来的预设一用就变成「同一个方向、不同的远近」。
+ */
+function cameraPose(): {
+  position: [number, number, number];
+  target: [number, number, number];
+} | null {
+  const cam = activeCamera();
+  if (!cam || !controls) return null;
+  return {
+    position: [cam.position.x, cam.position.y, cam.position.z],
+    target: [controls.target.x, controls.target.y, controls.target.z],
+  };
+}
+
+/** 应用一条自定义预设：按存下来的位置与目标点还原视角。
+ *
+ * 与内置预设不同，这里不走 fitDistance 重新取景——用户存的是「他看到的
+ * 那个画面」，按模型重新算距离会让缩放过的视角被掰回自适应位置。
+ */
+function applySavedView(preset: SavedViewPreset) {
+  setOrtho(preset.ortho);
+  const cam = activeCamera();
+  if (!cam || !controls) return;
+  cam.position.set(...preset.position);
+  controls.target.set(...preset.target);
+  cam.lookAt(controls.target);
+  if (cam instanceof THREE.OrthographicCamera && built) {
+    // 正交相机的位置不影响成像大小，但视景体要按当前朝向重算，
+    // 否则横向被裁——它不能沿用别的朝向算出来的左右边界
+    const box = new THREE.Box3().setFromObject(built.group);
+    if (!box.isEmpty()) {
+      const dir = new THREE.Vector3().subVectors(controls.target, cam.position);
+      if (dir.lengthSq() > 0) {
+        frameOrthoBox(cam, box, dir.normalize(), orthoAspect());
+        // 位置被 frameOrthoBox 改写了，按存档再摆回来
+        cam.position.set(...preset.position);
+        cam.lookAt(controls.target);
+      }
+    }
+  }
+  rememberFit();
+  controls.update();
+  syncOrientation();
+  renderSoon();
+}
+
 /** 按预设键切换视角：投影方式由预设自己决定（真等距是正射，其余是透视）。
  *
  * 方向标与右键菜单都走这里，确保「同一个预设」在两条入口下行为一致。
@@ -563,6 +613,8 @@ defineExpose({
   setOrtho,
   isOrtho,
   cameraQuaternion,
+  cameraPose,
+  applySavedView,
 });
 </script>
 
