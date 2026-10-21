@@ -87,7 +87,6 @@ export default {
     fieldPosition: "相机位置（x, y, z）",
     fieldAngles: "相机角度（yaw, pitch）",
     projectionPersp: "透视投影",
-    stateUnavailable: "尚未就绪",
     existingCount: "已有 {count} 条自定义预设",
     deletePresetDone: "已删除预设「{name}」",
     top: "顶（Y+）",

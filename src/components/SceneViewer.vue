@@ -684,17 +684,6 @@ function fitOrthoClipPlanes(cam: THREE.OrthographicCamera, target: THREE.Vector3
   cam.updateProjectionMatrix();
 }
 
-/** 当前是否为正射投影 */
-function isOrtho(): boolean {
-  return useOrtho;
-}
-
-/** 当前相机的朝向（四元数副本），供方向标把三个轴投到屏幕 */
-function cameraQuaternion(): THREE.Quaternion | null {
-  const cam = activeCamera();
-  return cam ? cam.quaternion.clone() : null;
-}
-
 /** 当前相机的位姿，供「保存为预设」记录。
  *
  * 直接给位置与目标点而不是只给角度：位置决定了透视下的观感（距离远近），
@@ -782,8 +771,6 @@ defineExpose({
   exportPng,
   fitCamera,
   setOrtho,
-  isOrtho,
-  cameraQuaternion,
   cameraPose,
   applySavedView,
 });

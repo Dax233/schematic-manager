@@ -82,18 +82,23 @@ const {
 const previewRowEl = ref<HTMLElement | null>(null);
 let rowObserver: ResizeObserver | null = null;
 
+/** 视角右键菜单的尺寸，与 global.scss 里 `.view-menu` / `&__submenu` 的
+ *  min-width 与 max-height 保持一致；改样式时必须同步这里，否则翻转定位会算偏。 */
+const VIEW_MENU_W = 168;
+const VIEW_MENU_H = 340;
+const VIEW_SUB_W = 150;
+const VIEW_SUB_H = 340;
+
 /** 在预览舞台上右键：打开视角菜单。
  *
- * 菜单靠下/靠右时向内翻，避免被窗口边缘裁掉。菜单宽高取的是实测值，
- * 写死常数在语言切换后（中文比英文短）会算偏。
+ * 菜单靠下/靠右时向内翻，避免被窗口边缘裁掉。翻转后还要夹一下上/左边界：
+ * 在窗口左上角附近右键时，`clientY - MENU_H` 会算出负值，菜单顶部跑到窗口外。
  */
 function onStageContextMenu(e: MouseEvent) {
   e.preventDefault();
-  const MENU_W = 168;
-  const MENU_H = 300;
-  const x = e.clientX + MENU_W > window.innerWidth ? e.clientX - MENU_W : e.clientX;
-  const y = e.clientY + MENU_H > window.innerHeight ? e.clientY - MENU_H : e.clientY;
-  openViewMenu(x, y);
+  const rawX = e.clientX + VIEW_MENU_W > window.innerWidth ? e.clientX - VIEW_MENU_W : e.clientX;
+  const rawY = e.clientY + VIEW_MENU_H > window.innerHeight ? e.clientY - VIEW_MENU_H : e.clientY;
+  openViewMenu(Math.max(rawX, 4), Math.max(rawY, 4));
 }
 
 /** 点在菜单外面或按 Esc 时关闭 */
@@ -113,15 +118,15 @@ const presetSubOpen = ref(false);
 
 /** 子菜单位置：贴着主菜单右侧，右边放不下就翻到左侧 */
 const submenuStyle = computed(() => {
-  const MENU_W = 168;
-  const SUB_W = 150;
-  const SUB_H = 336;
-  const right = viewMenu.value.x + MENU_W + SUB_W;
+  const right = viewMenu.value.x + VIEW_MENU_W + VIEW_SUB_W;
   const left =
     right > window.innerWidth
-      ? Math.max(viewMenu.value.x - SUB_W, 4)
-      : viewMenu.value.x + MENU_W - 4;
-  const top = Math.min(viewMenu.value.y, Math.max(window.innerHeight - SUB_H - 4, 4));
+      ? Math.max(viewMenu.value.x - VIEW_SUB_W, 4)
+      : viewMenu.value.x + VIEW_MENU_W - 4;
+  // 上边界同时受「主菜单自身位置」与「窗口高度」约束：主菜单上翻过的话，
+  // 子菜单跟着它的顶端走，否则会脱节飘到别处
+  const limit = Math.max(window.innerHeight - VIEW_SUB_H - 4, 4);
+  const top = Math.min(Math.max(viewMenu.value.y, 4), limit);
   return { left: left + "px", top: top + "px" };
 });
 

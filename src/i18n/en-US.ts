@@ -85,7 +85,6 @@ const enUS: typeof zhCN = {
     fieldPosition: "Camera position (x, y, z)",
     fieldAngles: "Camera angles (yaw, pitch)",
     projectionPersp: "Perspective",
-    stateUnavailable: "Not ready",
     existingCount: "{count} custom presets saved",
     deletePresetDone: "Deleted preset “{name}”",
     top: "Top (Y+)",
