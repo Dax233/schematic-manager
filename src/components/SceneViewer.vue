@@ -443,10 +443,15 @@ onBeforeUnmount(() => {
   window.removeEventListener("resize", onResize);
   resizeObserver?.disconnect();
   resizeObserver = null;
+  const dom = renderer.value?.domElement;
+  if (dom) {
+    dom.removeEventListener("pointerdown", onCanvasPointerDown);
+    dom.removeEventListener("pointerup", onCanvasPointerUp);
+  }
   disposeScene();
   controls?.dispose();
   renderer.value?.dispose();
-  renderer.value?.domElement.remove();
+  dom?.remove();
   renderer.value = null;
   threeScene = null;
   perspCamera = null;
