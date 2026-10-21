@@ -5854,6 +5854,27 @@ describe("自定义视角预设", () => {
     w.unmount();
   });
 
+  it("菜单项可以用键盘操作（回车切换投影）", async () => {
+    // 菜单项都带 tabindex="0"，能 Tab 到却按不动的话比不能聚焦更让人困惑
+    const w = await setup();
+    await openMenu(w);
+    const orthoItem = [...document.querySelectorAll<HTMLElement>(".view-menu .ctx-menu__item")]
+      .find((el) => (el.textContent ?? "").includes("正射投影"))!;
+    expect(orthoItem, "菜单里应有正射投影项").toBeTruthy();
+    expect(orthoItem.getAttribute("tabindex"), "菜单项应可聚焦").toBe("0");
+
+    // 回车应当与点击等效：切成正射
+    orthoItem.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushPromises();
+
+    // 再开菜单看勾选状态
+    await openMenu(w);
+    const after = [...document.querySelectorAll<HTMLElement>(".view-menu .ctx-menu__item")]
+      .find((el) => (el.textContent ?? "").includes("正射投影"))!;
+    expect(after.getAttribute("aria-checked"), "回车后应切到正射").toBe("true");
+    w.unmount();
+  });
+
   it("把位置与注视点改成重合时不允许保存", async () => {
     // 这种位姿算不出朝向。旧实现会照存不误，重启后又被校验丢掉，
     // 用户看到的是「自己存的预设没了」

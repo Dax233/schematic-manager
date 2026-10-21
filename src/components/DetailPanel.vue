@@ -505,6 +505,8 @@ onBeforeUnmount(() => {
         role="menuitem"
         tabindex="0"
         @click="openSavePreset"
+        @keydown.enter.prevent="openSavePreset"
+        @keydown.space.prevent="openSavePreset"
       >
         {{ t("view.menuSavePreset") }}
       </div>
@@ -515,6 +517,8 @@ onBeforeUnmount(() => {
         tabindex="0"
         :aria-checked="orthoView"
         @click="setOrthoView(!orthoView)"
+        @keydown.enter.prevent="setOrthoView(!orthoView)"
+        @keydown.space.prevent="setOrthoView(!orthoView)"
       >
         <span class="view-menu__check">{{ orthoView ? "✓" : "" }}</span>
         {{ t("view.menuOrtho") }}
@@ -530,6 +534,9 @@ onBeforeUnmount(() => {
         :aria-expanded="presetSubOpen"
         @mouseenter="presetSubOpen = true"
         @click.stop="presetSubOpen = !presetSubOpen"
+        @keydown.enter.prevent="presetSubOpen = true"
+        @keydown.space.prevent="presetSubOpen = true"
+        @keydown.right.prevent="presetSubOpen = true"
       >
         <span class="view-menu__sub-label">{{ t("view.menuPresets") }}</span>
         <span class="view-menu__arrow">▸</span>
@@ -548,6 +555,8 @@ onBeforeUnmount(() => {
           role="menuitem"
           tabindex="0"
           @click="pickViewFromMenu(item.key)"
+          @keydown.enter.prevent="pickViewFromMenu(item.key)"
+          @keydown.space.prevent="pickViewFromMenu(item.key)"
         >
           {{ t(item.labelKey) }}
         </div>
@@ -555,8 +564,8 @@ onBeforeUnmount(() => {
 
       <!-- 自定义预设：存在时单独一组，每项带删除入口 -->
       <template v-if="savedViews.length > 0">
-        <div class="ctx-menu__sep" role="separator" />
-        <div class="ctx-menu__label">{{ t("view.menuCustomPresets") }}</div>
+        <div class="ctx-menu__sep" role="none" />
+        <div class="ctx-menu__label" role="none">{{ t("view.menuCustomPresets") }}</div>
         <div
           v-for="preset in savedViews"
           :key="preset.name"
@@ -564,13 +573,18 @@ onBeforeUnmount(() => {
           role="menuitem"
           tabindex="0"
           @click="pickCustomPreset(preset.name)"
+          @keydown.enter.prevent="pickCustomPreset(preset.name)"
+          @keydown.space.prevent="pickCustomPreset(preset.name)"
         >
           <span class="view-menu__name">{{ preset.name }}</span>
           <a
             class="view-menu__del"
             role="button"
+            tabindex="0"
             :title="t('view.menuDeletePreset')"
             @click.stop="deletePreset(preset.name)"
+            @keydown.enter.prevent.stop="deletePreset(preset.name)"
+            @keydown.space.prevent.stop="deletePreset(preset.name)"
             >×</a
           >
         </div>
