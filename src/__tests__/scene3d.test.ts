@@ -651,6 +651,59 @@ describe("滚轮缩放", () => {
     expect(zoomLimits(0).min).toBeGreaterThan(0);
   });
 
+  /** 正交相机下的滚轮缩放：改的是 camera.zoom，不是到轴心的距离。
+   *
+   * 这条专门钉住正交缩放真的生效。实测在真实 WebView2 里它一度完全不起作用
+   * （滚轮事件到了 canvas、OrbitControls 也 preventDefault 了，但 zoom 一动
+   * 不动），而透视侧同时是好的——两套限位分属不同字段，混了就会一边失效。
+   */
+  it("正交相机下滚轮能改变 camera.zoom", () => {
+    const el = document.createElement("div");
+    const cam = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 1000);
+    cam.position.set(0, 0, 50);
+    cam.zoom = 1;
+    const controls = new OrbitControls(cam, el);
+    controls.enableZoom = true;
+    const { min, max } = orthoZoomLimits();
+    controls.minZoom = min;
+    controls.maxZoom = max;
+    controls.target.set(0, 0, 0);
+    controls.update();
+
+    wheel(el, -240);
+    controls.update();
+    expect(cam.zoom, "向上滚应放大（zoom 变大）").toBeGreaterThan(1);
+
+    const zoomed = cam.zoom;
+    wheel(el, 600);
+    controls.update();
+    expect(cam.zoom, "向下滚应缩小").toBeLessThan(zoomed);
+  });
+
+  it("正交下使劲滚动也夹在 zoom 限位内", () => {
+    const el = document.createElement("div");
+    const cam = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 1000);
+    cam.position.set(0, 0, 50);
+    cam.zoom = 1;
+    const controls = new OrbitControls(cam, el);
+    controls.enableZoom = true;
+    const { min, max } = orthoZoomLimits();
+    controls.minZoom = min;
+    controls.maxZoom = max;
+    controls.target.set(0, 0, 0);
+    controls.update();
+    for (let i = 0; i < 80; i++) {
+      wheel(el, -400);
+      controls.update();
+    }
+    expect(cam.zoom, "放大到顶应停在 maxZoom").toBeCloseTo(max, 4);
+    for (let i = 0; i < 120; i++) {
+      wheel(el, 400);
+      controls.update();
+    }
+    expect(cam.zoom, "缩小到顶应停在 minZoom").toBeCloseTo(min, 4);
+  });
+
   /**
    * 裁剪面必须跟着距离走。
    *
