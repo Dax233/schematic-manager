@@ -410,6 +410,28 @@ body[arco-theme='dark'] .titlebar__logo {
     font-weight: 600;
   }
 
+  // 预设角度子菜单的触发项：文字占左、箭头贴右
+  &__sub {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  &__arrow {
+    flex: 0 0 auto;
+    color: var(--color-text-3);
+    font-size: 11px;
+  }
+
+  // 子菜单：叠在主菜单之上，定位由 submenuStyle 算
+  &__submenu {
+    z-index: 2001;
+    min-width: 150px;
+    max-height: 340px;
+    overflow-y: auto;
+  }
+
   // 自定义预设那一行：名字占满，删除按钮挤在右侧
   &__custom {
     display: flex;

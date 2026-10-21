@@ -19,7 +19,7 @@ import {
   PREVIEW_MIN_H,
   PREVIEW_MIN_W,
 } from "../composables/usePreviewResize";
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { Message } from "@arco-design/web-vue";
 import { displayName } from "../i18n";
@@ -107,6 +107,31 @@ function onDocPointerDown(e: Event) {
 function onDocKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") closeViewMenu();
 }
+
+/** 预设角度子菜单是否展开 */
+const presetSubOpen = ref(false);
+
+/** 子菜单位置：贴着主菜单右侧，右边放不下就翻到左侧 */
+const submenuStyle = computed(() => {
+  const MENU_W = 168;
+  const SUB_W = 150;
+  const SUB_H = 336;
+  const right = viewMenu.value.x + MENU_W + SUB_W;
+  const left =
+    right > window.innerWidth
+      ? Math.max(viewMenu.value.x - SUB_W, 4)
+      : viewMenu.value.x + MENU_W - 4;
+  const top = Math.min(viewMenu.value.y, Math.max(window.innerHeight - SUB_H - 4, 4));
+  return { left: left + "px", top: top + "px" };
+});
+
+// 菜单关掉时把子菜单也收起来，否则下次右键会带着上次的展开状态出现
+watch(
+  () => viewMenu.value.open,
+  (open) => {
+    if (!open) presetSubOpen.value = false;
+  },
+);
 
 /** 从菜单里选一个预设角度：先关菜单再切视角，
  *  否则菜单会停在原地挡住刚换好的画面。 */
@@ -461,7 +486,7 @@ onBeforeUnmount(() => {
     <!-- 导出尺寸面板：点「导出预览图」先在这里定尺寸，确认后才走系统保存框 -->
     <ExportDialog />
 
-    <!-- 预览区右键菜单：投影方式与十个预设角度。
+    <!-- 预览区右键菜单：保存为预设、投影方式、预设角度子菜单。
          定位用 fixed，跟着鼠标走；点击别处或按 Esc 关闭（见 onDocPointerDown）。 -->
     <div
       v-if="viewMenu.open"
@@ -474,22 +499,53 @@ onBeforeUnmount(() => {
         class="ctx-menu__item"
         role="menuitem"
         tabindex="0"
+        @click="openSavePreset"
+      >
+        {{ t("view.menuSavePreset") }}
+      </div>
+
+      <div
+        class="ctx-menu__item"
+        role="menuitemcheckbox"
+        tabindex="0"
+        :aria-checked="orthoView"
         @click="setOrthoView(!orthoView)"
       >
         <span class="view-menu__check">{{ orthoView ? "✓" : "" }}</span>
         {{ t("view.menuOrtho") }}
       </div>
-      <div class="ctx-menu__sep" role="separator" />
-      <div class="ctx-menu__label">{{ t("view.menuPresets") }}</div>
+
+      <!-- 预设角度：悬停或点击展开子菜单。十个项目太多，平铺会把主菜单
+           撑得很长，且 issue 指定的就是子菜单形态。 -->
       <div
-        v-for="item in PRESET_MENU"
-        :key="item.key"
-        class="ctx-menu__item"
+        class="ctx-menu__item view-menu__sub"
         role="menuitem"
         tabindex="0"
-        @click="pickViewFromMenu(item.key)"
+        aria-haspopup="true"
+        :aria-expanded="presetSubOpen"
+        @mouseenter="presetSubOpen = true"
+        @click.stop="presetSubOpen = !presetSubOpen"
       >
-        {{ t(item.labelKey) }}
+        <span class="view-menu__sub-label">{{ t("view.menuPresets") }}</span>
+        <span class="view-menu__arrow">▸</span>
+      </div>
+      <div
+        v-if="presetSubOpen"
+        class="view-menu__submenu ctx-menu"
+        :style="submenuStyle"
+        role="menu"
+        @mouseenter="presetSubOpen = true"
+      >
+        <div
+          v-for="item in PRESET_MENU"
+          :key="item.key"
+          class="ctx-menu__item"
+          role="menuitem"
+          tabindex="0"
+          @click="pickViewFromMenu(item.key)"
+        >
+          {{ t(item.labelKey) }}
+        </div>
       </div>
 
       <!-- 自定义预设：存在时单独一组，每项带删除入口 -->
@@ -514,16 +570,6 @@ onBeforeUnmount(() => {
           >
         </div>
       </template>
-
-      <div class="ctx-menu__sep" role="separator" />
-      <div
-        class="ctx-menu__item"
-        role="menuitem"
-        tabindex="0"
-        @click="openSavePreset"
-      >
-        {{ t("view.menuSavePreset") }}
-      </div>
     </div>
 
     <!-- 保存为预设角度的面板 -->

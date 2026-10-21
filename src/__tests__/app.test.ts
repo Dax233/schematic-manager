@@ -5543,16 +5543,26 @@ describe("预览区的右键菜单", () => {
     return stage;
   }
 
-  it("右键预览区弹出视角菜单，含投影切换与十个预设", async () => {
+  it("右键预览区弹出视角菜单，含保存、投影切换与预设角度子菜单", async () => {
     const w = await setup();
     await rightClick(w);
 
     const menu = document.querySelector(".view-menu");
     expect(menu, "右键应弹出视角菜单").toBeTruthy();
     const text = menu!.textContent ?? "";
+    expect(text, "应有保存为预设角度入口").toContain("保存为预设角度");
     expect(text, "应有正射投影开关").toContain("正射投影");
-    expect(text, "应有预设角度分组").toContain("预设角度");
-    // 十个预设一个都不能少
+    expect(text, "应有预设角度子菜单入口").toContain("预设角度");
+    // 子菜单默认收起：十个预设不该一开始就铺在菜单里
+    expect(text, "预设角度初始应收起").not.toContain("顶（Y+）");
+
+    // 展开子菜单后十个预设一个都不能少
+    const sub = [...document.querySelectorAll<HTMLElement>(".view-menu .view-menu__sub")][0];
+    expect(sub, "应有子菜单入口").toBeTruthy();
+    sub.click();
+    await flushPromises();
+    const subText = document.querySelector(".view-menu__submenu")?.textContent ?? "";
+    expect(subText, "展开后应有子菜单").not.toBe("");
     for (const name of [
       "顶（Y+）",
       "底（Y−）",
@@ -5565,22 +5575,26 @@ describe("预览区的右键菜单", () => {
       "真等距右",
       "真等距左",
     ]) {
-      expect(text, `菜单里应有「${name}」`).toContain(name);
+      expect(subText, `子菜单里应有「${name}」`).toContain(name);
     }
     w.unmount();
   });
 
-  it("点菜单里的预设后菜单关闭", async () => {
+  it("点子菜单里的预设后菜单与子菜单一起关闭", async () => {
     const w = await setup();
     await rightClick(w);
 
-    const items = [...document.querySelectorAll<HTMLElement>(".view-menu .ctx-menu__item")];
+    const sub = [...document.querySelectorAll<HTMLElement>(".view-menu .view-menu__sub")][0];
+    sub.click();
+    await flushPromises();
+    const items = [...document.querySelectorAll<HTMLElement>(".view-menu__submenu .ctx-menu__item")];
     const top = items.find((el) => (el.textContent ?? "").includes("顶（Y+）"));
     expect(top, "应有顶视角项").toBeTruthy();
     top!.click();
     await flushPromises();
 
     expect(document.querySelector(".view-menu"), "选完之后菜单应关闭").toBeNull();
+    expect(document.querySelector(".view-menu__submenu"), "子菜单也应关闭").toBeNull();
     w.unmount();
   });
 
