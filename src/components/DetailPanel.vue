@@ -57,9 +57,11 @@ const {
   selected,
   draft,
   dirty,
+  dirtyMeta,
   saving,
   resetDraft,
   saveDraft,
+  saveAs,
   checkedCount,
   hasChecked,
   openConvert,
@@ -170,7 +172,7 @@ onBeforeUnmount(() => {
               class="preview__row-control"
               v-model="draft.fileName"
               :disabled="!!selected.error"
-              @input="dirty = true"
+              @input="dirtyMeta = true"
             />
           </div>
           <div class="hint-dim" style="margin: -6px 0 10px 66px">
@@ -184,7 +186,7 @@ onBeforeUnmount(() => {
                 class="preview__row-control"
                 v-model="draft.name"
                 :disabled="!!selected.error"
-                @input="dirty = true"
+                @input="dirtyMeta = true"
               />
             </div>
             <div class="preview__row">
@@ -193,7 +195,7 @@ onBeforeUnmount(() => {
                 class="preview__row-control"
                 v-model="draft.author"
                 :disabled="!!selected.error"
-                @input="dirty = true"
+                @input="dirtyMeta = true"
               />
             </div>
             <a-form-item :label="t('detail.description')">
@@ -202,7 +204,7 @@ onBeforeUnmount(() => {
                 :auto-size="{ minRows: 6, maxRows: 14 }"
                 :placeholder="t('detail.descriptionPlaceholder')"
                 :disabled="!!selected.error"
-                @input="dirty = true"
+                @input="dirtyMeta = true"
               />
             </a-form-item>
             </a-form>
@@ -224,6 +226,10 @@ onBeforeUnmount(() => {
               @click="saveDraft"
             >
               {{ t("detail.save") }}
+            </a-button>
+            <!-- 另存为：把当前内容连同未保存的元数据写到新文件，原文件不动 -->
+            <a-button size="small" :disabled="!!selected.error" @click="saveAs">
+              {{ t("files.saveAs") }}
             </a-button>
             <a-button size="small" :disabled="!dirty" @click="resetDraft(selected)">
               {{ t("detail.undo") }}

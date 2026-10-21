@@ -127,9 +127,20 @@ body[arco-theme='dark'] .titlebar__logo {
   // 表格占满整个高度，内部滚动条由 a-table 的 :scroll="{ y: '100%' }" 提供。
   // 关键点：这里必须是 min-height:0 + flex:1，否则表格会按内容高度撑开，
   // 既撑不满底部，也不会出现纵向滚动条。
-  > .arco-table {
+  //
+  // 表格外面套了一层 .sidebar__table-host（键盘导航的挂载点），因此高度链
+  // 要多走一环：包裹层先吃掉剩余高度，表格再把包裹层撑满。少了这一环，
+  // 包裹层按内容高度收缩，表格的 y:'100%' 就无从计算，纵向滚动条随之消失。
+  > .sidebar__table-host {
     flex: 1 1 auto;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+
+    > .arco-table {
+      flex: 1 1 auto;
+      min-height: 0;
+    }
   }
 
   // Arco 在表格内部套了多层：.arco-table → .arco-spin → .arco-table-container
@@ -953,6 +964,17 @@ $preview-stage-h: 344px;
 
   // 表格本体：占满剩余高度，滚动交给 Arco 的滚动容器。
   // 它下面还有 .arco-spin 等层级，见顶层的「Arco 表格的滚动链」。
+  //
+  // 表格外面套了一层 .block-table-host（键盘导航的挂载点）：这层要先作为
+  // flex 子项吃掉剩余高度，表格才能在里面撑满。直接给表格 flex 而包裹层
+  // 没有的话，包裹层按内容收缩，纵向滚动条就没了。
+  .block-table-host {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+
   .block-table {
     display: flex;
     flex: 1 1 auto;
@@ -1171,6 +1193,13 @@ body[arco-theme='dark'] .dup-chip--suspect {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+}
+
+// 键盘导航的挂载点：夹在 .scroll-fill__inner 与表格之间，必须把高度继续
+// 传下去，否则内层表格拿不到确定高度，Arco 的滚动条就不出现。
+.conv-table-host {
+  flex: 1 1 auto;
   min-height: 0;
 }
 
@@ -1691,4 +1720,32 @@ body[arco-theme='dark'] .repl-block--empty .arco-input-wrapper {
 .arco-table .arco-scrollbar-track {
   background-color: transparent;
   border: 0;
+}
+
+// ---------------------------------------------------------------- 导出尺寸面板
+//
+// 每行一个宽高比、四个短边档位。用 a-form-item 让比例名占一个固定宽度的
+// label 位，五行左边缘因此对齐；label 太宽会挤掉按钮，太窄则放不下「16 : 9」。
+.export-dialog {
+  &__label {
+    margin: 4px 0 8px;
+    color: var(--color-text-2);
+    font-weight: 500;
+  }
+
+  &__presets {
+    .arco-form-item {
+      margin-bottom: 8px;
+    }
+
+    .arco-form-item-label-col {
+      // 只放「16 : 9」这类比例文字，固定宽度避免各行错位
+      flex: 0 0 64px;
+    }
+  }
+
+  // 自定义尺寸那一行与预设之间留出分组间距
+  > .arco-space {
+    margin-bottom: 4px;
+  }
 }

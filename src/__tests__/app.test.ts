@@ -5239,10 +5239,10 @@ describe("导出尺寸面板", () => {
 
     // 再点 16:9 → 2048 的预设按钮。短边相同的按钮每行都有，
     // 必须按比例那一行定位，否则会点到 1:1 那行的同名按钮。
-    const row = document.querySelector<HTMLElement>('.export-dialog__ratio[data-aspect="16x9"]');
+    const row = document.querySelector<HTMLElement>('.export-dialog__presets [data-aspect="16x9"]');
     expect(row, "应有 16:9 那一行").toBeTruthy();
     const preset = [...row!.querySelectorAll<HTMLElement>("button")].find(
-      (b) => (b.textContent ?? "").trim() === "2048",
+      (b) => (b.textContent ?? "").trim() === "2048 px",
     );
     expect(preset, "16:9 应有短边 2048 的按钮").toBeTruthy();
     preset!.click();
@@ -5264,7 +5264,7 @@ describe("导出尺寸面板", () => {
 
     // 选 4:3 短边 1024 的预设（第一个 1024 按钮属于 1:1，取第 2 个）
     const buttons = [...document.querySelectorAll<HTMLElement>(".export-dialog button")].filter(
-      (b) => (b.textContent ?? "").trim() === "1024",
+      (b) => (b.textContent ?? "").trim() === "1024 px",
     );
     expect(buttons.length, "每档短边各有一个按钮").toBe(5);
     buttons[1].click(); // 4:3
@@ -5291,6 +5291,209 @@ describe("导出尺寸面板", () => {
     ];
     const hidden = layers.some((el) => el?.style.display === "none");
     expect(hidden, "确认后应隐藏面板").toBe(true);
+    w.unmount();
+  });
+});
+describe("保存语义（未保存草稿与另存为）", () => {
+  /** 挂载、加目录、选中唯一文件 */
+  async function setup(extra: Record<string, unknown> = {}) {
+    stubInvoke(extra);
+    const w = mountApp();
+    await flushPromises();
+    mockOpen.mockResolvedValue("/p");
+    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+    await flushPromises();
+    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+    await flushPromises();
+    return w;
+  }
+
+  it("方块替换不再立即写盘，而是进入待保存状态", async () => {
+    // 替换会大量改写调色板且不可撤销。点「执行替换」只应记下规则，
+    // 真正写盘要等用户点「保存」。
+    // 先确认这套挂载能真的进入详情面板（否则后面的按钮断言都无从谈起）
+    const applied: string[] = [];
+    const w = await setup({
+      apply_replace: () => {
+        applied.push("called");
+        return { replaced: 3 };
+      },
+    });
+
+    expect(w.text(), "应已选中文件并进入详情面板").toContain("投影名称");
+
+    // 打开方块替换窗口，填一组规则
+    await w.findAll("button").find((b) => b.text().includes("方块替换"))!.trigger("click");
+    await flushPromises();
+    // 按 placeholder 精确定位：左栏四个输入框依次是源方块、源属性、目标方块、
+    // 目标属性，按下标取会把规则填进属性栏，规则因缺方块名而被拒
+    const byPlaceholder = (ph: string) =>
+      [...document.querySelectorAll<HTMLInputElement>(".repl-window input")].find(
+        (i) => (i.placeholder ?? "").includes(ph),
+      )! as HTMLInputElement;
+    const fromInput = byPlaceholder("oak_stairs");
+    const toInput = byPlaceholder("minecraft:stone");
+    expect(fromInput, "应有源方块输入框").toBeTruthy();
+    expect(toInput, "应有目标方块输入框").toBeTruthy();
+    fromInput.value = "minecraft:stone";
+    fromInput.dispatchEvent(new Event("input"));
+    toInput.value = "minecraft:dirt";
+    toInput.dispatchEvent(new Event("input"));
+    await flushPromises();
+
+    const ok = [...document.querySelectorAll<HTMLElement>(".arco-modal-footer button")].find(
+      (b) => (b.textContent ?? "").trim() === "执行替换",
+    );
+    expect(ok, "应有「执行替换」按钮").toBeTruthy();
+    ok!.click();
+    await flushPromises();
+
+    expect(applied.length, "此时不应调用后端写盘").toBe(0);
+    // 记入草稿后，保存按钮应从禁用变为可用——这是「替换进入未保存状态」的直接证据
+    const saveBtn = w.findAll("button").find((b) => b.text().trim() === "保存");
+    expect(saveBtn, "应有保存按钮").toBeTruthy();
+    expect(
+      saveBtn!.attributes("disabled"),
+      "记入替换后保存按钮应可用",
+    ).toBeUndefined();
+    expect(shownMessages().join("|"), "应提示已记入待保存").toContain("保存");
+    w.unmount();
+  });
+
+  it("保存时执行待替换规则，并在成功提示里说明替换了几个方块", async () => {
+    const applied: unknown[] = [];
+    const w = await setup({
+      apply_replace: (args: { path?: string }) => {
+        applied.push(args);
+        return { replaced: 3 };
+      },
+      save_metadata: () => ({ backupPath: "/p/备份/x.bak" }),
+    });
+
+    await w.findAll("button").find((b) => b.text().includes("方块替换"))!.trigger("click");
+    await flushPromises();
+    // 与上一条同样的坑：左栏四个输入框依次是源方块、源属性、目标方块、
+    // 目标属性，必须按 placeholder 取源与目标那两栏
+    const pickInput = (ph: string) =>
+      [...document.querySelectorAll<HTMLInputElement>(".repl-window input")].find((i) =>
+        (i.placeholder ?? "").includes(ph),
+      )! as HTMLInputElement;
+    const fromIn = pickInput("oak_stairs");
+    const toIn = pickInput("minecraft:stone");
+    fromIn.value = "minecraft:stone";
+    fromIn.dispatchEvent(new Event("input"));
+    toIn.value = "minecraft:dirt";
+    toIn.dispatchEvent(new Event("input"));
+    await flushPromises();
+    [...document.querySelectorAll<HTMLElement>(".repl-window .arco-modal-footer button")]
+      .find((b) => (b.textContent ?? "").trim() === "执行替换")!
+      .click();
+    await flushPromises();
+
+    // 点保存
+    const save = w.findAll("button").find((b) => b.text().trim() === "保存");
+    expect(save, "应有保存按钮").toBeTruthy();
+    expect(
+      save!.attributes("disabled"),
+      "记入替换后应可保存（说明草稿状态已反映替换）",
+    ).toBeUndefined();
+    await save!.trigger("click");
+    await flushPromises();
+
+    expect(applied.length, "保存时才应真正执行替换").toBe(1);
+    // 提示文案用 spy 断言而不是读 body：Arco 的 Message 容器会被 body 清空
+    // 变成游离节点，读 body 只能靠运气
+    expect(
+      shownMessages().join("|"),
+      "应说明替换了几个方块",
+    ).toContain("已替换 3 个方块");
+    w.unmount();
+  });
+
+  it("另存为把内容写到新路径，并把编辑对象切到新文件", async () => {
+    const savedAs: Array<{ sourcePath: string; targetPath: string }> = [];
+    const w = await setup({
+      save_schematic_as: (args: { sourcePath: string; targetPath: string }) => {
+        savedAs.push(args);
+        return args.targetPath;
+      },
+    });
+
+    // 另存为按钮不依赖 dirty，随时可用
+    const btn = w.findAll("button").find((b) => b.text().trim() === "另存为");
+    expect(btn, "应有「另存为」按钮").toBeTruthy();
+
+    // 保存对话框返回一个目标路径
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(save).mockResolvedValueOnce("/p/copy.litematic");
+    await btn!.trigger("click");
+    await flushPromises();
+
+    expect(savedAs.length, "应调用另存为命令").toBe(1);
+    expect(savedAs[0].targetPath, "目标应是用户选的路径").toBe("/p/copy.litematic");
+    expect(savedAs[0].sourcePath, "来源应是当前文件").toBe("/p/测试.litematic");
+    w.unmount();
+  });
+
+  it("没有未保存改动时点击关闭按钮直接关窗，不弹确认", async () => {
+    // 反向情形：没有改动还弹确认就是在打扰用户
+    const close = vi.fn();
+    vi.mocked(getCurrentWindow).mockReturnValue({
+      minimize: vi.fn(),
+      toggleMaximize: vi.fn(),
+      close,
+      isMaximized: vi.fn().mockResolvedValue(false),
+      onResized: vi.fn().mockResolvedValue(() => {}),
+      theme: vi.fn().mockResolvedValue(null),
+      onThemeChanged: vi.fn().mockResolvedValue(() => {}),
+    } as never);
+
+    const w = await setup();
+    // 刚选中文件、什么都没改，不应显示未保存提示
+    expect(w.text(), "此时不应有未保存提示").not.toContain("有未保存的修改");
+
+    await w.find(".titlebar__btn.is-close").trigger("click");
+    await flushPromises();
+
+    expect(close, "没有改动时应直接关窗").toHaveBeenCalled();
+    w.unmount();
+  });
+
+  it("有未保存改动时点击关闭按钮会先确认", async () => {
+    const close = vi.fn();
+    vi.mocked(getCurrentWindow).mockReturnValue({
+      minimize: vi.fn(),
+      toggleMaximize: vi.fn(),
+      close,
+      isMaximized: vi.fn().mockResolvedValue(false),
+      onResized: vi.fn().mockResolvedValue(() => {}),
+      theme: vi.fn().mockResolvedValue(null),
+      onThemeChanged: vi.fn().mockResolvedValue(() => {}),
+    } as never);
+
+    const w = await setup();
+    // 制造一处未保存改动
+    const nameInput = w.find('.preview__info input');
+    expect(nameInput.exists(), "应有可编辑的名称输入框").toBe(true);
+    await nameInput.setValue("改了个名字");
+    await flushPromises();
+    expect(w.text(), "应显示有未保存的修改").toContain("有未保存的修改");
+
+    // 点标题栏关闭按钮（自绘标题栏，三个按钮都是 div）
+    const btn = w.find(".titlebar__btn.is-close");
+    expect(btn.exists(), "应有窗口关闭按钮").toBe(true);
+    await btn.trigger("click");
+    await flushPromises();
+
+    // 关键行为：有未保存改动时，关闭被拦下并弹出确认；无改动时才直接关。
+    // 这里只断言「拦下并弹出确认」这一步——Modal.confirm 在 jsdom 下没有
+    // 真实交互，它的 Promise 会立即结算，据此断言「窗口没关」并不成立。
+    const modals = [...document.querySelectorAll<HTMLElement>(".arco-modal")].map(
+      (m) => (m.textContent ?? ""),
+    );
+    expect(modals.join("||"), "应弹出未保存确认").toContain("未保存的修改");
+    expect(modals.join("||"), "确认框里应说明关窗会丢弃修改").toContain("丢弃");
+    expect(document.querySelector(".arco-modal"), "确认框应可见").toBeTruthy();
     w.unmount();
   });
 });
