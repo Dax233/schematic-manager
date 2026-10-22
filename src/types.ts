@@ -54,10 +54,10 @@ export interface BlockCount {
  * 物品的不同方块形态（火把与墙上的火把、炼药锅的内容物、铁砧的破损程度），
  * 因为用户想知道的是「这种物品一共要备多少个」。
  *
- * `name` 是代表形态的方块名：该行里出现了基础形态（例如同时有火把与墙上的
- * 火把）时取基础形态的，否则取数量最多的那一个。`state` 与它同属一行，
- * 供渲染图使用。注意替换是按方块名精确匹配的，而这一行可能跨多个方块名，
- * 因此 `forms` 必须保留下来（见 blockReplace.ts 的 onBlockRowClick）。
+ * `name` 是**物品名**（水折成水桶、耕地折成泥土），不是方块名；代表方块的
+ * 名字在 `state` 的方括号之前那一段里。`state` 还供渲染图使用。注意替换是按
+ * 方块名精确匹配的，而这一行可能跨多个方块名，因此 `forms` 必须保留下来
+ * （见 blockReplace.ts 的 sourceOf）。
  */
 export interface BlockRow extends BlockCount {
   /**

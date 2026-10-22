@@ -1022,14 +1022,18 @@ $preview-stage-h: 344px;
 }
 
 // 区分属性开关与它的文字：两者是一个整体，文字跟随开关垂直居中。
-// 用 label 包住，点文字也能切换（开关本身很小，只点它容易点偏）。
+// 文字单独可点（开关本身很小，只点它容易点偏）。
 .block-split {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   color: var(--color-text-2);
   font-size: 12px;
-  cursor: pointer;
+
+  &__label {
+    cursor: pointer;
+    user-select: none;
+  }
 }
 
 // 方块/实体页签要撑满详情区剩余高度（用户反馈「没有自适应到最低位置」）。
@@ -1145,21 +1149,6 @@ $preview-stage-h: 344px;
   // 拖动中的那一列用主题色高亮
   .arco-table-header .arco-table-th-resizing {
     border-right-color: rgb(var(--primary-6));
-  }
-
-  // 占位列：只为让最后一列能拖动而存在，不应被看见
-  .block__filler-col {
-    padding: 0 !important;
-    border-right: 0 !important;
-
-    .arco-table-cell {
-      padding: 0 !important;
-    }
-  }
-
-  .arco-table-header .block__filler-col {
-    border-right: 0 !important;
-    border-left: 1px solid var(--color-border-2);
   }
 
   .arco-table-column-handle {

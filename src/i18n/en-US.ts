@@ -364,9 +364,8 @@ const enUS: typeof zhCN = {
     title: "Block replacement",
     pickFile: "Select a schematic in the sidebar first",
     fromLabel: "Source block (the one to replace)",
-    fromPlaceholder: "e.g. minecraft:oak_stairs",
     fromPropsLabel: "Source property filter (optional)",
-    fromPropsPlaceholder: "e.g. facing=east,half=top",
+
     toLabel: "Target block (the replacement)",
     toPlaceholder: "e.g. minecraft:stone",
     toPropsLabel: "Target property overrides (optional)",
@@ -377,12 +376,12 @@ const enUS: typeof zhCN = {
     previewResult: "Will replace {count} blocks",
     libraryHint:
       "{count} versions are available in the block library; a backup is taken before replacing and can be restored from “Backups and logs”.",
-    pickHint: "Click a block below to fill {field} (whichever input is focused on the left)",
-    fromPickHint:
-      "Clicking any row in the “Blocks” tab fills this in directly, including the property filter",
-    pickTitle: "Click to fill “{field}”",
-    fieldFrom: "source block",
-    fieldTo: "target block",
+    pickHint: "Click a block below to fill the target block",
+    pickTitle: "Click to fill in the target block",
+    fixedSource:
+      "The source block comes from the row you picked in the “Blocks” tab and cannot be edited",
+    noBlocksInLibrary:
+      "The block library is empty; prepare a version in the version library first",
     displayName: "Display name: {name}",
     notFound: "No such ID in the block library (or it has no name); check the spelling",
     querying: "Looking up the display name…",
@@ -391,26 +390,20 @@ const enUS: typeof zhCN = {
     staged: "Replacement staged; it takes effect when you save",
     lookupFailed: "Failed to look up the block display name: {error}",
     searchFailed: "Block search failed: {error}",
-    setSource: "Set as the replacement source: {name}",
+
     setTarget: "Set as the replacement target: {name}",
-    sourcePropsCleared: " (property filter cleared)",
     targetPropsCleared: " (target property overrides cleared)",
     rowMergedForms:
       "Set as the replacement source: {name}. This row merges {forms} forms; the rule replaces {name} only, not {others}",
-    rowMultiState: " (no property filter; this row merges several states)",
     emptyFromTo: "Both the source block and the target block are required",
     previewFailed: "Preview failed: {error}",
     nothingToReplace: "No blocks need replacing",
     replaced: "Replaced {count} blocks (backed up beforehand)",
     replaceFailed: "Replacement failed: {error}",
     loadVersionsFailed: "Failed to read the version list: {error}",
+    listFailed: "Failed to read the block library: {error}",
   },
   stats: {
-    distinguish: "Split states",
-    distinguishTitle:
-      "When on, every block state gets its own row and the state column is shown; when off, rows are folded by item and the state column is hidden",
-    mergedFormsShort: " ({count} forms)",
-    mergedFormsTitle: "This row merges: {forms}",
     icon: "Render",
     block: "Block",
     entityId: "Entity ID",
@@ -425,11 +418,16 @@ const enUS: typeof zhCN = {
     exportTable: "Export table",
     resetWidths: "Reset column widths",
     resetWidthsTitle: "Restore the default width of every column",
-    /** 方块替换按钮在方块列表区，文案因此归 stats */
-    replace: "Block replacement",
-    hint: "Counts are folded into the items needed to build it: water and lava count only the single source bucket, doors and beds count once, double slabs count twice, and placement variants (wall torches and the like) are merged into the same item as one row; click any row to set it as the source block for block replacement, and drag table headers to resize columns",
+    distinguish: "Split states",
+    distinguishTitle:
+      "When on, every block state gets its own row and the state column is shown; when off, rows are folded by item and the state column is hidden",
+    action: "Action",
+    replaceRow: "Replace",
+    mergedFormsShort: " ({count} forms)",
+    mergedFormsTitle: "This row merges: {forms}",
+    hint: "Counts are folded into the items needed to build it: water and lava count only the single source bucket, doors and beds count once, double slabs count twice, and placement variants (wall torches and the like) are merged into the same item as one row; use Replace on the right of any row to set it as the replacement source, and drag table headers to resize columns",
     hintSplit:
-      "Every block state gets its own row and the count is the number of blocks in that state (replacement rules match by exact state, so this is how many blocks the rule would hit); click any row to set it as the replacement source",
+      "Every block state gets its own row and the count is the number of blocks in that state (replacement rules match by exact state, so this is how many blocks the rule would hit); use Replace on the right of any row to set it as the replacement source",
     noIcon: "No icon",
     noBlocks: "Select a schematic to see block statistics",
     noEntitiesSelected: "Select a schematic to see entity statistics",

@@ -1,9 +1,9 @@
 /**
  * 方块统计表（详情面板「方块」页签的内容）。
  *
- * 列宽拖动、分页图标懒加载、状态分组与替换源的选取这三件事都只服务于这张表，
+ * 列宽拖动、分页图标懒加载、每行的替换入口这三件事都只服务于这张表，
  * 独立成组件后详情面板不用背这些细节。状态在 store/scenePreview.ts，
- * 替换动作在 store/blockReplace.ts（openReplace / onBlockRowClick）。
+ * 替换动作在 store/blockReplace.ts（openReplaceFor / onBlockRowClick）。
  *
  * 名字列显示的是「显示名称」：后端同时给出中英两套（取自 Minecraft 语言表），
  * 这里按当前界面语言取一套，缺那套就退另一套并标灰说明。
@@ -42,7 +42,7 @@ const {
   resetBlockColumnWidths,
   onBlockColumnResize,
   onBlockRowClick,
-  openReplace,
+  openReplaceFor,
 } = useAppStore();
 
 /** 键盘导航的挂载点，见 DirSidebar 里同样的用法 */
@@ -68,6 +68,11 @@ useListKeyboard({
   onSelect: (i) => {
     const target = blockPageRows.value[i];
     if (target) onBlockRowClick(target as never);
+  },
+  // 回车打开选中行的替换窗口：方向键只移动当前行，不替用户做决定
+  onActivate: (i) => {
+    const target = blockPageRows.value[i];
+    if (target) void openReplaceFor(target);
   },
   // 方块表分页：翻页键切页，不移动选中
   paged: () => true,
@@ -99,17 +104,17 @@ useListKeyboard({
           </i18n-t>
         </a-space>
         <span class="preview__spacer" />
-        <!-- 替换放在方块列表里：它改的正是这张表里的方块，
-             入口与被作用的对象在同一区域。 -->
-        <a-button size="mini" type="primary" @click="openReplace">
-          {{ t("stats.replace") }}
-        </a-button>
         <!-- 区分属性：开启后每种方块状态单独一行并显示状态列。
              替换是按「方块名 + 属性」精确匹配的，需要按状态核对时把开关打开 -->
-        <label class="block-split">
+        <span class="block-split" :title="t('stats.distinguishTitle')">
           <a-switch v-model="blockSplitStates" size="small" />
-          <span :title="t('stats.distinguishTitle')">{{ t("stats.distinguish") }}</span>
-        </label>
+          <!-- 文字也能点：开关本身很小，只点它容易点偏。
+               不能把它包在 label 里——label 关联不了 role=switch 的按钮，
+               点文字不会有任何反应 -->
+          <span class="block-split__label" @click="blockSplitStates = !blockSplitStates">
+            {{ t("stats.distinguish") }}
+          </span>
+        </span>
         <a-button size="mini" @click="copyBlockTable">{{ t("stats.copyTable") }}</a-button>
         <a-button size="mini" @click="exportBlockTable">{{ t("stats.exportTable") }}</a-button>
         <a-button
@@ -184,6 +189,13 @@ useListKeyboard({
             </span>
           </template>
           <template #stacks="{ record }">{{ formatStacks(record.count) }}</template>
+          <!-- 行内替换入口：点它打开替换窗口，并把这一行设为源方块。
+             行点击只负责高亮（表格首先是统计表），因此要阻止冒泡 -->
+          <template #act="{ record }">
+            <a-link class="block-act" @click.stop="openReplaceFor(record)">{{
+              t("stats.replaceRow")
+            }}</a-link>
+          </template>
         </a-table>
       </div>
     </template>

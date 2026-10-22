@@ -405,9 +405,9 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
    * 状态列只在「区分属性」开启时出现：按物品合计的那些行里，一个状态只是
    * 该行的代表状态，数量却是这一行所有状态的总和，写出来反而误导。
    *
-   * 最后一列是「堆叠」，需要可拖动就必须让**它之后**还有一列：
-   * Arco 判定 resizable 要求 `index2 < row.length - 1`（table.js:1247），
-   * 否则最后一列永远没有拖动手柄。这里同样补一个 1px 占位列。
+   * 最后一列是固定的操作列，每行一个「替换」按钮（入口跟着它作用的那一行，
+   * 不必先选中再去找表头按钮）。固定的列没有拖动手柄——它的宽度不参与
+   * 布局计算，固定值是列定义里的常量。
    */
   /** 列定义随界面语言变化，用 computed 包住，切语言后表头跟着变。
    *  名字列走展示插槽：显示哪一套名字由界面语言决定，后端两套都给了。 */
@@ -445,11 +445,12 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
       { title: t("stats.count"), dataIndex: "count", width: 90 },
       { title: t("stats.stacks"), slotName: "stacks", width: 110 },
       {
-        title: "",
-        dataIndex: "__block_filler",
-        width: 1,
-        headerCellClass: "block__filler-col",
-        bodyCellClass: "block__filler-col",
+        title: t("stats.action"),
+        slotName: "act",
+        // 英文界面要放得下 "Action" 与 "Replace"：单元格左右各有 16px 内边距，
+        // 太窄会折行（中文字少，窄一点反而好看）
+        width: 96,
+        fixed: "right",
       },
     );
     return cols;
@@ -465,7 +466,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   const blockTableKey = ref(0);
 
   function onBlockColumnResize(dataIndex: string, width: number) {
-    if (!dataIndex || dataIndex === "__block_filler") return;
+    if (!dataIndex) return;
     blockColWidths.value = { ...blockColWidths.value, [dataIndex]: width };
   }
 
@@ -593,7 +594,6 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     const start = (blockPage.value - 1) * BLOCK_PAGE_SIZE;
     return blockRows.value.slice(start, start + BLOCK_PAGE_SIZE);
   });
-
 
   /** 状态键 → data URL。用普通 Map 而不是 reactive：
    * 这里会有几百上千项，逐项做响应式代理得不偿失，

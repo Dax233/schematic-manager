@@ -103,6 +103,14 @@ export function searchBlocks(query: string, limit = 200): Promise<BlockHit[]> {
   return logged<BlockHit[]>("search_blocks", { query, limit });
 }
 
+/** 列出方块库中的全部方块，按方块 ID 升序。
+ *
+ * 供方块选择列表在用户还没输入关键字时使用：挑方块要先看得到可选项。
+ */
+export function listBlocks(): Promise<BlockHit[]> {
+  return logged<BlockHit[]>("list_blocks");
+}
+
 /** 列出方块库中的全部版本 */
 export function listBlockVersions(): Promise<VersionOption[]> {
   return logged<VersionOption[]>("list_block_versions");

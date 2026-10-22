@@ -87,13 +87,15 @@ const mockOpen = vi.mocked(open);
 const messageSuccess = vi.spyOn(Message, "success");
 const messageWarning = vi.spyOn(Message, "warning");
 const messageError = vi.spyOn(Message, "error");
+const messageInfo = vi.spyOn(Message, "info");
 
-/** 本用例内出现过的全部提示文案 */
+/** 本用例内出现过的全部提示文案（含普通提示） */
 function shownMessages(): string[] {
   return [
     ...messageSuccess.mock.calls,
     ...messageWarning.mock.calls,
     ...messageError.mock.calls,
+    ...messageInfo.mock.calls,
   ].map((c) => String(c[0]));
 }
 
@@ -140,6 +142,44 @@ function mountApp() {
 /** 运行日志目录：界面显示的路径必须来自后端 run_log_dir，而不是前端自己拼的
  *  （identifier 改过一次，拼出来的位置会指向不存在的地方）。 */
 const LOG_DIR = "C:\\Users\\tester\\AppData\\Roaming\\io.github.heiheids.schematic-manager\\logs";
+
+/** 挂载并选中一个带给定方块行的投影，「方块」页签的表因此有内容。 */
+async function mountWithBlocks(
+  blocks: BlockCount[],
+  overrides: Record<string, unknown> = {},
+) {
+  stubInvoke({
+    analyze_schematic: {
+      blocks,
+      entities: [],
+      tileEntities: [],
+      entityInstances: [],
+      nonAirTotal: blocks.reduce((a, b) => a + b.count, 0),
+      airTotal: 0,
+      distinctBlockTypes: new Set(blocks.map((b) => b.name)).size,
+      distinctStates: blocks.length,
+    },
+    ...overrides,
+  });
+  mockOpen.mockResolvedValue("/p");
+  const w = mountApp();
+  await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
+  await flushPromises();
+  await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
+  await flushPromises();
+  return w;
+}
+
+/** 点方块表第 index 行的行内「替换」，打开替换窗口。
+ *
+ * 替换入口不再挂在表头（#53）：规则作用于用户点的那一行，入口就该在那一行上。
+ */
+async function clickReplaceOnRow(w: ReturnType<typeof mountApp>, index = 0) {
+  const links = w.findAll(".block-table .block-act");
+  expect(links.length, "方块表每行应有替换入口").toBeGreaterThan(index);
+  await links[index].trigger("click");
+  await flushPromises();
+}
 
 /** 一个可用的场景数据，字段与后端 SceneData 对齐 */
 const scene: SceneData = {
@@ -193,6 +233,9 @@ function stubInvoke(overrides: Record<string, unknown> = {}) {
           distinctStates: 0,
         };
       case "list_block_versions":
+        return [];
+      case "list_blocks":
+        // 替换窗口打开时会取全量方块填右侧列表；默认给空，需要的用例自己覆盖
         return [];
       case "base_db_status":
         // 库里为空会触发版本库弹窗自动打开，污染所有不相关用例；
@@ -251,6 +294,7 @@ beforeEach(() => {
   messageSuccess.mockClear();
   messageWarning.mockClear();
   messageError.mockClear();
+  messageInfo.mockClear();
   document.body.innerHTML = "";
   document.body.removeAttribute("arco-theme");
 });
@@ -289,11 +333,11 @@ describe("界面外壳", () => {
     await flushPromises();
     const buttons = w.findAll("button");
     const find = (label: string) => buttons.find((b) => b.text().includes(label));
-    // 方块替换与版本转换都以「选中的投影文件」为前提。它们现在分别放在
-    // 方块列表与投影信息区，而那两块在无选中时整块不渲染，入口自然不可达
-    // ——比「可见但禁用」更彻底，用户不会去点一个点了报错的按钮。
-    expect(find("方块替换"), "无选中时不应出现方块替换").toBeUndefined();
+    // 版本转换与方块列表都以「选中的投影文件」为前提，而那两块在无选中时
+    // 整块不渲染，入口自然不可达——比「可见但禁用」更彻底，用户不会去点
+    // 一个点了报错的按钮。方块替换的入口在方块表的每一行里，表不在就没有入口。
     expect(find("版本转换"), "无选中时不应出现版本转换").toBeUndefined();
+    expect(w.find(".block-table").exists(), "无选中时不应渲染方块表").toBe(false);
     // 与选中项无关的入口应始终可用
     expect(find("添加目录")?.attributes("disabled")).toBeUndefined();
     expect(find("备份与日志")?.attributes("disabled")).toBeUndefined();
@@ -628,87 +672,90 @@ describe("主要操作流程", () => {
     w.unmount();
   });
 
-  it("扫描到文件后「方块替换」「版本转换」变为可用", async () => {
-    stubInvoke();
-    mockOpen.mockResolvedValue("/p");
-    const w = mountApp();
-    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
-    await flushPromises();
-
-    const row = w.findAll("tr").find((r) => r.text().includes("测试.litematic"));
-    await row!.trigger("click");
-    await flushPromises();
-
-    const btn = (label: string) => w.findAll("button").find((b) => b.text().includes(label));
-    expect(btn("方块替换")?.attributes("disabled"), "选中后应可用").toBeUndefined();
-    expect(btn("版本转换")?.attributes("disabled"), "选中后应可用").toBeUndefined();
+  it("选中文件后，方块表的每一行都有替换入口，版本转换变为可用", async () => {
+    // 替换的入口跟着它作用的那一行走：表里的每一行各带一个「替换」，
+    // 不必先选中某一行再去别处找按钮。
+    const w = await mountWithBlocks([
+      { name: "minecraft:stone", state: "minecraft:stone", count: 3, zhName: "石头", enName: "Stone" },
+      { name: "minecraft:dirt", state: "minecraft:dirt", count: 2, zhName: "泥土", enName: "Dirt" },
+    ]);
+    expect(
+      w.findAll(".block-table tbody tr .block-act").length,
+      "每一行都应有替换入口",
+    ).toBe(2);
+    const convert = w.findAll("button").find((b) => b.text().includes("版本转换"));
+    expect(convert?.attributes("disabled"), "选中后应可用").toBeUndefined();
     w.unmount();
   });
 
   it("方块替换里源方块也显示中文名", async () => {
-    // 从「方块」页签点行填入的是方块 ID，只有 ID 时用户无法确认自己点中的
-    // 到底是哪一个方块，因此源方块要与目标方块一样显示中文名。
-    stubInvoke();
-    mockOpen.mockResolvedValue("/p");
-    const w = mountApp();
-    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
-    await flushPromises();
-    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
-    await flushPromises();
+    // 源方块来自「方块」页签点的那一行。那一行的名字当场就有，
+    // 不必再查一次库；改名或换库后仍要能查到，因此也接受来自检索的结果。
+    const w = await mountWithBlocks([
+      {
+        name: "minecraft:oak_stairs",
+        state: "minecraft:oak_stairs[facing=east]",
+        count: 4,
+        zhName: "橡木楼梯",
+        enName: "Oak Stairs",
+      },
+    ]);
+    await clickReplaceOnRow(w);
 
-    mockInvoke.mockImplementation((async (cmd: string) => {
-      if (cmd === "search_blocks") {
-        // 近邻放在**第一个**：这样「取第一条命中」的错误实现会显示错的中文名，
-        // 断言才真的在检验「按名字精确匹配」而不是碰巧对上
-        return [
-          { name: "minecraft:oak_planks", zh: "橡木木板", en: "Oak Planks", versions: [] },
-          { name: "minecraft:oak_stairs", zh: "橡木楼梯", en: "Oak Stairs", versions: [] },
-        ];
-      }
-      return [];
-    }) as never);
-
-    await w.findAll("button").find((b) => b.text().includes("方块替换"))!.trigger("click");
-    await flushPromises();
-
-    // 弹窗内容被 Teleport 到 body，不在组件的渲染树里，因此直接查 document
-    const fromInput = document.querySelector<HTMLInputElement>(
-      'input[placeholder="例如 minecraft:oak_stairs"]',
-    );
-    expect(fromInput, "应能定位到源方块输入框").toBeTruthy();
-    fromInput!.value = "minecraft:oak_stairs";
-    fromInput!.dispatchEvent(new Event("input", { bubbles: true }));
-    await flushPromises();
-
-    // 中文名是防抖查出来的，等一个真实的时间片让它落地
-    await new Promise((r) => setTimeout(r, 300));
-    await flushPromises();
-
-    const text = document.body.textContent ?? "";
-    expect(text, "应显示源方块的中文名").toContain("橡木楼梯");
-    expect(text, "不能把模糊匹配到的近邻当成源方块").not.toContain("橡木木板");
+    expect(document.body.textContent, "应显示源方块的中文名").toContain("橡木楼梯");
+    // 名字只应显示一次，且不该多打一条检索命令去查它已经知道的名字
+    expect(
+      mockInvoke.mock.calls.filter((c) => c[0] === "search_blocks").length,
+      "点的那一行已经带名字，不应再查一次库",
+    ).toBe(0);
     w.unmount();
   });
 
-  it("源方块 ID 在方块库里查不到时明确说明，而不是显示空白", async () => {
-    stubInvoke();
-    mockOpen.mockResolvedValue("/p");
-    const w = mountApp();
-    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
-    await flushPromises();
-    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
-    await flushPromises();
-
-    mockInvoke.mockImplementation((async () => []) as never);
-    await w.findAll("button").find((b) => b.text().includes("方块替换"))!.trigger("click");
-    await flushPromises();
-
-    const fromInput = document.querySelector<HTMLInputElement>(
-      'input[placeholder="例如 minecraft:oak_stairs"]',
+  it("源方块在行上没有名字时，仍会按 ID 去库里查一次", async () => {
+    // 该版本语言表里没有这个方块时，行上带来的名字是空的。
+    // 这时不能把「空」记成「已查过」，否则界面直接显示未找到，
+    // 而库里其实有名字（例如叠加包的补丁只补了名字）
+    const w = await mountWithBlocks(
+      [
+        {
+          name: "minecraft:oak_log",
+          state: "minecraft:oak_log[axis=y]",
+          count: 1,
+          zhName: "",
+          enName: "",
+        },
+      ],
+      {
+        search_blocks: [
+          { name: "minecraft:oak_log", zh: "橡木原木", en: "Oak Log", versions: [] },
+        ],
+        list_blocks: [],
+      },
     );
-    fromInput!.value = "minecraft:not_a_real_block";
-    fromInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await clickReplaceOnRow(w);
+    await new Promise((r) => setTimeout(r, 300));
     await flushPromises();
+
+    expect(document.body.textContent, "应显示从库里查到的名字").toContain("橡木原木");
+    expect(
+      mockInvoke.mock.calls.some((c) => c[0] === "search_blocks"),
+      "名字为空时应真的发起一次查询",
+    ).toBe(true);
+    w.unmount();
+  });
+
+  it("源方块在方块库里查不到名字时明确说明，而不是显示空白", async () => {
+    // 行上带来的名字为空（该版本语言表里没有这个方块），随后按 ID 补查也查不到
+    const w = await mountWithBlocks([
+      {
+        name: "minecraft:not_a_real_block",
+        state: "minecraft:not_a_real_block",
+        count: 1,
+        zhName: "",
+        enName: "",
+      },
+    ]);
+    await clickReplaceOnRow(w);
     await new Promise((r) => setTimeout(r, 300));
     await flushPromises();
 
@@ -723,6 +770,9 @@ describe("主要操作流程", () => {
  *
  * 与版本转换窗口同一套做法——左栏填规则、右栏搜索并点选方块，凡是出现
  * 方块 ID 的地方都一并给出中文名。
+ *
+ * 源方块不可改（#53）：替换的入口是「方块」页签里某一行的替换按钮，
+ * 规则作用于哪一行在点按钮那一刻就定了。允许改会让人以为改的是那一行。
  */
 describe("方块替换窗口（方块列表与中文名）", () => {
   const HITS = [
@@ -730,31 +780,40 @@ describe("方块替换窗口（方块列表与中文名）", () => {
     { name: "minecraft:cobblestone", zh: "圆石", en: "Cobblestone", versions: [] },
   ];
 
-  function byPlaceholder(ph: string): HTMLInputElement | null {
-    return document.querySelector<HTMLInputElement>(`input[placeholder="${ph}"]`);
+  /** 方块表里的一行：石头。用它当作替换源。 */
+  const ROWS: BlockCount[] = [
+    { name: "minecraft:stone", state: "minecraft:stone", count: 10, zhName: "石头", enName: "Stone" },
+  ];
+
+  /** 左栏四个输入框：按稳定的类名定位。
+   *
+   * 不用 placeholder：两个只读框都没有 placeholder，而目标方块的 placeholder
+   * 是文案、会随语言变化；类名不会因为文案改动而失效。
+   */
+  function field(cls: string): HTMLInputElement {
+    const el = document.querySelector<HTMLInputElement>(`.repl-window ${cls} input`);
+    if (!el) throw new Error(`找不到输入框 .${cls}`);
+    return el;
   }
+
+  const fromName = () => field(".repl-from-name");
+  const fromProps = () => field(".repl-from-props");
+  const toName = () => field(".repl-to-name");
+  const toProps = () => field(".repl-to-props");
 
   function pickItems(): HTMLElement[] {
     return [...document.querySelectorAll(".repl-pick__item")] as HTMLElement[];
   }
 
-  /** 打开替换窗口，并让方块检索返回固定的两条结果 */
+  /** 打开替换窗口（点方块表第一行的替换按钮），并让方块检索返回固定的两条结果 */
   async function openReplaceWindow() {
-    stubInvoke();
-    mockOpen.mockResolvedValue("/p");
-    const w = mountApp();
-    await w.findAll("button").find((b) => b.text().includes("添加目录"))!.trigger("click");
-    await flushPromises();
-    await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
-    await flushPromises();
-
+    const w = await mountWithBlocks(ROWS);
     mockInvoke.mockImplementation((async (cmd: string) => {
       if (cmd === "search_blocks") return HITS;
+      if (cmd === "list_blocks") return HITS;
       return [];
     }) as never);
-
-    await w.findAll("button").find((b) => b.text().includes("方块替换"))!.trigger("click");
-    await flushPromises();
+    await clickReplaceOnRow(w);
     return w;
   }
 
@@ -774,100 +833,69 @@ describe("方块替换窗口（方块列表与中文名）", () => {
     expect(items[0].textContent, "列表项应显示中文名").toContain("石头");
     expect(items[0].textContent, "列表项应显示方块 ID").toContain("minecraft:stone");
 
-    // 默认填「目标方块」：替换时更常选的是「换成什么」
     items[0].click();
     await flushPromises();
 
-    expect(byPlaceholder("例如 minecraft:stone")!.value, "应填入目标方块").toBe(
-      "minecraft:stone",
-    );
+    expect(toName().value, "应填入目标方块").toBe("minecraft:stone");
     expect(document.body.textContent, "目标方块应给出显示名称").toContain("显示名称：石头");
     w.unmount();
   });
 
-  it("点过源方块输入框后，点选填的是源方块，并清掉属性限定", async () => {
-    // 属性限定是上一个方块特有的，换源方块时留着它会让规则一个都匹配不上，
-    // 而界面看上去「明明填好了」
+  it("源方块与源属性限定是只读的，点选方块只填目标", async () => {
+    // 源方块由「方块」页签里点的那一行决定。若它可改，用户会以为改的是那一行，
+    // 实际却按另一条规则执行。
     const w = await openReplaceWindow();
 
-    const fromInput = byPlaceholder("例如 minecraft:oak_stairs")!;
-    fromInput.value = "minecraft:oak_stairs";
-    fromInput.dispatchEvent(new Event("input", { bubbles: true }));
-    const propsInput = byPlaceholder("例如 facing=east,half=top")!;
-    propsInput.value = "facing=east";
-    propsInput.dispatchEvent(new Event("input", { bubbles: true }));
-    await flushPromises();
-
-    // 点一下源方块输入框：右侧列表接下来就该填这一栏
-    fromInput.dispatchEvent(new Event("focus", { bubbles: true }));
-    await flushPromises();
-    expect(
-      document.querySelector(".repl-split__pane--pick .hint-dim")!.textContent,
-      "右侧应说明接下来填的是源方块",
-    ).toContain("源方块");
+    const fromInput = fromName();
+    const propsInput = fromProps();
+    expect(fromInput.value, "源方块应已按点的那一行填好").toBe("minecraft:stone");
+    expect(fromInput.readOnly, "源方块输入框应只读").toBe(true);
+    expect(propsInput.readOnly, "源属性限定输入框应只读").toBe(true);
 
     await searchBlocks("cobble");
-    // 检索是模糊的，两条结果都会返回；要的圆石在第二条
     const cobble = pickItems().find((i) => (i.textContent ?? "").includes("cobblestone"))!;
     cobble.click();
     await flushPromises();
 
-    expect(fromInput.value, "应填入源方块").toBe("minecraft:cobblestone");
-    expect(propsInput.value, "属性限定应被清空").toBe("");
-    expect(byPlaceholder("例如 minecraft:stone")!.value, "目标方块不该被改").toBe("");
+    expect(toName().value, "点选应填入目标方块").toBe("minecraft:cobblestone");
+    expect(fromInput.value, "点选不应改动源方块").toBe("minecraft:stone");
     w.unmount();
   });
 
-  it("还没填的必填输入框标红，填上后不再标红", async () => {
+  it("还没填目标方块时它标红，填上后不再标红", async () => {
     const w = await openReplaceWindow();
 
+    // 源方块一定已经有值（来自点的那一行），因此只有目标方块该标红
     expect(
       document.querySelectorAll(".repl-block--empty").length,
-      "源方块与目标方块都还没填，两栏都应标红",
-    ).toBe(2);
+      "只有还没填的目标方块标红",
+    ).toBe(1);
 
     await searchBlocks("stone");
     pickItems()[0].click();
     await flushPromises();
 
-    const boxes = [...document.querySelectorAll(".repl-block")] as HTMLElement[];
-    const empty = boxes.filter((b) => b.classList.contains("repl-block--empty"));
-    expect(empty.length, "填好一栏后应只剩另一栏标红").toBe(1);
-    // 剩下标红的那一栏必须是没填的那个，而不是随便剩一个
     expect(
-      (empty[0].querySelector("input") as HTMLInputElement).value,
-      "仍标红的应是还没填的那一栏",
-    ).toBe("");
+      document.querySelectorAll(".repl-block--empty").length,
+      "填上后不应再有标红的输入框",
+    ).toBe(0);
     w.unmount();
   });
 
   it("粘贴带属性的状态串会被拆开，不会把属性当方块名送出去", async () => {
     // 后端契约要求方块名不含属性：带属性的名字会被原样写进投影的调色板，
-    // 游戏读不出来。旧界面用下拉框选方块，取值域天然挡住了这条路；
-    // 现在是自由文本，必须自己拆，且拆法要与「方块」页签点行填入一致。
+    // 游戏读不出来。目标方块仍是自由文本，必须自己拆。
     const w = await openReplaceWindow();
 
-    const toInput = byPlaceholder("例如 minecraft:stone")!;
+    const toInput = toName();
     toInput.value = "minecraft:oak_stairs[facing=east,half=top]";
     toInput.dispatchEvent(new Event("input", { bubbles: true }));
     await flushPromises();
 
     expect(toInput.value, "方块名里不该留方括号").toBe("minecraft:oak_stairs");
-    expect(
-      byPlaceholder("例如 facing=west")!.value,
-      "方括号里的属性应落进「目标属性覆盖」",
-    ).toBe("facing=east,half=top");
-
-    // 源方块同理
-    const fromInput = byPlaceholder("例如 minecraft:oak_stairs")!;
-    fromInput.value = "minecraft:chest[facing=north]";
-    fromInput.dispatchEvent(new Event("input", { bubbles: true }));
-    await flushPromises();
-    expect(fromInput.value, "源方块的方块名也不该带属性").toBe("minecraft:chest");
-    expect(
-      byPlaceholder("例如 facing=east,half=top")!.value,
-      "源属性限定应被填入",
-    ).toBe("facing=north");
+    expect(toProps().value, "方括号里的属性应落进「目标属性覆盖」").toBe(
+      "facing=east,half=top",
+    );
     w.unmount();
   });
 
@@ -876,19 +904,17 @@ describe("方块替换窗口（方块列表与中文名）", () => {
     // 那个属性，正是为源方块解决过的「看着填好了、规则却不对」
     const w = await openReplaceWindow();
 
-    const toProps = byPlaceholder("例如 facing=west")!;
-    toProps.value = "facing=west";
-    toProps.dispatchEvent(new Event("input", { bubbles: true }));
+    const propsOverride = toProps();
+    propsOverride.value = "facing=west";
+    propsOverride.dispatchEvent(new Event("input", { bubbles: true }));
     await flushPromises();
 
     await searchBlocks("stone");
     pickItems()[0].click();
     await flushPromises();
 
-    expect(byPlaceholder("例如 minecraft:stone")!.value, "应填入目标方块").toBe(
-      "minecraft:stone",
-    );
-    expect(toProps.value, "目标属性覆盖应被清空").toBe("");
+    expect(toName().value, "应填入目标方块").toBe("minecraft:stone");
+    expect(propsOverride.value, "目标属性覆盖应被清空").toBe("");
     w.unmount();
   });
 
@@ -897,15 +923,12 @@ describe("方块替换窗口（方块列表与中文名）", () => {
     // 留着会让用户以为「按现在填的规则只有这么多个」
     const w = await openReplaceWindow();
     mockInvoke.mockImplementation((async (cmd: string) => {
-      if (cmd === "search_blocks") return HITS;
+      if (cmd === "search_blocks" || cmd === "list_blocks") return HITS;
       if (cmd === "preview_replace") return { replaced: 42 };
       return [];
     }) as never);
 
-    const fromInput = byPlaceholder("例如 minecraft:oak_stairs")!;
-    fromInput.value = "minecraft:oak_stairs";
-    fromInput.dispatchEvent(new Event("input", { bubbles: true }));
-    const toInput = byPlaceholder("例如 minecraft:stone")!;
+    const toInput = toName();
     toInput.value = "minecraft:stone";
     toInput.dispatchEvent(new Event("input", { bubbles: true }));
     await flushPromises();
@@ -927,8 +950,84 @@ describe("方块替换窗口（方块列表与中文名）", () => {
     );
     w.unmount();
   });
-});
 
+  it("打开窗口即列出方块库的全部方块，无需先输入关键字", async () => {
+    // 替换的目标方块需要一个默认可选范围：只给空列表等于要求用户先知道名字
+    const ALL = [
+      { name: "minecraft:andesite", zh: "安山岩", en: "Andesite", versions: [] },
+      { name: "minecraft:cobblestone", zh: "圆石", en: "Cobblestone", versions: [] },
+      { name: "minecraft:stone", zh: "石头", en: "Stone", versions: [] },
+    ];
+    const w = await mountWithBlocks(ROWS, {
+      list_blocks: ALL,
+      search_blocks: [HITS[0]],
+    });
+    await clickReplaceOnRow(w);
+
+    const calls = mockInvoke.mock.calls.filter((c) => c[0] === "list_blocks");
+    expect(calls.length, "打开窗口应取一次全部方块").toBe(1);
+    expect(pickItems().length, "右侧列表应直接有内容").toBe(3);
+    // 后端按方块 ID 升序给出，前端原样渲染、不重排
+    expect(pickItems().map((i) => i.querySelector(".repl-block__id")?.textContent?.trim().split(" ")[0])).toEqual([
+      "minecraft:andesite",
+      "minecraft:cobblestone",
+      "minecraft:stone",
+    ]);
+
+    // 输入关键字改走检索
+    await searchBlocks("stone");
+    const searchCalls = mockInvoke.mock.calls.filter((c) => c[0] === "search_blocks");
+    expect(searchCalls.length, "输入关键字应走检索").toBeGreaterThan(0);
+    expect(pickItems().length, "列表改为检索结果").toBe(1);
+
+    // 清空关键字回到全量列表，且不必再请求一次
+    await searchBlocks("");
+    expect(pickItems().length, "清空后应回到全量列表").toBe(3);
+    expect(
+      mockInvoke.mock.calls.filter((c) => c[0] === "list_blocks").length,
+      "回填用的是已取到的全量结果，不该重复请求",
+    ).toBe(1);
+    w.unmount();
+  });
+
+  it("全量列表尚未返回时先搜索、再清空，仍能拿回全量列表", async () => {
+    // 打开窗口的全量请求比用户输入慢时，晚到的结果不能把界面搞成空列表：
+    // 清空关键字时若缓存还没就绪，必须重新取一次，而不是显示「库里没有方块」
+    const ALL = [
+      { name: "minecraft:andesite", zh: "安山岩", en: "Andesite", versions: [] },
+      { name: "minecraft:stone", zh: "石头", en: "Stone", versions: [] },
+    ];
+    // 用一个对象装「放行函数」：闭包里赋值，外部读到的类型不会退化
+    const gate: { release?: () => void } = {};
+    let firstCall = true;
+    const w = await mountWithBlocks(ROWS, {
+      // 第一次全量请求挂起，模拟慢响应
+      list_blocks: () => {
+        if (firstCall) {
+          firstCall = false;
+          return new Promise((resolve) => {
+            gate.release = () => resolve(ALL);
+          });
+        }
+        return Promise.resolve(ALL);
+      },
+      search_blocks: [HITS[0]],
+    });
+    await clickReplaceOnRow(w);
+
+    // 用户在全量还没回来时输入关键字并清空
+    await searchBlocks("stone");
+    expect(pickItems().length, "应看到检索结果").toBe(1);
+    await searchBlocks("");
+    // 清空发现缓存未就绪，重新发起全量请求并拿到结果
+    gate.release?.();
+    await flushPromises();
+    await new Promise((r) => setTimeout(r, 50));
+    await flushPromises();
+    expect(pickItems().length, "清空后应补回全量列表，而不是空列表").toBe(2);
+    w.unmount();
+  });
+});
 describe("跟随系统深浅色", () => {
   // Arco 的深色取值挂在 body[arco-theme="dark"] 上。样式表里两套都写好了，
   // 但没人设置这个属性的话深色永远不会生效——系统开了深色，界面仍是白的。
@@ -1075,8 +1174,8 @@ describe("重新扫描后的选中项", () => {
     // 依赖选中项的入口必须同步消失，否则点下去会作用到旧路径。
     // 它们分别放在方块列表与投影信息区，选中项没了这两块就不渲染。
     const btn = (label: string) => w.findAll("button").find((b) => b.text().includes(label));
-    expect(btn("方块替换"), "移除后不应再有方块替换入口").toBeUndefined();
-    expect(btn("版本转换"), "移除后不应再有版本转换入口").toBeUndefined();
+    expect(btn("版本转换"), "选中项没了，版本转换入口也应消失").toBeUndefined();
+    expect(w.find(".block-table").exists(), "选中项没了，方块表不应再渲染").toBe(false);
     w.unmount();
   });
 
@@ -1095,7 +1194,7 @@ describe("重新扫描后的选中项", () => {
     expect(w.text(), "同一目录重扫后应仍显示该文件").toContain("测试.litematic");
     expect(w.text(), "选中项应保留").toContain("信息");
     const btn = (label: string) => w.findAll("button").find((b) => b.text().includes(label));
-    expect(btn("方块替换")?.attributes("disabled"), "选中项保留，按钮应可用").toBeUndefined();
+    expect(btn("版本转换")?.attributes("disabled"), "选中项保留，按钮应可用").toBeUndefined();
     w.unmount();
   });
 });
@@ -2497,7 +2596,8 @@ describe("多目录与列宽复位", () => {
     expect(w.text(), "文件已不显示，应回到空状态").toContain("选择一个投影文件以查看详情");
     const btn = (label: string) => w.findAll("button").find((x) => x.text().includes(label));
     // 入口随信息区 / 方块列表一起消失，用户不会点到作用在旧路径上的按钮
-    expect(btn("方块替换"), "依赖选中项的入口应消失").toBeUndefined();
+    expect(btn("版本转换"), "依赖选中项的入口应消失").toBeUndefined();
+    expect(w.find(".block-table").exists(), "方块表应随选中项消失").toBe(false);
     w.unmount();
   });
 });
@@ -2812,7 +2912,7 @@ describe("方块栏渲染图", () => {
 
   /** 取一行的各单元格文本。
    *
-   * 折叠视图：0 渲染图、1 中文名、2 方块、3 数量、4 堆叠；
+   * 折叠视图：0 渲染图、1 中文名、2 方块、3 数量、4 堆叠、5 操作；
    * 分状态视图在方块与数量之间多一列状态。按需取下标即可。
    */
   function cells(row: { element: Element }): string[] {
@@ -2961,6 +3061,150 @@ describe("方块栏渲染图", () => {
     w.unmount();
   });
 
+  it("点跨了多个方块名的行的替换按钮时说清只替换其中一个名字", async () => {
+    // 替换在后端按方块名精确相等匹配，而这一行的数量是整个物品的合计。
+    // 若只说「已设为替换源」，用户会以为墙上的火把也会被替换。
+    const rows: BlockCount[] = [
+      { name: "minecraft:torch", state: "minecraft:torch", count: 103, zhName: "火把", enName: "Torch" },
+      { name: "minecraft:wall_torch", state: "minecraft:wall_torch[facing=north]", count: 82, zhName: "墙上的火把", enName: "Wall Torch" },
+    ];
+    const w = await selectWithBlocks(rows);
+    messageWarning.mockClear();
+
+    await clickReplaceOnRow(w, 0);
+
+    const from = document.querySelector<HTMLInputElement>(".repl-window .repl-from-name input")!;
+    const fromProps = document.querySelector<HTMLInputElement>(
+      ".repl-window .repl-from-props input",
+    )!;
+    expect(from.value, "替换源应是这一行的代表形态").toBe("minecraft:torch");
+    expect(fromProps.value, "折叠视图不带属性限定").toBe("");
+    const warning = messageWarning.mock.calls.map((c) => String(c[0])).join(" ");
+    expect(warning, "必须提示只替换其中一个方块名").toContain("minecraft:torch");
+    expect(warning, "必须点明另一个形态不会被替换").toContain("minecraft:wall_torch");
+    w.unmount();
+  });
+
+  it("区分属性开启时，行内替换按钮带入该状态的属性限定", async () => {
+    // 分状态后每一行就是一个具体状态，属性限定跟着带入，规则才恰好只命中这一行
+    const rows: BlockCount[] = [
+      { name: "minecraft:oak_stairs", state: "minecraft:oak_stairs[facing=east]", count: 3, zhName: "橡木楼梯", enName: "Oak Stairs" },
+      { name: "minecraft:oak_stairs", state: "minecraft:oak_stairs[facing=west]", count: 2, zhName: "橡木楼梯", enName: "Oak Stairs" },
+    ];
+    const w = await selectWithBlocks(rows);
+    await toggleSplit(w);
+
+    const westRow = w
+      .findAll(".block-table tbody tr")
+      .find((r) => r.text().includes("facing=west"))!;
+    await westRow.find(".block-act").trigger("click");
+    await flushPromises();
+
+    const from = document.querySelector<HTMLInputElement>(".repl-window .repl-from-name input")!;
+    const fromProps = document.querySelector<HTMLInputElement>(
+      ".repl-window .repl-from-props input",
+    )!;
+    expect(from.value, "源方块是这一行的方块名").toBe("minecraft:oak_stairs");
+    expect(fromProps.value, "属性限定应带入这一行的状态").toBe("facing=west");
+    w.unmount();
+  });
+
+  it("折叠视图下同一方块的多个状态不带属性限定", async () => {
+    // 折叠视图的一行是整个物品的合计（两个朝向都在里面）。若把代表状态的
+    // 属性带进规则，替换会被悄悄限制在其中一个朝向上，而界面上看不出来。
+    const rows: BlockCount[] = [
+      { name: "minecraft:oak_stairs", state: "minecraft:oak_stairs[facing=east]", count: 3, zhName: "橡木楼梯", enName: "Oak Stairs" },
+      { name: "minecraft:oak_stairs", state: "minecraft:oak_stairs[facing=west]", count: 2, zhName: "橡木楼梯", enName: "Oak Stairs" },
+    ];
+    const w = await selectWithBlocks(rows);
+    expect(w.findAll(".block-table tbody tr").length, "折叠视图应合计成一行").toBe(1);
+
+    await clickReplaceOnRow(w, 0);
+
+    const from = document.querySelector<HTMLInputElement>(".repl-window .repl-from-name input")!;
+    const fromProps = document.querySelector<HTMLInputElement>(
+      ".repl-window .repl-from-props input",
+    )!;
+    expect(from.value, "源方块是这一行的方块名").toBe("minecraft:oak_stairs");
+    expect(fromProps.value, "折叠视图不应带入代表状态的属性").toBe("");
+    w.unmount();
+  });
+
+  it("切换区分属性后回到第一页", async () => {
+    // 分状态后行数翻倍，停在旧页码会落到一个与切换前无关的位置
+    const rows: BlockCount[] = [];
+    for (let i = 0; i < 60; i++) {
+      rows.push({
+        name: "minecraft:stone",
+        state: `minecraft:stone[note=${i}]`,
+        count: 1,
+        zhName: "石头",
+        enName: "Stone",
+      });
+    }
+    const w = await selectWithBlocks(rows);
+    // 折叠视图只有 1 行；打开区分属性后变成 60 行、共 2 页
+    await toggleSplit(w);
+    expect(w.findAll(".block-table tbody tr").length, "第一页应有 50 行").toBe(50);
+    await w.findAll(".block-table .arco-pagination-item").find((x) => x.text().trim() === "2")!.trigger("click");
+    await flushPromises();
+    expect(w.findAll(".block-table tbody tr").length, "第二页应有 10 行").toBe(10);
+
+    // 关掉再打开：行集合整个换掉，页码必须回到第一页，
+    // 否则会停在一个与当前视图无关的页码上
+    await toggleSplit(w);
+    await toggleSplit(w);
+    expect(w.findAll(".block-table tbody tr").length, "重新开启后应回到第 1 页").toBe(50);
+    const firstState = (w.findAll(".block-table tbody tr td")[3]?.text() ?? "").trim();
+    expect(firstState, "第 1 页应从数量最多的状态开始").toBe("minecraft:stone[note=0]");
+    w.unmount();
+  });
+
+  it("行内替换按钮只触发一次，不会连带触发行点击", async () => {
+    // 按钮在行内部：点击若冒泡到行的点击处理，设替换源的动作会做两遍。
+    // 用跨形态的行来验证——那一行每次都会给出「只替换其中一个名字」的警告，
+    // 做两遍就会看到两条一样的警告。
+    const rows: BlockCount[] = [
+      { name: "minecraft:torch", state: "minecraft:torch", count: 103, zhName: "火把", enName: "Torch" },
+      { name: "minecraft:wall_torch", state: "minecraft:wall_torch[facing=north]", count: 82, zhName: "墙上的火把", enName: "Wall Torch" },
+    ];
+    const w = await selectWithBlocks(rows);
+    messageWarning.mockClear();
+    messageInfo.mockClear();
+
+    await clickReplaceOnRow(w, 0);
+    expect(
+      messageWarning.mock.calls.filter((c) => String(c[0]).includes("minecraft:torch")).length,
+      "设替换源只应做一遍，警告也只应出现一条",
+    ).toBe(1);
+    // 窗口里已经写着源方块，不必再弹一条普通提示
+    // （跨形态那条警告本身也以「已设为替换源」开头，所以只看 info 这一路）
+    expect(
+      messageInfo.mock.calls.filter((c) => String(c[0]).includes("已设为替换源")).length,
+      "从按钮进窗口时不该再弹设源的提示",
+    ).toBe(0);
+    w.unmount();
+  });
+
+  it("操作列固定在表格右侧，每行都有替换入口", async () => {
+    // 表格比面板宽时横向滚动，操作列不跟着滚走才随时点得到
+    const rows: BlockCount[] = [
+      { name: "minecraft:stone", state: "minecraft:stone", count: 5, zhName: "石头", enName: "Stone" },
+      { name: "minecraft:dirt", state: "minecraft:dirt", count: 3, zhName: "泥土", enName: "Dirt" },
+    ];
+    const w = await selectWithBlocks(rows);
+
+    const titles = headerTitles(w);
+    expect(titles[titles.length - 1], "最后一列应是操作列").toBe("操作");
+    const fixedTh = w.findAll(".block-table thead th.arco-table-col-fixed-right");
+    expect(fixedTh.length, "操作列应固定在右侧").toBe(1);
+    expect(
+      w.findAll(".block-table tbody tr .block-act").length,
+      "每行都应有替换入口",
+    ).toBe(2);
+    w.unmount();
+  });
+
   it("导出的表格随开关切换列，与界面看到的一致", async () => {
     // 导出与显示对不上会让人以为导出漏了方块：折叠视图没有状态列，
     // 导出就不该多出一列；分状态视图按状态分行，导出也得带上状态键
@@ -2994,64 +3238,6 @@ describe("方块栏渲染图", () => {
     );
     expect(split.split("\r\n").length, "两个状态各一行").toBe(3);
     expect(split, "应写出完整状态键").toContain("minecraft:oak_stairs[facing=west]");
-    w.unmount();
-  });
-  it("点跨了多个方块名的行时说清只替换其中一个名字", async () => {
-    // 替换在后端按方块名精确相等匹配，而这一行的数量是整个物品的合计。
-    // 若只说「已设为替换源」，用户会以为墙上的火把也会被替换。
-    const rows: BlockCount[] = [
-      { name: "minecraft:torch", state: "minecraft:torch", count: 103, zhName: "火把", enName: "Torch" },
-      { name: "minecraft:wall_torch", state: "minecraft:wall_torch[facing=north]", count: 82, zhName: "墙上的火把", enName: "Wall Torch" },
-    ];
-    const w = await selectWithBlocks(rows);
-    messageWarning.mockClear();
-
-    w.findAll(".block-table tbody tr")[0].trigger("click");
-    await flushPromises();
-
-    expect(
-      document.querySelector<HTMLInputElement>('input[placeholder="例如 minecraft:oak_stairs"]')!.value,
-      "替换源应是这一行的代表形态",
-    ).toBe("minecraft:torch");
-    expect(
-      document.querySelector<HTMLInputElement>('input[placeholder="例如 facing=east,half=top"]')!.value,
-      "跨形态的行不该带入属性限定",
-    ).toBe("");
-    const warning = messageWarning.mock.calls.map((c) => String(c[0])).join(" ");
-    expect(warning, "必须提示只替换其中一个方块名").toContain("minecraft:torch");
-    expect(warning, "必须点明另一个形态不会被替换").toContain("minecraft:wall_torch");
-    w.unmount();
-  });
-
-  it("点合计了多个状态的行时不带入属性限定", async () => {
-    // 表里的行按种类合计，代表状态只是画渲染图用的。若把它带进「源属性限定」，
-    // 替换会被悄悄限制在其中一个状态上，而界面上看不出这一点。
-    const rows: BlockCount[] = [
-      { name: "minecraft:oak_stairs", state: "minecraft:oak_stairs[facing=east]", count: 3, zhName: "橡木楼梯", enName: "Oak Stairs" },
-      { name: "minecraft:oak_stairs", state: "minecraft:oak_stairs[facing=west]", count: 2, zhName: "橡木楼梯", enName: "Oak Stairs" },
-      { name: "minecraft:oak_log", state: "minecraft:oak_log[axis=y]", count: 1, zhName: "橡木原木", enName: "Oak Log" },
-    ];
-    const w = await selectWithBlocks(rows);
-    const propsBox = () =>
-      document.querySelector<HTMLInputElement>('input[placeholder="例如 facing=east,half=top"]')!;
-
-    // 合计了两种状态的行：不带属性
-    w.findAll(".block-table tbody tr")
-      .find((r) => r.text().includes("minecraft:oak_stairs"))!
-      .trigger("click");
-    await flushPromises();
-    expect(
-      document.querySelector<HTMLInputElement>('input[placeholder="例如 minecraft:oak_stairs"]')!.value,
-      "应设为替换源",
-    ).toBe("minecraft:oak_stairs");
-    expect(propsBox().value, "合计行不该带入代表状态的属性").toBe("");
-
-    // 只有一种状态的行：那一行等价于一个具体状态，属性应当带入
-    w.findAll(".block-table tbody tr")
-      .find((r) => r.text().includes("minecraft:oak_log"))!
-      .trigger("click");
-    await flushPromises();
-    expect(propsBox().value, "单状态行应带入它的属性").toBe("axis=y");
     w.unmount();
   });
 
@@ -5047,7 +5233,7 @@ describe("其余列表的键盘导航", () => {
     return w;
   }
 
-  it("方块表：方向键选中行并回填替换源方块", async () => {
+  it("方块表：方向键选中行，回车打开替换窗口并回填源方块", async () => {
     const blocks: BlockCount[] = [
       { name: "minecraft:stone", state: "minecraft:stone", count: 5, zhName: "石头", enName: "Stone" },
       { name: "minecraft:dirt", state: "minecraft:dirt", count: 3, zhName: "泥土", enName: "Dirt" },
@@ -5066,19 +5252,21 @@ describe("其余列表的键盘导航", () => {
     await host.trigger("keydown", { key: "ArrowDown" });
     await flushPromises();
 
-    // 选中方块会把它的方块名回填到替换窗口的「源方块」，
-    // 因此这个值是「选中真的生效」的直接证据，而不只是行上多了一个类名。
-    const fromInput = w.find('.replace-window input[placeholder*="minecraft:"]');
-    if (fromInput.exists()) {
-      expect((fromInput.element as HTMLInputElement).value, "选中方块应回填源方块").toBe(
-        "minecraft:stone",
-      );
-    }
-    // 行高亮是导航可见性的必要条件
+    // 方向键只移动当前行，不打开窗口：这张表首先是统计表
     expect(
       w.findAll(".block-table tbody tr.block-row--active").length,
       "应有且只有一行被标为当前行",
     ).toBe(1);
+    expect(document.querySelector(".repl-window .arco-modal-wrapper"), "方向键不应打开窗口").toBeNull();
+
+    // 回车把当前行带进替换窗口
+    await host.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    const fromInput = document.querySelector<HTMLInputElement>(
+      ".repl-window .repl-from-name input",
+    );
+    expect(fromInput, "回车应打开替换窗口").toBeTruthy();
+    expect(fromInput!.value, "窗口里的源方块应是当前行").toBe("minecraft:stone");
     w.unmount();
   });
 
@@ -5406,9 +5594,32 @@ describe("导出尺寸面板", () => {
   });
 });
 describe("保存语义（未保存草稿与另存为）", () => {
-  /** 挂载、加目录、选中唯一文件 */
+  /** 挂载、加目录、选中唯一文件。
+   *
+   * 方块表里给一行石头：替换的入口在方块表的行里，没有行就没有入口。
+   */
   async function setup(extra: Record<string, unknown> = {}) {
-    stubInvoke(extra);
+    stubInvoke({
+      analyze_schematic: {
+        blocks: [
+          {
+            name: "minecraft:stone",
+            state: "minecraft:stone",
+            count: 6,
+            zhName: "石头",
+            enName: "Stone",
+          },
+        ],
+        entities: [],
+        tileEntities: [],
+        entityInstances: [],
+        nonAirTotal: 6,
+        airTotal: 0,
+        distinctBlockTypes: 1,
+        distinctStates: 1,
+      },
+      ...extra,
+    });
     const w = mountApp();
     await flushPromises();
     mockOpen.mockResolvedValue("/p");
@@ -5417,6 +5628,22 @@ describe("保存语义（未保存草稿与另存为）", () => {
     await w.findAll("tr").find((r) => r.text().includes("测试.litematic"))!.trigger("click");
     await flushPromises();
     return w;
+  }
+
+  /** 左栏的四个输入框，按稳定类名定位 */
+  function replInput(cls: string): HTMLInputElement {
+    const el = document.querySelector<HTMLInputElement>(`.repl-window ${cls} input`);
+    if (!el) throw new Error(`找不到输入框 ${cls}`);
+    return el;
+  }
+
+  /** 打开替换窗口，把目标方块填成给定值 */
+  async function openReplaceWithTarget(w: ReturnType<typeof mountApp>, target: string) {
+    await clickReplaceOnRow(w);
+    const to = replInput(".repl-to-name");
+    to.value = target;
+    to.dispatchEvent(new Event("input"));
+    await flushPromises();
   }
 
   it("方块替换不再立即写盘，而是进入待保存状态", async () => {
@@ -5433,24 +5660,12 @@ describe("保存语义（未保存草稿与另存为）", () => {
 
     expect(w.text(), "应已选中文件并进入详情面板").toContain("投影名称");
 
-    // 打开方块替换窗口，填一组规则
-    await w.findAll("button").find((b) => b.text().includes("方块替换"))!.trigger("click");
-    await flushPromises();
-    // 按 placeholder 精确定位：左栏四个输入框依次是源方块、源属性、目标方块、
-    // 目标属性，按下标取会把规则填进属性栏，规则因缺方块名而被拒
-    const byPlaceholder = (ph: string) =>
-      [...document.querySelectorAll<HTMLInputElement>(".repl-window input")].find(
-        (i) => (i.placeholder ?? "").includes(ph),
-      )! as HTMLInputElement;
-    const fromInput = byPlaceholder("oak_stairs");
-    const toInput = byPlaceholder("minecraft:stone");
-    expect(fromInput, "应有源方块输入框").toBeTruthy();
-    expect(toInput, "应有目标方块输入框").toBeTruthy();
-    fromInput.value = "minecraft:stone";
-    fromInput.dispatchEvent(new Event("input"));
-    toInput.value = "minecraft:dirt";
-    toInput.dispatchEvent(new Event("input"));
-    await flushPromises();
+    // 从方块表那一行的替换按钮打开窗口，把目标方块填成泥土
+    await openReplaceWithTarget(w, "minecraft:dirt");
+    // 源方块由点的那一行决定，不可手改
+    expect(replInput(".repl-from-name").value, "源方块应来自点的那一行").toBe(
+      "minecraft:stone",
+    );
 
     const ok = [...document.querySelectorAll<HTMLElement>(".arco-modal-footer button")].find(
       (b) => (b.textContent ?? "").trim() === "执行替换",
@@ -5481,21 +5696,7 @@ describe("保存语义（未保存草稿与另存为）", () => {
       save_metadata: () => ({ backupPath: "/p/备份/x.bak" }),
     });
 
-    await w.findAll("button").find((b) => b.text().includes("方块替换"))!.trigger("click");
-    await flushPromises();
-    // 与上一条同样的坑：左栏四个输入框依次是源方块、源属性、目标方块、
-    // 目标属性，必须按 placeholder 取源与目标那两栏
-    const pickInput = (ph: string) =>
-      [...document.querySelectorAll<HTMLInputElement>(".repl-window input")].find((i) =>
-        (i.placeholder ?? "").includes(ph),
-      )! as HTMLInputElement;
-    const fromIn = pickInput("oak_stairs");
-    const toIn = pickInput("minecraft:stone");
-    fromIn.value = "minecraft:stone";
-    fromIn.dispatchEvent(new Event("input"));
-    toIn.value = "minecraft:dirt";
-    toIn.dispatchEvent(new Event("input"));
-    await flushPromises();
+    await openReplaceWithTarget(w, "minecraft:dirt");
     [...document.querySelectorAll<HTMLElement>(".repl-window .arco-modal-footer button")]
       .find((b) => (b.textContent ?? "").trim() === "执行替换")!
       .click();
