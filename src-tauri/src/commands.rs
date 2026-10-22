@@ -543,6 +543,20 @@ fn open_db(app: &tauri::AppHandle) -> AppResult<std::sync::Arc<LoadedDb>> {
     })
 }
 
+/// 检索结果转前端契约。检索与「列出全部」共用，两处各写一份字段搬运迟早会漏。
+fn hit_dto(h: crate::block_search::BlockHit) -> BlockHitDto {
+    BlockHitDto {
+        name: h.name,
+        zh: h.zh,
+        en: h.en,
+        versions: h
+            .versions
+            .into_iter()
+            .map(|v| BlockVersionDto { index: v.index, data_version: v.data_version })
+            .collect(),
+    }
+}
+
 /// 跨版本检索方块
 #[tauri::command]
 pub fn search_blocks(
@@ -554,16 +568,19 @@ pub fn search_blocks(
     let db = &loaded.db;
     Ok(crate::block_search::search(db, &query, limit.unwrap_or(200))
         .into_iter()
-        .map(|h| BlockHitDto {
-            name: h.name,
-            zh: h.zh,
-            en: h.en,
-            versions: h
-                .versions
-                .into_iter()
-                .map(|v| BlockVersionDto { index: v.index, data_version: v.data_version })
-                .collect(),
-        })
+        .map(hit_dto)
+        .collect())
+}
+
+/// 列出方块库中的全部方块，按方块 ID 升序。
+///
+/// 供方块选择列表在用户还没输入关键字时使用：那里需要一个默认可选范围。
+#[tauri::command]
+pub fn list_blocks(app: tauri::AppHandle) -> Result<Vec<BlockHitDto>, String> {
+    let loaded = open_db(&app).map_err(|e| e.to_string())?;
+    Ok(crate::block_search::list_all(&loaded.db)
+        .into_iter()
+        .map(hit_dto)
         .collect())
 }
 

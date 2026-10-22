@@ -93,16 +93,15 @@ fn rank(name: &str, short: &str, zh: &str, en: &str, q: &str) -> Option<u8> {
     None
 }
 
-/// 跨版本检索方块。
+/// 逐版本遍历方块，把命中项按方块名合并成一条并汇总版本。
 ///
-/// query 为空时返回空结果——调用方应改用版本选项先行筛选，
-/// 否则会把整库方块一次性倒给界面。
-pub fn search(db: &BlockDb, query: &str, limit: usize) -> Vec<BlockHit> {
-    let q = query.trim().to_lowercase();
-    if q.is_empty() {
-        return Vec::new();
-    }
-
+/// `rank_of` 收到（已转小写的完整方块 ID、短名、中文名、英文名），返回命中
+/// 优先级，`None` 表示不命中。检索与「列出全部」只差这一个判据，合并、去重、
+/// 版本汇总的规则完全一样；分两处写会让同一方块在两条路径上拿到不同的版本列表。
+fn collect<F>(db: &BlockDb, rank_of: F) -> Vec<(u8, BlockHit)>
+where
+    F: Fn(&str, &str, &str, &str) -> Option<u8>,
+{
     // name -> (rank, hit)
     let mut found: HashMap<String, (u8, BlockHit)> = HashMap::new();
 
@@ -111,7 +110,7 @@ pub fn search(db: &BlockDb, query: &str, limit: usize) -> Vec<BlockHit> {
         for b in &v.blocks {
             let short = b.name.split_once(':').map(|(_, n)| n).unwrap_or(&b.name);
             let (zh, en) = langs.get(&b.name).cloned().unwrap_or_default();
-            let Some(r) = rank(&b.name.to_lowercase(), &short.to_lowercase(), &zh, &en, &q) else {
+            let Some(r) = rank_of(&b.name.to_lowercase(), &short.to_lowercase(), &zh, &en) else {
                 continue;
             };
             match found.get_mut(&b.name) {
@@ -150,9 +149,36 @@ pub fn search(db: &BlockDb, query: &str, limit: usize) -> Vec<BlockHit> {
         hit.versions.sort_by_key(|v| v.data_version);
         hit.versions.dedup();
     }
+    out
+}
+
+/// 跨版本检索方块。
+///
+/// query 为空时返回空结果——用户还没输入关键字时应当用 [`list_all`] 取全量，
+/// 而不是把整库方块一次性倒给界面。
+pub fn search(db: &BlockDb, query: &str, limit: usize) -> Vec<BlockHit> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = collect(db, |name, short, zh, en| rank(name, short, zh, en, &q));
     // 先按命中优先级，再按名称，保证结果稳定
     out.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.name.cmp(&b.1.name)));
     out.into_iter().take(limit.max(1)).map(|(_, h)| h).collect()
+}
+
+/// 列出方块库中的全部方块，按方块 ID 升序。
+///
+/// 供方块选择列表在用户还没输入关键字时使用：挑一个方块需要先看到全貌，
+/// 只给空列表等于要求用户先知道名字。排序按 ID 而不是相关度——没有查询就没有
+/// 相关度，按 ID 排是稳定且可预期的顺序。
+///
+/// 不截断：调用方要的就是完整清单，截一半会让排在后面的方块永远挑不到。
+pub fn list_all(db: &BlockDb) -> Vec<BlockHit> {
+    let mut out = collect(db, |_, _, _, _| Some(0));
+    out.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+    out.into_iter().map(|(_, h)| h).collect()
 }
 
 #[cfg(test)]
@@ -319,5 +345,62 @@ mod tests {
     fn no_match_returns_empty() {
         let db = sample();
         assert!(search(&db, "不存在的方块名", 20).is_empty());
+    }
+
+    #[test]
+    fn list_all_lists_every_block_across_versions() {
+        let db = sample();
+        let hits = list_all(&db);
+        let names: Vec<&str> = hits.iter().map(|h| h.name.as_str()).collect();
+        // 两个版本合起来共 4 个不同的方块名；没有查询也要全部列出，
+        // 否则用户不输入关键字时就挑不到任何方块
+        assert_eq!(
+            names,
+            vec![
+                "minecraft:copper_block",
+                "minecraft:oak_log",
+                "minecraft:stone",
+                "minecraft:stone_bricks"
+            ],
+            "应按方块 ID 升序列出全部方块，实际 {names:?}"
+        );
+    }
+
+    #[test]
+    fn list_all_merges_versions_of_the_same_block() {
+        let db = sample();
+        let stone = list_all(&db)
+            .into_iter()
+            .find(|h| h.name == "minecraft:stone")
+            .expect("应有石头");
+        assert_eq!(stone.versions.len(), 2, "两个版本都有的方块只应出现一次并列出两个版本");
+        // 与检索给出同一份版本列表：两处各自合并会让同一方块在两条路径上不一致
+        let by_search = search(&db, "minecraft:stone", 20)
+            .into_iter()
+            .find(|h| h.name == "minecraft:stone")
+            .expect("检索也应命中石头");
+        assert_eq!(stone.versions, by_search.versions);
+    }
+
+    #[test]
+    fn list_all_keeps_blocks_without_display_name() {
+        let db = db_with(vec![version(
+            "1.20.1",
+            3465,
+            &[("minecraft:stone", "石头", "Stone"), ("mod:mystery", "", "")],
+            false,
+        )]);
+        let hits = list_all(&db);
+        let mystery = hits
+            .iter()
+            .find(|h| h.name == "mod:mystery")
+            .expect("没有显示名称的方块也要列出，否则它在选择列表里永远不出现");
+        assert!(mystery.zh.is_empty());
+        assert!(mystery.en.is_empty());
+    }
+
+    #[test]
+    fn list_all_of_empty_library_is_empty() {
+        assert!(list_all(&db_with(Vec::new())).is_empty());
     }
 }

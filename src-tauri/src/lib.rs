@@ -142,6 +142,7 @@ pub fn run() {
             commands::log_ui_event,
             commands::run_log_dir,
             commands::search_blocks,
+            commands::list_blocks,
             commands::list_block_versions,
             commands::preview_replace,
             commands::apply_replace,
