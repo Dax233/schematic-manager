@@ -13,7 +13,7 @@
 //! 报告里会显示为通过，看不出其实一次都没跑。标了 ignore 会如实显示为
 //! 「未运行」，需要跑时用 `--ignored` 显式调用。
 
-use crate::litematic::BlockState;
+use crate::schematic::litematic::BlockState;
 use std::path::{Path, PathBuf};
 
 /// 递归收集目录下的 `.litematic`
@@ -45,10 +45,10 @@ fn real_dir() -> String {
 ///
 /// 库文件不再随包分发：用 SM_BLOCK_DB 指向一份（通常是「版本库」在
 /// app 数据目录下生成的单版本包），且版本应覆盖用例数据的 dataVersion。
-fn env_db() -> crate::blockdb::BlockDb {
+fn env_db() -> crate::block::db::BlockDb {
     let path = std::env::var("SM_BLOCK_DB")
         .expect("需设置 SM_BLOCK_DB 指向方块库文件（如「版本库」生成的单版本包）");
-    crate::blockdb::BlockDb::load(&path, false).expect("方块库载入失败")
+    crate::block::db::BlockDb::load(&path, false).expect("方块库载入失败")
 }
 
 fn file_name(p: &Path) -> String {
@@ -83,7 +83,7 @@ fn every_real_project_parses_and_roundtrips() {
     for f in &files {
         let name = file_name(f);
 
-        let sc = match crate::litematic::Schematic::load(&f.to_string_lossy()) {
+        let sc = match crate::schematic::litematic::Schematic::load(&f.to_string_lossy()) {
             Ok(sc) => sc,
             Err(e) => {
                 failed.push(format!("{name}: 载入失败 {e}"));
@@ -107,9 +107,9 @@ fn every_real_project_parses_and_roundtrips() {
         // 写出路径必须零信息损失
         let roundtrip = (|| -> Result<(), String> {
             let bytes = std::fs::read(f).map_err(|e| e.to_string())?;
-            let root = crate::nbt::parse_maybe_gzip(&bytes).map_err(|e| e.to_string())?;
-            let out = crate::nbt::serialize_gzip(&root, "", 6).map_err(|e| e.to_string())?;
-            let back = crate::nbt::parse_maybe_gzip(&out).map_err(|e| e.to_string())?;
+            let root = crate::format::nbt::parse_maybe_gzip(&bytes).map_err(|e| e.to_string())?;
+            let out = crate::format::nbt::serialize_gzip(&root, "", 6).map_err(|e| e.to_string())?;
+            let back = crate::format::nbt::parse_maybe_gzip(&out).map_err(|e| e.to_string())?;
             if root != back {
                 return Err("NBT 往返前后不一致".into());
             }
@@ -152,9 +152,9 @@ fn real_project_tinted_blocks_actually_get_colored() {
     let mut tinted_quads = 0usize;
 
     for f in &files {
-        let Ok(sc) = crate::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
+        let Ok(sc) = crate::schematic::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
         let Some(vi) = db.pick_version(sc.summary().data_version) else { continue };
-        let quads = crate::visibility::collect_quads(&sc, &db, vi);
+        let quads = crate::render::visibility::collect_quads(&sc, &db, vi);
         // 逐四边形反查它属于哪个方块（按 block_pos 对应回调色板）
         let mut name_at: BTreeMap<[i32; 3], String> = BTreeMap::new();
         for r in &sc.regions {
@@ -173,7 +173,7 @@ fn real_project_tinted_blocks_actually_get_colored() {
         }
         for q in &quads {
             total_quads += 1;
-            let is_tinted = q.tint != crate::tint::NO_TINT;
+            let is_tinted = q.tint != crate::render::tint::NO_TINT;
             if is_tinted {
                 tinted_quads += 1;
             }
@@ -207,9 +207,9 @@ fn real_project_tinted_blocks_actually_get_colored() {
     };
 
     let mut wrong: Vec<String> = Vec::new();
-    let leaf = crate::tint::tint_color("minecraft:oak_leaves", &[], 0);
-    let grass = crate::tint::tint_color("minecraft:grass_block", &[], 0);
-    let no_tint = crate::tint::NO_TINT;
+    let leaf = crate::render::tint::tint_color("minecraft:oak_leaves", &[], 0);
+    let grass = crate::render::tint::tint_color("minecraft:grass_block", &[], 0);
+    let no_tint = crate::render::tint::NO_TINT;
 
     let mut checked = 0usize;
     println!("  --- 出现过的染色方块 ---");
@@ -319,7 +319,7 @@ fn real_project_piston_culling_respects_geometry() {
         let st = BlockState { name: name.clone(), props: props.clone() };
 
         // 该方块模型里 cullface=none 的面有几个（这些面永远不该被剔除）
-        let models = crate::block_model::resolve_models(&db, &db.versions[vi], &st);
+        let models = crate::schematic::model::resolve_models(&db, &db.versions[vi], &st);
         let mut no_cull_faces = 0usize;
         let mut total_faces = 0usize;
         for rm in &models {
@@ -331,12 +331,12 @@ fn real_project_piston_culling_respects_geometry() {
                     }
                     total_faces += 1;
                     let fe = match f {
-                        0 => crate::blockdb::Face::Down,
-                        1 => crate::blockdb::Face::Up,
-                        2 => crate::blockdb::Face::North,
-                        3 => crate::blockdb::Face::South,
-                        4 => crate::blockdb::Face::West,
-                        _ => crate::blockdb::Face::East,
+                        0 => crate::block::db::Face::Down,
+                        1 => crate::block::db::Face::Up,
+                        2 => crate::block::db::Face::North,
+                        3 => crate::block::db::Face::South,
+                        4 => crate::block::db::Face::West,
+                        _ => crate::block::db::Face::East,
                     };
                     if elem.face(fe).map(|mf| mf.cullface == 0xFF).unwrap_or(false) {
                         no_cull_faces += 1;
@@ -386,9 +386,9 @@ fn real_project_piston_culling_respects_geometry() {
                 indices[i] = air_pi as i32;
             }
 
-            let sc = crate::litematic::Schematic {
-                root: crate::nbt::Value::Compound(vec![]),
-                regions: vec![crate::litematic::Region {
+            let sc = crate::schematic::litematic::Schematic {
+                root: crate::format::nbt::Value::Compound(vec![]),
+                regions: vec![crate::schematic::litematic::Region {
                     name: "r".into(),
                     pos: [0, 0, 0],
                     size: [3, 3, 3],
@@ -403,7 +403,7 @@ fn real_project_piston_culling_respects_geometry() {
                 blocks_modified: false,
             };
 
-            let quads = crate::visibility::collect_quads(&sc, &db, vi);
+            let quads = crate::render::visibility::collect_quads(&sc, &db, vi);
             let got = quads.iter().filter(|q| q.block_pos == [1, 1, 1]).count();
             checked += 1;
             per_scenario.push((sname, got));
@@ -487,14 +487,14 @@ fn real_project_no_block_loses_a_non_cullable_face() {
 
     for f in &files {
         let file_label = file_name(f);
-        let Ok(sc) = crate::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
+        let Ok(sc) = crate::schematic::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
         let Some(vi) = db.pick_version(sc.summary().data_version) else { continue };
         let version = &db.versions[vi];
 
         // 每个方块状态算一次「不可剔除的面数」，同一状态只算一遍
         let mut no_cull_cache: BTreeMap<i32, usize> = BTreeMap::new();
 
-        let quads = crate::visibility::collect_quads(&sc, &db, vi);
+        let quads = crate::render::visibility::collect_quads(&sc, &db, vi);
         total_quads += quads.len();
 
         // 按方块坐标统计实际产出的四边形数
@@ -506,7 +506,7 @@ fn real_project_no_block_loses_a_non_cullable_face() {
         for r in &sc.regions {
             for (i, pi) in r.indices.iter().enumerate() {
                 let Some(st) = r.palette.get(*pi as usize) else { continue };
-                if crate::visibility::is_render_skipped(&st.name) {
+                if crate::render::visibility::is_render_skipped(&st.name) {
                     continue;
                 }
                 let local = r.pos_from_index(i);
@@ -525,7 +525,7 @@ fn real_project_no_block_loses_a_non_cullable_face() {
                     Some(v) => *v,
                     None => {
                         let mut n = 0usize;
-                        for rm in crate::block_model::resolve_models(&db, version, st) {
+                        for rm in crate::schematic::model::resolve_models(&db, version, st) {
                             let Some(m) = db.models.get(rm.model_idx as usize) else { continue };
                             for elem in &m.elements {
                                 for face_idx in 0..6u8 {
@@ -533,12 +533,12 @@ fn real_project_no_block_loses_a_non_cullable_face() {
                                         continue;
                                     }
                                     let fe = match face_idx {
-                                        0 => crate::blockdb::Face::Down,
-                                        1 => crate::blockdb::Face::Up,
-                                        2 => crate::blockdb::Face::North,
-                                        3 => crate::blockdb::Face::South,
-                                        4 => crate::blockdb::Face::West,
-                                        _ => crate::blockdb::Face::East,
+                                        0 => crate::block::db::Face::Down,
+                                        1 => crate::block::db::Face::Up,
+                                        2 => crate::block::db::Face::North,
+                                        3 => crate::block::db::Face::South,
+                                        4 => crate::block::db::Face::West,
+                                        _ => crate::block::db::Face::East,
                                     };
                                     if elem.face(fe).map(|mf| mf.cullface == 0xFF).unwrap_or(false)
                                     {
@@ -601,7 +601,7 @@ fn real_project_has_no_unresolved_texture_faces() {
 
     for f in &files {
         let label = file_name(f);
-        let Ok(sc) = crate::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
+        let Ok(sc) = crate::schematic::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
         let Some(vi) = db.pick_version(sc.summary().data_version) else { continue };
 
         // 按坐标反查方块名，便于报告是哪个方块出的问题
@@ -622,9 +622,9 @@ fn real_project_has_no_unresolved_texture_faces() {
             }
         }
 
-        for q in crate::visibility::collect_quads(&sc, &db, vi) {
+        for q in crate::render::visibility::collect_quads(&sc, &db, vi) {
             total += 1;
-            if q.texture == crate::blockdb::NO_TEXTURE {
+            if q.texture == crate::block::db::NO_TEXTURE {
                 unresolved += 1;
                 let who = name_at
                     .get(&q.block_pos)
@@ -669,10 +669,10 @@ fn real_project_textures_do_contain_partial_alpha() {
 
     let mut used: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
     for f in &files {
-        let Ok(sc) = crate::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
+        let Ok(sc) = crate::schematic::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
         let Some(vi) = db.pick_version(sc.summary().data_version) else { continue };
-        for q in crate::visibility::collect_quads(&sc, &db, vi) {
-            if q.texture != crate::blockdb::NO_TEXTURE {
+        for q in crate::render::visibility::collect_quads(&sc, &db, vi) {
+            if q.texture != crate::block::db::NO_TEXTURE {
                 used.insert(q.texture);
             }
         }
@@ -750,7 +750,7 @@ fn piston_head_all_property_combinations_resolve() {
                     })
                     .collect();
                 let st = BlockState { name: "minecraft:piston_head".into(), props };
-                let models = crate::block_model::resolve_models(&db, &db.versions[vi], &st);
+                let models = crate::schematic::model::resolve_models(&db, &db.versions[vi], &st);
                 checked += 1;
 
                 if models.is_empty() {
@@ -826,7 +826,7 @@ fn piston_head_all_property_combinations_resolve() {
 #[test]
 #[ignore = "需指定 SM_REAL_DIR 指向真实投影目录"]
 fn real_project_two_axis_rotation_matches_reference() {
-    use crate::transform::rotate_variant;
+    use crate::render::transform::rotate_variant;
 
     /// 按既定约定独立实现的旋转（先 X 后 Y，各轴 16 取补）
     fn reference_rotate(p: [f32; 3], rot_x_div90: u8, rot_y_div90: u8) -> [f32; 3] {
@@ -947,7 +947,7 @@ fn redstone_wire_brightness_follows_power() {
     let mut wire_quads = 0usize;
 
     for f in &files {
-        let Ok(sc) = crate::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
+        let Ok(sc) = crate::schematic::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
         let Some(vi) = db.pick_version(sc.summary().data_version) else { continue };
 
         // 坐标 -> 该处红石线的 power
@@ -979,10 +979,10 @@ fn redstone_wire_brightness_follows_power() {
             continue;
         }
 
-        for q in crate::visibility::collect_quads(&sc, &db, vi) {
+        for q in crate::render::visibility::collect_quads(&sc, &db, vi) {
             let Some(&power) = power_at.get(&q.block_pos) else { continue };
             // 只认真正染色过的面（overlay 那层 tint=-1，不参与）
-            if q.tint == crate::tint::NO_TINT {
+            if q.tint == crate::render::tint::NO_TINT {
                 continue;
             }
             wire_quads += 1;
@@ -1056,7 +1056,7 @@ fn display_names_resolve_chinese_for_blocks_and_entities() {
             "minecraft:chest",
             "minecraft:white_stained_glass",
         ] {
-            let (zh, en) = crate::commands::block_display_names(&db, Some(vi), name);
+            let (zh, en) = crate::block::names::block_display_names(&db, Some(vi), name);
             if name == "minecraft:stone" {
                 assert_eq!(zh, "石头", "石头的中文名应能查到（en={en:?}）");
             }
@@ -1080,7 +1080,7 @@ fn display_names_resolve_chinese_for_blocks_and_entities() {
             "minecraft:item",
             "minecraft:armor_stand",
         ] {
-            let (zh, en) = crate::commands::entity_display_names(&db, Some(vi), id);
+            let (zh, en) = crate::block::names::entity_display_names(&db, Some(vi), id);
             if !zh.is_empty() {
                 ent_got += 1;
             }
@@ -1105,7 +1105,7 @@ fn real_project_piston_states_all_resolve() {
     let mut states: BTreeMap<(String, String), usize> = BTreeMap::new();
 
     for f in &files {
-        let Ok(sc) = crate::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
+        let Ok(sc) = crate::schematic::litematic::Schematic::load(&f.to_string_lossy()) else { continue };
         for r in &sc.regions {
             for st in &r.palette {
                 let n = st.name.as_str();
@@ -1143,12 +1143,12 @@ fn real_project_piston_states_all_resolve() {
         let vi = db
             .pick_version(3465)
             .expect("基础库缺少 1.20.1");
-        if crate::block_model::find_block(&db, &db.versions[vi], name).is_none() {
+        if crate::schematic::model::find_block(&db, &db.versions[vi], name).is_none() {
             broken.push(format!("{name}: 方块库里查不到定义"));
             continue;
         }
         let st = BlockState { name: name.clone(), props: props.clone() };
-        let models = crate::block_model::resolve_models(&db, &db.versions[vi], &st);
+        let models = crate::schematic::model::resolve_models(&db, &db.versions[vi], &st);
         if models.is_empty() {
             broken.push(format!("{name} [{propstr}]（{cnt} 次）解析出 0 个模型"));
             continue;
@@ -1193,7 +1193,7 @@ fn every_real_project_builds_a_scene() {    let files = collect_litematic(&real_
 
     for f in &files {
         let name = file_name(f);
-        match crate::scene::build_with_db(&f.to_string_lossy(), &db) {
+        match crate::render::scene::build_with_db(&f.to_string_lossy(), &db) {
             Ok(sc) => {
                 println!(
                     "  [OK]   {name}  版本 {}  批次 {}  顶点 {}  三角 {}  未解析 {}",
@@ -1231,7 +1231,7 @@ fn every_real_project_survives_a_block_replacement() {
 
     for f in &files {
         let name = file_name(f);
-        let mut sc = match crate::litematic::Schematic::load(&f.to_string_lossy()) {
+        let mut sc = match crate::schematic::litematic::Schematic::load(&f.to_string_lossy()) {
             Ok(sc) => sc,
             Err(e) => {
                 failed.push(format!("{name}: 载入失败 {e}"));
@@ -1258,18 +1258,18 @@ fn every_real_project_survives_a_block_replacement() {
                 continue;
             }
         };
-        let info = crate::block_model::DbBlockInfo { db: &db, version: &db.versions[vi] };
+        let info = crate::schematic::model::DbBlockInfo { db: &db, version: &db.versions[vi] };
 
         let volume_before: u64 = sc.regions.iter().map(|r| r.indices.len() as u64).sum();
         let non_air_before = before.non_air_total;
         let air_before = before.air_total;
 
-        let rule = crate::replace::ReplaceRule {
+        let rule = crate::schematic::replace::ReplaceRule {
             from_name: from_name.clone(),
             to_name: "minecraft:stone".to_string(),
             ..Default::default()
         };
-        let out = crate::replace::replace_blocks(&mut sc, &rule, &info, 0);
+        let out = crate::schematic::replace::replace_blocks(&mut sc, &rule, &info, 0);
         if out.replaced == 0 {
             println!("  [跳过] {name}（{from_name} → stone 无变化）");
             continue;
@@ -1282,7 +1282,7 @@ fn every_real_project_survives_a_block_replacement() {
             failed.push(format!("{name}: 写出失败 {e}"));
             continue;
         }
-        let back = match crate::litematic::Schematic::load(&dst_s) {
+        let back = match crate::schematic::litematic::Schematic::load(&dst_s) {
             Ok(v) => v,
             Err(e) => {
                 failed.push(format!("{name}: 读回失败 {e}"));
@@ -1342,7 +1342,7 @@ fn every_real_project_survives_a_version_conversion() {
     for f in &files {
         let name = file_name(f);
         let src = f.to_string_lossy().to_string();
-        let sc = match crate::litematic::Schematic::load(&src) {
+        let sc = match crate::schematic::litematic::Schematic::load(&src) {
             Ok(sc) => sc,
             Err(e) => {
                 failed.push(format!("{name}: 载入失败 {e}"));
@@ -1351,7 +1351,7 @@ fn every_real_project_survives_a_version_conversion() {
         };
 
         let summary = sc.summary();
-        let targets = crate::convert::targets(&db, summary.data_version);
+        let targets = crate::schematic::convert::targets(&db, summary.data_version);
         let Some(t) = targets.first() else {
             println!("  [跳过] {name}（没有可转换的目标版本）");
             continue;
@@ -1365,7 +1365,7 @@ fn every_real_project_survives_a_version_conversion() {
         };
 
         // 缺替代品的项填石头，避免整项被跳过而验不到东西
-        let items: Vec<crate::convert::ConvertItem> = crate::convert::analyze(&sc, &db, t.index)
+        let items: Vec<crate::schematic::convert::ConvertItem> = crate::schematic::convert::analyze(&sc, &db, t.index)
             .into_iter()
             .map(|mut i| {
                 if i.chosen.is_empty() && i.suggested.is_empty() {
@@ -1379,14 +1379,14 @@ fn every_real_project_survives_a_version_conversion() {
         let non_air_before = sc.analyze().non_air_total;
         let source_name = summary.mc_version_name.clone();
 
-        let mut work = match crate::litematic::Schematic::load(&src) {
+        let mut work = match crate::schematic::litematic::Schematic::load(&src) {
             Ok(v) => v,
             Err(e) => {
                 failed.push(format!("{name}: 二次载入失败 {e}"));
                 continue;
             }
         };
-        let out = crate::convert::convert(&mut work, &db, source_idx, t.index, &items);
+        let out = crate::schematic::convert::convert(&mut work, &db, source_idx, t.index, &items);
 
         let dst = dir.join(format!("converted_{name}"));
         let dst_s = dst.to_string_lossy().to_string();
@@ -1394,7 +1394,7 @@ fn every_real_project_survives_a_version_conversion() {
             failed.push(format!("{name}: 写出失败 {e}"));
             continue;
         }
-        let back = match crate::litematic::Schematic::load(&dst_s) {
+        let back = match crate::schematic::litematic::Schematic::load(&dst_s) {
             Ok(v) => v,
             Err(e) => {
                 failed.push(format!("{name}: 读回失败 {e}"));
@@ -1452,11 +1452,11 @@ fn duplicate_scan_recognises_copies_but_not_distinct_projects() {
     // 每个真实文件复制一份到临时目录，**原件与副本都作为候选**：
     // 只放副本的话每个副本各属不同原件，两两内容不同，自然凑不出重复组
     // （第一版就是这样，报了「重复组 0 个」，其实是测试自己写错了）。
-    let mut candidates: Vec<crate::duplicate::Candidate> = Vec::new();
+    let mut candidates: Vec<crate::schematic::duplicate::Candidate> = Vec::new();
     let mut copies: Vec<String> = Vec::new();
     for f in &files {
         let bytes = std::fs::read(f).expect("读取真实文件失败");
-        candidates.push(crate::duplicate::Candidate {
+        candidates.push(crate::schematic::duplicate::Candidate {
             path: f.clone(),
             size: bytes.len() as u64,
         });
@@ -1464,7 +1464,7 @@ fn duplicate_scan_recognises_copies_but_not_distinct_projects() {
         let copy = dir.join(format!("copy_{}", file_name(f)));
         std::fs::write(&copy, &bytes).expect("写入副本失败");
         copies.push(file_name(&copy));
-        candidates.push(crate::duplicate::Candidate {
+        candidates.push(crate::schematic::duplicate::Candidate {
             path: copy.clone(),
             size: bytes.len() as u64,
         });
@@ -1474,10 +1474,10 @@ fn duplicate_scan_recognises_copies_but_not_distinct_projects() {
         let n = std::fs::metadata(first).expect("取大小失败").len() as usize;
         let filler = dir.join("干扰项.litematic");
         std::fs::write(&filler, vec![0xABu8; n]).expect("写入干扰项失败");
-        candidates.push(crate::duplicate::Candidate { path: filler, size: n as u64 });
+        candidates.push(crate::schematic::duplicate::Candidate { path: filler, size: n as u64 });
     }
 
-    let scan = crate::duplicate::find(&candidates);
+    let scan = crate::schematic::duplicate::find(&candidates);
 
     // 每个副本都应与它的原件成组，且该组恰好这两个文件
     let mut failed: Vec<String> = Vec::new();
@@ -1538,7 +1538,7 @@ fn every_real_project_backs_up_and_restores_byte_for_byte() {
         let original_bytes = std::fs::read(&target).expect("读取失败");
 
         // 1) 备份
-        let outcome = match crate::backup::create(&exe_dir, &target, "test") {
+        let outcome = match crate::app::backup::create(&exe_dir, &target, "test") {
             Ok(o) => o,
             Err(e) => {
                 failed.push(format!("{name}: 备份失败 {e}"));
@@ -1555,26 +1555,26 @@ fn every_real_project_backs_up_and_restores_byte_for_byte() {
         }
 
         // 2) 让它出现在列表里（备份管理的入口就是 list）
-        let listed = crate::backup::list(&crate::backup::backup_root(&exe_dir));
+        let listed = crate::app::backup::list(&crate::app::backup::backup_root(&exe_dir));
         if !listed.iter().any(|e| e.path == outcome.backup_path) {
             failed.push(format!("{name}: 备份未出现在 list() 里，用户看不到"));
         }
 
         // 3) 破坏文件：真的跑一遍替换并写回，模拟用户的正常操作
-        if let Ok(mut sc) = crate::litematic::Schematic::load(&target_s) {
+        if let Ok(mut sc) = crate::schematic::litematic::Schematic::load(&target_s) {
             let db = env_db();
             if let Some(vi) = db.pick_version(sc.summary().data_version) {
-                let info = crate::block_model::DbBlockInfo { db: &db, version: &db.versions[vi] };
+                let info = crate::schematic::model::DbBlockInfo { db: &db, version: &db.versions[vi] };
                 let before = sc.analyze();
                 if let Some((key, _)) = before.blocks_by_state.iter().max_by_key(|(_, n)| **n) {
                     let from = key.split('[').next().unwrap_or(key).to_string();
                     if !from.is_empty() && !from.ends_with(":air") {
-                        let rule = crate::replace::ReplaceRule {
+                        let rule = crate::schematic::replace::ReplaceRule {
                             from_name: from,
                             to_name: "minecraft:stone".into(),
                             ..Default::default()
                         };
-                        let out = crate::replace::replace_blocks(&mut sc, &rule, &info, 0);
+                        let out = crate::schematic::replace::replace_blocks(&mut sc, &rule, &info, 0);
                         if out.replaced > 0 {
                             let _ = sc.save_to(&target_s);
                         }
@@ -1586,12 +1586,12 @@ fn every_real_project_backs_up_and_restores_byte_for_byte() {
         if damaged == original_bytes {
             // 没能改成也不影响还原结论，但这样就没验到「被破坏后能还原」
             println!("  [跳过] {name}（未能造成改动，无法验证还原）");
-            let _ = crate::backup::delete(&outcome.backup_path);
+            let _ = crate::app::backup::delete(&outcome.backup_path);
             continue;
         }
 
         // 4) 还原，必须逐字节回到原样
-        if let Err(e) = crate::backup::restore(&outcome.backup_path, &target) {
+        if let Err(e) = crate::app::backup::restore(&outcome.backup_path, &target) {
             failed.push(format!("{name}: 还原失败 {e}"));
             continue;
         }
@@ -1605,12 +1605,12 @@ fn every_real_project_backs_up_and_restores_byte_for_byte() {
             continue;
         }
         // 还原出来的文件必须仍是合法投影，而不是「字节对了但读不了」
-        if crate::litematic::Schematic::load(&target_s).is_err() {
+        if crate::schematic::litematic::Schematic::load(&target_s).is_err() {
             failed.push(format!("{name}: 还原后无法解析"));
         }
 
         // 5) 删除备份
-        if let Err(e) = crate::backup::delete(&outcome.backup_path) {
+        if let Err(e) = crate::app::backup::delete(&outcome.backup_path) {
             failed.push(format!("{name}: 删除备份失败 {e}"));
         }
 
@@ -1647,7 +1647,7 @@ fn diagnose_analyze_one_file() {
                 .expect("SM_REAL_DIR 下没有 .litematic")
         }
     };
-    let sc = crate::litematic::Schematic::load(&p).expect("载入失败");
+    let sc = crate::schematic::litematic::Schematic::load(&p).expect("载入失败");
     let s = sc.summary();
     println!("文件 {p}");
     println!("  dataVersion={} mc={}", s.data_version, s.mc_version_name);
@@ -1667,7 +1667,7 @@ fn diagnose_analyze_one_file() {
     // （通常是「版本库」生成的单版本包，或其目录之外的任意 .dat.z）
     let db_path = std::env::var("SM_BLOCK_DB")
         .expect("需设置 SM_BLOCK_DB 指向方块库文件（如 app 数据目录 base/blocks/ 下的单版本包）");
-    let db = crate::blockdb::BlockDb::load(&db_path, false).expect("方块库载入失败");
+    let db = crate::block::db::BlockDb::load(&db_path, false).expect("方块库载入失败");
     let vi = db.pick_version(s.data_version);
     println!("  选中版本下标={vi:?} 名称={:?}", vi.map(|i| db.versions[i].name.clone()));
 
@@ -1678,7 +1678,7 @@ fn diagnose_analyze_one_file() {
             .iter()
             .map(|(state, count)| {
                 let name = state.split('[').next().unwrap_or(state).to_string();
-                let (zh, en) = crate::commands::block_display_names(&db, vi, &name);
+                let (zh, en) = crate::block::names::block_display_names(&db, vi, &name);
                 serde_json::json!({
                     "name": name, "state": state, "count": count,
                     "zhName": zh, "enName": en
@@ -1689,7 +1689,7 @@ fn diagnose_analyze_one_file() {
             .entities_by_id
             .iter()
             .map(|(id, count)| {
-                let (zh, en) = crate::commands::entity_display_names(&db, vi, id);
+                let (zh, en) = crate::block::names::entity_display_names(&db, vi, id);
                 serde_json::json!({ "id": id, "count": count, "zhName": zh, "enName": en })
             })
             .collect();

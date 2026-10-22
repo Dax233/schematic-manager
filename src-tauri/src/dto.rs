@@ -131,7 +131,7 @@ fn default_true() -> bool {
     true
 }
 
-impl From<ReplaceRuleDto> for crate::replace::ReplaceRule {
+impl From<ReplaceRuleDto> for crate::schematic::replace::ReplaceRule {
     fn from(d: ReplaceRuleDto) -> Self {
         Self {
             from_name: d.from_name,
@@ -151,8 +151,8 @@ pub struct ReplaceOutcomeDto {
     pub palette_changed: usize,
 }
 
-impl From<crate::replace::ReplaceOutcome> for ReplaceOutcomeDto {
-    fn from(o: crate::replace::ReplaceOutcome) -> Self {
+impl From<crate::schematic::replace::ReplaceOutcome> for ReplaceOutcomeDto {
+    fn from(o: crate::schematic::replace::ReplaceOutcome) -> Self {
         Self { replaced: o.replaced, palette_changed: o.palette_changed }
     }
 }
@@ -328,8 +328,8 @@ pub struct SceneDto {
     pub unresolved_blocks: usize,
 }
 
-impl From<crate::scene::SceneData> for SceneDto {
-    fn from(s: crate::scene::SceneData) -> Self {
+impl From<crate::render::scene::SceneData> for SceneDto {
+    fn from(s: crate::render::scene::SceneData) -> Self {
         Self {
             batches: s
                 .batches
@@ -344,9 +344,9 @@ impl From<crate::scene::SceneData> for SceneDto {
                     texture_height: b.texture_height,
                     texture_rgba: b.texture_rgba,
             alpha_mode: match b.alpha_mode {
-                crate::scene::AlphaMode::Opaque => "opaque",
-                crate::scene::AlphaMode::Cutout => "cutout",
-                crate::scene::AlphaMode::Translucent => "translucent",
+                crate::render::scene::AlphaMode::Opaque => "opaque",
+                crate::render::scene::AlphaMode::Cutout => "cutout",
+                crate::render::scene::AlphaMode::Translucent => "translucent",
             }
             .to_string(),
                 })

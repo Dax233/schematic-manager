@@ -3,8 +3,11 @@
 //! 约定：命令只做参数校验、调用解析层、把结果转成 DTO，
 //! 不在这里承载业务规则，便于解析层独立测试。
 
-use crate::backup;
-use crate::blockdb::BlockDb;
+use crate::app::backup;
+use crate::app::open_url;
+use crate::app::update;
+use crate::block::db::BlockDb;
+use crate::block::names::{block_display_names, entity_display_names, tile_display_names};
 use crate::error::{AppError, AppResult};
 use crate::dto::{
     AnalysisResult, BackupEntryDto, BaseDbStatusDto, BaseVersionDto, BlockCount, BlockHitDto,
@@ -15,9 +18,7 @@ use crate::dto::{
     SetupOutcomeDto, SetupSource, SetupVersionDto, SetupVersionOutcomeDto, UnreadableFileDto,
     UpdateInfoDto, VersionOptionDto,
 };
-use crate::litematic::{self, Summary};
-use crate::open_url;
-use crate::update;
+use crate::schematic::litematic::{self, Summary};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tauri::Manager;
@@ -159,106 +160,6 @@ fn collect_litematics(dir: &Path, depth: u32, out: &mut Vec<PathBuf>, skipped: &
     }
 }
 
-/// 在语言表里查一个键，返回 (中文, 英文)；查不到返回两个空串。
-///
-/// 语言表按版本保存（`VersionDef::lang_idx` 指向 `db.langs` 的一张表），
-/// 因此必须先选对版本，否则查到的名字与投影里的方块对不上。
-///
-/// **中英文必须分别补齐**，不能一命中就返回：打包时只有一部分版本抓到了
-/// 官方中文语言文件（实测 1.13.2~1.21.11 里约一半的表只有英文，
-/// 用户那个 1.21.5 对应的表恰恰一条中文都没有）。早期写法在本版本的
-/// 条目只有英文时直接返回，于是中文恒为空——这是实现者自己的缺陷，
-/// 不是数据缺失。
-///
-/// 缺的一侧从整个语言表池里找同名的键补上：方块名跨版本相当稳定，
-/// 与贴图解析的处理一致（见 `BlockDb::texture_pool_index` 的全局回退）。
-pub(crate) fn lookup_lang(db: &BlockDb, version_idx: Option<usize>, key: &str) -> (String, String) {
-    let mut zh = String::new();
-    let mut en = String::new();
-
-    // 本版本的表优先：它的命名最贴合该版本
-    if let Some(vi) = version_idx {
-        if let Some(version) = db.versions.get(vi) {
-            if let Some(table) = db.langs.get(version.lang_idx as usize) {
-                if let Some(e) = table.iter().find(|e| e.block_name == key) {
-                    zh = e.zh.clone();
-                    en = e.en.clone();
-                }
-            }
-        }
-    }
-    if !zh.is_empty() && !en.is_empty() {
-        return (zh, en);
-    }
-
-    // 缺哪一侧就补哪一侧
-    for table in &db.langs {
-        for e in table.iter().filter(|e| e.block_name == key) {
-            if zh.is_empty() && !e.zh.is_empty() {
-                zh = e.zh.clone();
-            }
-            if en.is_empty() && !e.en.is_empty() {
-                en = e.en.clone();
-            }
-            if !zh.is_empty() && !en.is_empty() {
-                return (zh, en);
-            }
-        }
-    }
-    (zh, en)
-}
-
-/// 查方块的中英文名。
-///
-/// 方块语言表的键有两种写法：老版本直接用方块名（`minecraft:stone`），
-/// 新版本用 `block.minecraft.stone`。两种都试，避免因版本差异整列空着。
-pub(crate) fn block_display_names(db: &BlockDb, version_idx: Option<usize>, name: &str) -> (String, String) {
-    let (zh, en) = lookup_lang(db, version_idx, name);
-    if !zh.is_empty() || !en.is_empty() {
-        return (zh, en);
-    }
-    if let Some(short) = name.strip_prefix("minecraft:") {
-        let dotted = format!("block.minecraft.{short}");
-        let (zh, en) = lookup_lang(db, version_idx, &dotted);
-        if !zh.is_empty() || !en.is_empty() {
-            return (zh, en);
-        }
-    }
-    (String::new(), String::new())
-}
-
-/// 查实体的中英文名。实体 id 形如 `minecraft:zombie`，键是 `entity.minecraft.zombie`。
-pub(crate) fn entity_display_names(db: &BlockDb, version_idx: Option<usize>, id: &str) -> (String, String) {
-    // 投影里的 id 可能不带命名空间，补上再查
-    let full = if id.contains(':') { id.to_string() } else { format!("minecraft:{id}") };
-    let dotted = format!("entity.{}", full.replace(':', "."));
-    let (zh, en) = lookup_lang(db, version_idx, &dotted);
-    if !zh.is_empty() || !en.is_empty() {
-        return (zh, en);
-    }
-    // 有些语言表直接以 id 为键
-    lookup_lang(db, version_idx, &full)
-}
-
-/// 查方块实体（箱子、告示牌等）的中英文名。
-///
-/// 它们与实体共用 `entity.*` 命名空间，但方块实体在语言表里也有
-/// `block.*` 的别名，因此两种都试。
-pub(crate) fn tile_display_names(db: &BlockDb, version_idx: Option<usize>, id: &str) -> (String, String) {
-    let full = if id.contains(':') { id.to_string() } else { format!("minecraft:{id}") };
-    for key in [
-        format!("block.{}", full.replace(':', ".")),
-        format!("entity.{}", full.replace(':', ".")),
-        full.clone(),
-    ] {
-        let (zh, en) = lookup_lang(db, version_idx, &key);
-        if !zh.is_empty() || !en.is_empty() {
-            return (zh, en);
-        }
-    }
-    (String::new(), String::new())
-}
-
 /// 完整分析：解码全部方块并统计。
 #[tauri::command]
 pub fn analyze_schematic(app: tauri::AppHandle, path: String) -> Result<AnalysisResult, String> {
@@ -365,12 +266,12 @@ pub fn render_block_icons(
     let vi = db
         .pick_version(data_version)
         .ok_or_else(|| format!("方块库中没有数据版本 {data_version} 对应的版本"))?;
-    let size = crate::block_icon::check_icon_size(size.unwrap_or(crate::block_icon::ICON_SIZE))
+    let size = crate::render::icon::check_icon_size(size.unwrap_or(crate::render::icon::ICON_SIZE))
         .map_err(|e| e.to_string())?;
 
     Ok(states
         .into_iter()
-        .map(|state| match crate::block_icon::render_data_url(db, vi, &state, size) {
+        .map(|state| match crate::render::icon::render_data_url(db, vi, &state, size) {
             Ok(data_url) => BlockIconDto { state, data_url, error: String::new() },
             Err(e) => BlockIconDto { state, data_url: String::new(), error: e.to_string() },
         })
@@ -383,11 +284,11 @@ pub fn render_block_icons(
 /// 用 `RwLock<Option<..>>` 而不是 `OnceLock`：用户在「版本库」里补充版本后，
 /// 实体贴图库的内容必须随之变化，`OnceLock` 一旦写入就改不了。
 static ENTITY_DB: std::sync::OnceLock<
-    std::sync::RwLock<Option<std::sync::Arc<crate::entitydb::EntityDb>>>,
+    std::sync::RwLock<Option<std::sync::Arc<crate::block::entity_db::EntityDb>>>,
 > = std::sync::OnceLock::new();
 
 fn entity_db_cache(
-) -> &'static std::sync::RwLock<Option<std::sync::Arc<crate::entitydb::EntityDb>>> {
+) -> &'static std::sync::RwLock<Option<std::sync::Arc<crate::block::entity_db::EntityDb>>> {
     ENTITY_DB.get_or_init(|| std::sync::RwLock::new(None))
 }
 
@@ -403,23 +304,23 @@ pub(crate) fn invalidate_entity_db() {
 ///
 /// 库文件不存在（还没添加任何版本）返回 None 而不是错误——
 /// 首次运行就是这个状态，由前端引导用户去「版本库」里补。
-fn open_entity_db(app: &tauri::AppHandle) -> Option<std::sync::Arc<crate::entitydb::EntityDb>> {
+fn open_entity_db(app: &tauri::AppHandle) -> Option<std::sync::Arc<crate::block::entity_db::EntityDb>> {
     {
         let g = entity_db_cache().read().unwrap_or_else(|e| e.into_inner());
         if let Some(db) = g.as_ref() {
             return Some(std::sync::Arc::clone(db));
         }
     }
-    let path = crate::base_db::base_entities_path(app).ok()?;
+    let path = crate::pack::base::base_entities_path(app).ok()?;
     if !path.is_file() {
         return None;
     }
-    let db = match crate::entitydb::EntityDb::load(&path) {
+    let db = match crate::block::entity_db::EntityDb::load(&path) {
         Ok(db) => std::sync::Arc::new(db),
         Err(e) => {
             // 不静默：贴图库损坏会让实体渲染全部没有贴图，
             // 必须留下线索，否则用户只会看到一堆白模
-            crate::run_log::error(&format!("载入实体贴图库失败 {}：{e}", path.display()));
+            crate::app::run_log::error(&format!("载入实体贴图库失败 {}：{e}", path.display()));
             return None;
         }
     };
@@ -481,7 +382,7 @@ pub fn entity_texture_pixels(
 
 /// 已载入的方块库。
 pub struct LoadedDb {
-    pub db: std::sync::Arc<crate::blockdb::BlockDb>,
+    pub db: std::sync::Arc<crate::block::db::BlockDb>,
 }
 
 /// 进程内缓存的方块库。
@@ -526,9 +427,9 @@ fn open_db(app: &tauri::AppHandle) -> AppResult<std::sync::Arc<LoadedDb>> {
     }
 
     let (db, failures) =
-        crate::base_db::load_base_block_db(&crate::base_db::base_blocks_dir(app)?)?;
+        crate::pack::base::load_base_block_db(&crate::pack::base::base_blocks_dir(app)?)?;
     for (file, reason) in &failures {
-        crate::run_log::error(&format!("基础库的版本包 {file} 未能载入：{reason}"));
+        crate::app::run_log::error(&format!("基础库的版本包 {file} 未能载入：{reason}"));
     }
 
     let loaded = std::sync::Arc::new(LoadedDb { db: std::sync::Arc::new(db) });
@@ -544,7 +445,7 @@ fn open_db(app: &tauri::AppHandle) -> AppResult<std::sync::Arc<LoadedDb>> {
 }
 
 /// 检索结果转前端契约。检索与「列出全部」共用，两处各写一份字段搬运迟早会漏。
-fn hit_dto(h: crate::block_search::BlockHit) -> BlockHitDto {
+fn hit_dto(h: crate::block::search::BlockHit) -> BlockHitDto {
     BlockHitDto {
         name: h.name,
         zh: h.zh,
@@ -566,7 +467,7 @@ pub fn search_blocks(
 ) -> Result<Vec<BlockHitDto>, String> {
     let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
-    Ok(crate::block_search::search(db, &query, limit.unwrap_or(200))
+    Ok(crate::block::search::search(db, &query, limit.unwrap_or(200))
         .into_iter()
         .map(hit_dto)
         .collect())
@@ -578,7 +479,7 @@ pub fn search_blocks(
 #[tauri::command]
 pub fn list_blocks(app: tauri::AppHandle) -> Result<Vec<BlockHitDto>, String> {
     let loaded = open_db(&app).map_err(|e| e.to_string())?;
-    Ok(crate::block_search::list_all(&loaded.db)
+    Ok(crate::block::search::list_all(&loaded.db)
         .into_iter()
         .map(hit_dto)
         .collect())
@@ -589,7 +490,7 @@ pub fn list_blocks(app: tauri::AppHandle) -> Result<Vec<BlockHitDto>, String> {
 pub fn list_block_versions(app: tauri::AppHandle) -> Result<Vec<VersionOptionDto>, String> {
     let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
-    Ok(crate::block_search::version_options(db)
+    Ok(crate::block::search::version_options(db)
         .into_iter()
         .map(|v| VersionOptionDto {
             index: v.index,
@@ -610,15 +511,15 @@ pub fn preview_replace(
 ) -> Result<ReplaceOutcomeDto, String> {
     let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
-    let sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
+    let sc = crate::schematic::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
     let summary = sc.summary();
     let vi = db
         .pick_version(summary.data_version)
         .ok_or_else(|| "方块库中没有可用版本".to_string())?;
-    let info = crate::block_model::DbBlockInfo { db, version: &db.versions[vi] };
-    let rule: crate::replace::ReplaceRule = rule.into();
+    let info = crate::schematic::model::DbBlockInfo { db, version: &db.versions[vi] };
+    let rule: crate::schematic::replace::ReplaceRule = rule.into();
     Ok(ReplaceOutcomeDto {
-        replaced: crate::replace::count_matches(&sc, &rule, &info),
+        replaced: crate::schematic::replace::count_matches(&sc, &rule, &info),
         palette_changed: 0,
     })
 }
@@ -632,15 +533,15 @@ pub fn apply_replace(
 ) -> Result<ReplaceOutcomeDto, String> {
     let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
-    let mut sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
+    let mut sc = crate::schematic::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
     let summary = sc.summary();
     let vi = db
         .pick_version(summary.data_version)
         .ok_or_else(|| "方块库中没有可用版本".to_string())?;
-    let info = crate::block_model::DbBlockInfo { db, version: &db.versions[vi] };
-    let rule: crate::replace::ReplaceRule = rule.into();
+    let info = crate::schematic::model::DbBlockInfo { db, version: &db.versions[vi] };
+    let rule: crate::schematic::replace::ReplaceRule = rule.into();
 
-    let out = crate::replace::replace_blocks(&mut sc, &rule, &info, 0);
+    let out = crate::schematic::replace::replace_blocks(&mut sc, &rule, &info, 0);
     if out.replaced == 0 {
         // 没有任何改动就不写文件，避免无谓地产生一次备份
         return Ok(out.into());
@@ -657,7 +558,7 @@ pub fn apply_replace(
         .file_name()
         .map(|v| v.to_string_lossy().into_owned())
         .unwrap_or_default();
-    crate::run_log::info(&replace_log_line(
+    crate::app::run_log::info(&replace_log_line(
         db,
         Some(vi),
         &name,
@@ -704,9 +605,9 @@ fn replace_log_line(
 pub fn convert_targets(app: tauri::AppHandle, schematic_path: String) -> Result<Vec<ConvertTargetDto>, String> {
     let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
-    let sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
+    let sc = crate::schematic::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
     let dv = sc.summary().data_version;
-    Ok(crate::convert::targets(db, dv)
+    Ok(crate::schematic::convert::targets(db, dv)
         .into_iter()
         .map(|t| ConvertTargetDto { index: t.index, name: t.name, data_version: t.data_version })
         .collect())
@@ -721,7 +622,7 @@ pub fn analyze_conversion(
 ) -> Result<Vec<ConvertItemDto>, String> {
     let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
-    let sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
+    let sc = crate::schematic::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
 
     // 源方块的中文名要按**投影自己的版本**查：这些方块在目标版本里已经
     // 没有了，只有原版本的语言表里才有它们的名字。
@@ -733,9 +634,9 @@ pub fn analyze_conversion(
     let source_idx = db.pick_version(sc.summary().data_version).unwrap_or(target_index);
 
     Ok(convert_items_with_zh(
-        crate::convert::analyze(&sc, db, target_index),
-        &crate::block_search::lang_index(db, source_idx),
-        &crate::block_search::lang_index(db, target_index),
+        crate::schematic::convert::analyze(&sc, db, target_index),
+        &crate::block::search::lang_index(db, source_idx),
+        &crate::block::search::lang_index(db, target_index),
     ))
 }
 
@@ -744,7 +645,7 @@ pub fn analyze_conversion(
 /// 单独成函数是为了能直接测：真正的命令要 AppHandle 才能取方块库，
 /// 而这里只依赖两张语言表，用构造出来的表就能覆盖各级回退。
 fn convert_items_with_zh(
-    items: Vec<crate::convert::ConvertItem>,
+    items: Vec<crate::schematic::convert::ConvertItem>,
     source_langs: &std::collections::HashMap<String, (String, String)>,
     target_langs: &std::collections::HashMap<String, (String, String)>,
 ) -> Vec<ConvertItemDto> {
@@ -814,7 +715,7 @@ pub fn apply_conversion(
 ) -> Result<ConvertOutcomeDto, String> {
     let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
-    let mut sc = crate::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
+    let mut sc = crate::schematic::litematic::Schematic::load(&schematic_path).map_err(|e| e.to_string())?;
 
     let source_idx = db
         .pick_version(sc.summary().data_version)
@@ -836,12 +737,12 @@ pub fn apply_conversion(
     // 安全文件名再拼接，否则写出路径会离开投影所在目录。
     let out_path = dir.join(format!(
         "{stem}_{}.litematic",
-        crate::convert::safe_file_component(&target.name)
+        crate::schematic::convert::safe_file_component(&target.name)
     ));
 
-    let items: Vec<crate::convert::ConvertItem> = items
+    let items: Vec<crate::schematic::convert::ConvertItem> = items
         .into_iter()
-        .map(|i| crate::convert::ConvertItem {
+        .map(|i| crate::schematic::convert::ConvertItem {
             name: i.name,
             count: i.count,
             suggested: i.suggested,
@@ -849,7 +750,7 @@ pub fn apply_conversion(
         })
         .collect();
 
-    let out = crate::convert::convert(&mut sc, db, source_idx, target_index, &items);
+    let out = crate::schematic::convert::convert(&mut sc, db, source_idx, target_index, &items);
     // 只有真的替换过方块才需要重编码 BlockStates 与调色板；
     // 若仅改版本号（方块都没变），save_to 仍会序列化整个 root，
     // 版本号照样写入，无需无谓地重写全部区域数据。
@@ -860,7 +761,7 @@ pub fn apply_conversion(
         .file_name()
         .map(|v| v.to_string_lossy().into_owned())
         .unwrap_or_default();
-    crate::run_log::info(&format!(
+    crate::app::run_log::info(&format!(
         "转换 {name}：替换 {} 种方块，{} 种未指定",
         out.replaced_kinds, out.skipped_kinds
     ));
@@ -901,7 +802,7 @@ pub async fn scan_duplicates(dirs: Vec<String>) -> Result<DuplicateScanDto, Stri
 /// 一次筛查本身没有「整体失败」这种结局。
 fn scan_duplicates_in(dirs: &[String]) -> DuplicateScanDto {
     let mut seen: HashSet<PathBuf> = HashSet::new();
-    let mut candidates: Vec<crate::duplicate::Candidate> = Vec::new();
+    let mut candidates: Vec<crate::schematic::duplicate::Candidate> = Vec::new();
     let mut unreadable: Vec<(PathBuf, String)> = Vec::new();
     let mut skipped = SkipReport::default();
     let mut scanned = 0usize;
@@ -921,7 +822,7 @@ fn scan_duplicates_in(dirs: &[String]) -> DuplicateScanDto {
                     // 只有真的进入比对的文件才算「已筛查」：拿不到大小的文件
                     // 没有参与判定，算进去会让界面上的数字与实际情况不符。
                     scanned += 1;
-                    candidates.push(crate::duplicate::Candidate { path, size: m.len() });
+                    candidates.push(crate::schematic::duplicate::Candidate { path, size: m.len() });
                 }
                 // 拿不到大小就无法参与「先按大小分组」。如实上报，而不是
                 // 当成 0 字节：按 0 分组会让读不出来的文件与真正的空文件混作一堆。
@@ -930,7 +831,7 @@ fn scan_duplicates_in(dirs: &[String]) -> DuplicateScanDto {
         }
     }
 
-    let r = crate::duplicate::find(&candidates);
+    let r = crate::schematic::duplicate::find(&candidates);
     unreadable.extend(r.unreadable);
     unreadable.sort();
 
@@ -992,7 +893,7 @@ pub fn restore_backup(backup_path: String, target_path: String) -> Result<(), St
     }
     backup::restore(&b, &t).map_err(|e| e.to_string())?;
     let name = t.file_name().map(|v| v.to_string_lossy().into_owned()).unwrap_or_default();
-    crate::run_log::info(&format!("还原 {name} <- {backup_path}"));
+    crate::app::run_log::info(&format!("还原 {name} <- {backup_path}"));
     Ok(())
 }
 
@@ -1008,14 +909,14 @@ pub fn delete_backup(backup_path: String) -> Result<(), String> {
     }
     backup::delete(&p).map_err(|e| e.to_string())?;
     let name = p.file_name().map(|v| v.to_string_lossy().into_owned()).unwrap_or_default();
-    crate::run_log::info(&format!("删除备份 {name}"));
+    crate::app::run_log::info(&format!("删除备份 {name}"));
     Ok(())
 }
 
 /// 读取运行日志，由新到旧。
 #[tauri::command]
 pub fn read_run_log(max_lines: Option<usize>) -> Vec<String> {
-    crate::run_log::read(max_lines.unwrap_or(200).min(5000))
+    crate::app::run_log::read(max_lines.unwrap_or(200).min(5000))
 }
 
 /// 清空运行日志。
@@ -1024,7 +925,7 @@ pub fn read_run_log(max_lines: Option<usize>) -> Vec<String> {
 /// 动作，失败必须报出来——不像写日志那样可以悄悄放过。
 #[tauri::command]
 pub fn clear_run_log() -> Result<(), String> {
-    crate::run_log::clear().map_err(|e| e.to_string())
+    crate::app::run_log::clear().map_err(|e| e.to_string())
 }
 
 /// 在文件管理器里打开运行日志所在的目录。
@@ -1033,19 +934,19 @@ pub fn clear_run_log() -> Result<(), String> {
 /// 就成了两处规则，改一处必然对不上。
 #[tauri::command]
 pub fn open_run_log_dir() -> Result<(), String> {
-    let Some(log) = crate::run_log::path() else {
+    let Some(log) = crate::app::run_log::path() else {
         return Err("运行日志尚未启用，无法定位所在目录".to_string());
     };
     // 日志存在就定位到它：资源管理器会打开所在目录并选中该文件。
     // 从没写过日志时它还不存在，那就先建出日志目录再打开目录本身——
     // 用户此刻想知道的正是「日志放在哪」。
     if log.exists() {
-        return crate::file_ops::reveal_in_file_manager(&log).map_err(|e| e.to_string());
+        return crate::app::file_ops::reveal_in_file_manager(&log).map_err(|e| e.to_string());
     }
     let dir = log.parent().map(|p| p.to_path_buf()).unwrap_or_default();
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("创建目录 {} 失败：{e}", dir.display()))?;
-    crate::file_ops::open_directory(&dir).map_err(|e| e.to_string())
+    crate::app::file_ops::open_directory(&dir).map_err(|e| e.to_string())
 }
 
 /// 界面把自身遇到的警告与错误交给后端记录。
@@ -1055,10 +956,10 @@ pub fn open_run_log_dir() -> Result<(), String> {
 /// 等级非法时直接报错：把界面拼错的等级静默当成默认等级，等于让日志悄悄丢内容。
 #[tauri::command]
 pub fn log_ui_event(level: String, message: String) -> Result<(), String> {
-    let parsed = crate::run_log::Level::parse(&level)
+    let parsed = crate::app::run_log::Level::parse(&level)
         .ok_or_else(|| format!("无法识别的日志等级：{level}"))?;
     // 前缀标明来源：日志里界面与后端的行混在一起，不标就分不清是谁写的
-    crate::run_log::write(parsed, &format!("界面 {message}"));
+    crate::app::run_log::write(parsed, &format!("界面 {message}"));
     Ok(())
 }
 
@@ -1069,7 +970,7 @@ pub fn log_ui_event(level: String, message: String) -> Result<(), String> {
 /// 这个项目已经改过一次 identifier（见 `data_dir`）。
 #[tauri::command]
 pub fn run_log_dir() -> Option<String> {
-    crate::run_log::path()
+    crate::app::run_log::path()
         .and_then(|p| p.parent().map(|d| d.display().to_string()))
 }
 
@@ -1079,7 +980,7 @@ pub fn run_log_dir() -> Option<String> {
 /// 界面每次改等级、每次打开日志窗口都会调用，因此日期跟着刷新。
 #[tauri::command]
 pub fn configure_run_log(level: String, local_date: String) -> Result<(), String> {
-    let parsed = crate::run_log::Level::parse(&level)
+    let parsed = crate::app::run_log::Level::parse(&level)
         .ok_or_else(|| format!("无法识别的日志等级：{level}"))?;
     // 日期会被拼进归档文件名，因此按约定形状校验：只认 YYYY-MM-DD。
     // 界面那边固定这么产出，这里是防「拼进去一个奇怪的路径片段」这类意外。
@@ -1087,11 +988,11 @@ pub fn configure_run_log(level: String, local_date: String) -> Result<(), String
         return Err(format!("本地日期格式应为 YYYY-MM-DD：{local_date}"));
     }
     let changed =
-        crate::run_log::configure(parsed, &local_date).map_err(|e| e.to_string())?;
+        crate::app::run_log::configure(parsed, &local_date).map_err(|e| e.to_string())?;
     // 只在真的变了时记一行：界面每开一次日志窗口都会同步一次同样的设置，
     // 每次都记就成了噪音
     if changed {
-        crate::run_log::info(&format!(
+        crate::app::run_log::info(&format!(
             "日志等级设为 {}，归档日期 {}",
             parsed.token(),
             local_date
@@ -1119,35 +1020,35 @@ fn is_local_date(s: &str) -> bool {
 ///
 /// 读的是前端 `uiState.ts` 写下的 `logLevel` 键：界面是这份状态的唯一作者，
 /// 因此键改名要两边一起改（见 src/store/uiState.ts 的 UiState）。
-pub(crate) fn saved_log_level(app: &tauri::AppHandle) -> crate::run_log::Level {
+pub(crate) fn saved_log_level(app: &tauri::AppHandle) -> crate::app::run_log::Level {
     let path = match ui_state_path(app) {
         Ok(p) => p,
         Err(e) => {
-            crate::run_log::warn(&format!("读取界面状态路径失败，日志等级按默认：{e}"));
-            return crate::run_log::Level::Info;
+            crate::app::run_log::warn(&format!("读取界面状态路径失败，日志等级按默认：{e}"));
+            return crate::app::run_log::Level::Info;
         }
     };
     match read_ui_state_file(&path) {
         Ok(Some(json)) => log_level_from_ui_state(&json),
         // 从未保存过界面状态：正常情况，用默认等级
-        Ok(None) => crate::run_log::Level::Info,
+        Ok(None) => crate::app::run_log::Level::Info,
         Err(e) => {
-            crate::run_log::warn(&format!("读取界面状态失败，日志等级按默认：{e}"));
-            crate::run_log::Level::Info
+            crate::app::run_log::warn(&format!("读取界面状态失败，日志等级按默认：{e}"));
+            crate::app::run_log::Level::Info
         }
     }
 }
 
 /// 从界面状态 JSON 里取日志等级；取不到或认不出时用默认的 info。
-fn log_level_from_ui_state(json: &str) -> crate::run_log::Level {
+fn log_level_from_ui_state(json: &str) -> crate::app::run_log::Level {
     serde_json::from_str::<serde_json::Value>(json)
         .ok()
         .and_then(|v| {
             v.get("logLevel")
                 .and_then(|l| l.as_str())
-                .and_then(crate::run_log::Level::parse)
+                .and_then(crate::app::run_log::Level::parse)
         })
-        .unwrap_or(crate::run_log::Level::Info)
+        .unwrap_or(crate::app::run_log::Level::Info)
 }
 
 /// 组装前端 Three.js 渲染所需的场景。
@@ -1158,7 +1059,7 @@ fn log_level_from_ui_state(json: &str) -> crate::run_log::Level {
 pub fn build_scene(app: tauri::AppHandle, schematic_path: String) -> Result<SceneDto, String> {
     let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
-    crate::scene::build_with_db(&schematic_path, db)
+    crate::render::scene::build_with_db(&schematic_path, db)
         .map(SceneDto::from)
         .map_err(|e| e.to_string())
 }
@@ -1225,7 +1126,7 @@ pub fn save_schematic_as(
         .file_name()
         .map(|v| v.to_string_lossy().into_owned())
         .unwrap_or_default();
-    crate::run_log::info(&format!("另存为 {file_name}：{source_path} -> {target_path}"));
+    crate::app::run_log::info(&format!("另存为 {file_name}：{source_path} -> {target_path}"));
 
     Ok(target_path)
 }
@@ -1310,7 +1211,7 @@ pub fn save_metadata(
 /// 查询 dataVersion 对应的游戏版本名。
 #[tauri::command]
 pub fn mc_version_name(data_version: i32) -> String {
-    crate::mcver::version_name_from_data_version(data_version)
+    crate::mc::ver::version_name_from_data_version(data_version)
 }
 
 #[cfg(test)]
@@ -1478,42 +1379,42 @@ mod tests {
         );
 
         let items = vec![
-            crate::convert::ConvertItem {
+            crate::schematic::convert::ConvertItem {
                 name: "minecraft:oak_stairs".into(),
                 count: 12,
                 suggested: "minecraft:pale_oak_stairs".into(),
                 chosen: String::new(),
             },
             // 没有推荐：中文名也必须是空，不能凭空编一个
-            crate::convert::ConvertItem {
+            crate::schematic::convert::ConvertItem {
                 name: "minecraft:old_block".into(),
                 count: 3,
                 suggested: String::new(),
                 chosen: String::new(),
             },
             // 两张表都没有：退回方块名本身
-            crate::convert::ConvertItem {
+            crate::schematic::convert::ConvertItem {
                 name: "mymod:unknown_thing".into(),
                 count: 1,
                 suggested: String::new(),
                 chosen: String::new(),
             },
             // 推荐品只存在于原版本的表里：替代品不该借用源表的名字
-            crate::convert::ConvertItem {
+            crate::schematic::convert::ConvertItem {
                 name: "minecraft:old_block".into(),
                 count: 1,
                 suggested: "minecraft:oak_stairs".into(),
                 chosen: String::new(),
             },
             // 源方块在源表里没有、只在目标表里有：必须退到第二张表去找
-            crate::convert::ConvertItem {
+            crate::schematic::convert::ConvertItem {
                 name: "minecraft:pale_oak_stairs".into(),
                 count: 2,
                 suggested: String::new(),
                 chosen: String::new(),
             },
             // 空名字：两个字段都应是空串，不能拼出去命名空间的分支
-            crate::convert::ConvertItem {
+            crate::schematic::convert::ConvertItem {
                 name: String::new(),
                 count: 0,
                 suggested: String::new(),
@@ -1764,7 +1665,7 @@ mod tests {
         assert!(err.contains("不存在"), "应报文件不存在，实际：{err}");
     }
 
-    use crate::blockdb::{BlockDb, BlockDef, LangEntry, Model, ModelElement, ModelFace, TextureInfo, Variant, VersionDef};
+    use crate::block::db::{BlockDb, BlockDef, LangEntry, Model, ModelElement, ModelFace, TextureInfo, Variant, VersionDef};
     use std::collections::HashMap;
 
     /// 造一个可序列化、可读回的最小方块库
@@ -1833,21 +1734,21 @@ mod tests {
     fn saved_log_level_comes_from_ui_state_and_falls_back_to_info() {
         assert_eq!(
             log_level_from_ui_state(r#"{"version":1,"logLevel":"debug"}"#),
-            crate::run_log::Level::Debug
+            crate::app::run_log::Level::Debug
         );
         assert_eq!(
             log_level_from_ui_state(r#"{"version":1,"sidebarWidth":419}"#),
-            crate::run_log::Level::Info,
+            crate::app::run_log::Level::Info,
             "没记过等级时用默认等级"
         );
         assert_eq!(
             log_level_from_ui_state(r#"{"version":1,"logLevel":"verbose"}"#),
-            crate::run_log::Level::Info,
+            crate::app::run_log::Level::Info,
             "认不出的取值不该当成某个等级"
         );
         assert_eq!(
             log_level_from_ui_state("这不是 JSON"),
-            crate::run_log::Level::Info,
+            crate::app::run_log::Level::Info,
             "界面状态坏了也不该影响启动"
         );
     }
@@ -1897,10 +1798,10 @@ mod tests {
 /// 删除选中的文件（移入系统回收站，不永久删除）。
 #[tauri::command]
 pub fn delete_files(paths: Vec<String>) -> Result<FileOpOutcome, String> {
-    let files = crate::file_ops::check_files(&paths).map_err(|e| e.to_string())?;
-    crate::file_ops::delete_to_trash(&files).map_err(|e| e.to_string())?;
+    let files = crate::app::file_ops::check_files(&paths).map_err(|e| e.to_string())?;
+    crate::app::file_ops::delete_to_trash(&files).map_err(|e| e.to_string())?;
     let names: Vec<String> = files.iter().map(|f| f.name.clone()).collect();
-    crate::run_log::info(&format!(
+    crate::app::run_log::info(&format!(
         "删除到回收站 {} 个文件：{}",
         names.len(),
         names.join("、")
@@ -1916,8 +1817,8 @@ pub fn delete_files(paths: Vec<String>) -> Result<FileOpOutcome, String> {
 /// 把选中的文件复制到系统剪贴板，供用户在资源管理器里粘贴。
 #[tauri::command]
 pub fn copy_files_to_clipboard(paths: Vec<String>) -> Result<FileOpOutcome, String> {
-    let files = crate::file_ops::check_files(&paths).map_err(|e| e.to_string())?;
-    crate::file_ops::copy_paths_to_clipboard(&files).map_err(|e| e.to_string())?;
+    let files = crate::app::file_ops::check_files(&paths).map_err(|e| e.to_string())?;
+    crate::app::file_ops::copy_paths_to_clipboard(&files).map_err(|e| e.to_string())?;
     Ok(FileOpOutcome {
         total_bytes: files.iter().map(|f| f.size).sum(),
         names: files.iter().map(|f| f.name.clone()).collect(),
@@ -1929,11 +1830,11 @@ pub fn copy_files_to_clipboard(paths: Vec<String>) -> Result<FileOpOutcome, Stri
 /// 把选中的文件复制到指定目录。同名不覆盖，改为追加序号。
 #[tauri::command]
 pub fn copy_files_to_dir(paths: Vec<String>, dest_dir: String) -> Result<FileOpOutcome, String> {
-    let files = crate::file_ops::check_files(&paths).map_err(|e| e.to_string())?;
+    let files = crate::app::file_ops::check_files(&paths).map_err(|e| e.to_string())?;
     let dest = PathBuf::from(&dest_dir);
-    let written = crate::file_ops::copy_into(&files, &dest).map_err(|e| e.to_string())?;
+    let written = crate::app::file_ops::copy_into(&files, &dest).map_err(|e| e.to_string())?;
     let names: Vec<String> = files.iter().map(|f| f.name.clone()).collect();
-    crate::run_log::info(&format!(
+    crate::app::run_log::info(&format!(
         "复制 {} 个文件到 {}：{}",
         names.len(),
         dest.display(),
@@ -1957,7 +1858,7 @@ pub fn copy_files_to_dir(paths: Vec<String>, dest_dir: String) -> Result<FileOpO
 #[tauri::command]
 pub fn reveal_in_file_manager(path: String) -> Result<(), String> {
     let p = Path::new(&path);
-    crate::file_ops::reveal_in_file_manager(p).map_err(|e| e.to_string())
+    crate::app::file_ops::reveal_in_file_manager(p).map_err(|e| e.to_string())
 }
 
 /// 重命名投影文件，并把它的备份一并重新链接到新名字。
@@ -1968,13 +1869,13 @@ pub fn reveal_in_file_manager(path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn rename_schematic(path: String, new_name: String) -> Result<RenameOutcomeDto, String> {
     let old = Path::new(&path);
-    let name = crate::file_ops::normalize_file_name(&new_name).map_err(|e| e.to_string())?;
-    let dest = crate::file_ops::rename_file(old, &name).map_err(|e| e.to_string())?;
+    let name = crate::app::file_ops::normalize_file_name(&new_name).map_err(|e| e.to_string())?;
+    let dest = crate::app::file_ops::rename_file(old, &name).map_err(|e| e.to_string())?;
 
-    let root = crate::backup::backup_root(&exe_dir());
+    let root = crate::app::backup::backup_root(&exe_dir());
     // 重新链接失败时如实记录原因：只回一个失败提示而不落日志，
     // 事后完全无法判断备份到底动没动、动到哪一步
-    let (relinked, relink_error) = match crate::backup::relink(&root, old, &dest) {
+    let (relinked, relink_error) = match crate::app::backup::relink(&root, old, &dest) {
         Ok(n) => (n, None),
         Err(e) => (0, Some(e.to_string())),
     };
@@ -1990,7 +1891,7 @@ pub fn rename_schematic(path: String, new_name: String) -> Result<RenameOutcomeD
         Some(e) => format!("重命名 {old_name} -> {file_name}（备份重新链接失败：{e}）"),
         None => format!("重命名 {old_name} -> {file_name}（重新链接备份 {relinked} 组）"),
     };
-    crate::run_log::info(&summary);
+    crate::app::run_log::info(&summary);
     Ok(RenameOutcomeDto {
         path: dest.to_string_lossy().into_owned(),
         file_name,
@@ -2092,7 +1993,7 @@ fn emit_setup_progress(app: &tauri::AppHandle, p: BaseSetupProgress) {
     use tauri::Emitter;
     // 发送失败只说明窗口已关闭或前端还没监听，本身不该中断补版本流程
     if let Err(e) = app.emit(BASE_SETUP_PROGRESS_EVENT, p) {
-        crate::run_log::warn(&format!("发送版本库进度事件失败：{e}"));
+        crate::app::run_log::warn(&format!("发送版本库进度事件失败：{e}"));
     }
 }
 
@@ -2102,8 +2003,8 @@ fn emit_setup_progress(app: &tauri::AppHandle, p: BaseSetupProgress) {
 /// 方块检索和 3D 预览都没有数据可显示，必须先引导用户补版本。
 #[tauri::command]
 pub fn base_db_status(app: tauri::AppHandle) -> Result<BaseDbStatusDto, String> {
-    let dir = crate::base_db::base_blocks_dir(&app).map_err(|e| e.to_string())?;
-    let (base, _failures) = crate::base_db::load_base_block_db(&dir).map_err(|e| e.to_string())?;
+    let dir = crate::pack::base::base_blocks_dir(&app).map_err(|e| e.to_string())?;
+    let (base, _failures) = crate::pack::base::load_base_block_db(&dir).map_err(|e| e.to_string())?;
     // 单个包损坏不在这里上报：损坏的版本包不会被合成进来，于是它只表现为
     // 「这个版本未就绪」，用户重新构建即可；具体原因由 open_db 记进日志。
     // 状态查询只回答「哪些版本就绪」，避免一个坏文件把整个版本列表都拖成错误。
@@ -2119,7 +2020,7 @@ pub fn base_db_status(app: tauri::AppHandle) -> Result<BaseDbStatusDto, String> 
     Ok(BaseDbStatusDto {
         versions,
         entity_available,
-        supported: crate::base_db::SUPPORTED_RELEASES
+        supported: crate::pack::base::SUPPORTED_RELEASES
             .iter()
             .map(|(dv, id)| BaseVersionDto {
                 name: id.to_string(),
@@ -2135,7 +2036,7 @@ pub fn base_db_status(app: tauri::AppHandle) -> Result<BaseDbStatusDto, String> 
 /// 就是错误，不如让输入框空着等手选。
 #[tauri::command]
 pub fn default_minecraft_dir() -> Option<String> {
-    crate::base_db::default_minecraft_dir()
+    crate::pack::base::default_minecraft_dir()
         .filter(|p| p.is_dir())
         .map(|p| p.to_string_lossy().into_owned())
 }
@@ -2146,10 +2047,10 @@ pub fn default_minecraft_dir() -> Option<String> {
 /// 由前端决定怎么展示。模组一类没有 `version.json` 的 jar 会被静默跳过。
 #[tauri::command]
 pub fn scan_minecraft(dir: String) -> Result<McScanDto, String> {
-    let scan = crate::base_db::scan_minecraft(Path::new(&dir)).map_err(|e| e.to_string())?;
+    let scan = crate::pack::base::scan_minecraft(Path::new(&dir)).map_err(|e| e.to_string())?;
     // 读不出版本信息的目录会被跳过，用户在清单里少看到一个版本时要能查到原因
     for w in &scan.warnings {
-        crate::run_log::warn(&format!("扫描 Minecraft 目录时跳过：{w}"));
+        crate::app::run_log::warn(&format!("扫描 Minecraft 目录时跳过：{w}"));
     }
     Ok(McScanDto {
         versions: scan
@@ -2196,9 +2097,9 @@ fn run_setup(
     // 逐版本如实上报比只弹一个笼统错误更能说明影响面
     let dirs = (|| {
         AppResult::Ok((
-            crate::base_db::base_blocks_dir(app)?,
-            crate::base_db::base_jars_dir(app)?,
-            crate::base_db::base_entities_path(app)?,
+            crate::pack::base::base_blocks_dir(app)?,
+            crate::pack::base::base_jars_dir(app)?,
+            crate::pack::base::base_entities_path(app)?,
         ))
     })();
     let (blocks_dir, jars_dir, entities_path) = match dirs {
@@ -2222,7 +2123,7 @@ fn run_setup(
     let need_download = versions.iter().any(|v| v.jar_path.is_none());
     let manifest: Result<Option<String>, String> =
         if need_download && matches!(source, SetupSource::Official) {
-            crate::mc_download::fetch_manifest()
+            crate::mc::download::fetch_manifest()
                 .map(Some)
                 .map_err(|e| e.to_string())
         } else {
@@ -2249,12 +2150,12 @@ fn run_setup(
             Ok(warning) => {
                 if let Some(code) = warning.as_deref() {
                     // 提示码本身是给界面做翻译的，日志里要写清楚是哪一步没成
-                    crate::run_log::warn(&format!(
+                    crate::app::run_log::warn(&format!(
                         "准备 {} 完成，但有提示：{code}",
                         v.id
                     ));
                 }
-                crate::run_log::info(&format!("准备 {} 完成", v.id));
+                crate::app::run_log::info(&format!("准备 {} 完成", v.id));
                 SetupVersionOutcomeDto {
                     id: v.id.clone(),
                     ok: true,
@@ -2264,7 +2165,7 @@ fn run_setup(
             }
             Err(e) => {
                 // 用户报「某个版本准备不了」时，日志里得有版本号与原因
-                crate::run_log::error(&format!("准备 {} 失败：{e}", v.id));
+                crate::app::run_log::error(&format!("准备 {} 失败：{e}", v.id));
                 SetupVersionOutcomeDto {
                     id: v.id.clone(),
                     ok: false,
@@ -2299,11 +2200,11 @@ fn setup_one(
             // 改名落盘的 jar 一定完整，已存在就直接复用
             if !dest.is_file() {
                 let url = match manifest {
-                    Some(m) => crate::mc_download::official_client_url(m, &v.id)?,
-                    None => crate::mc_download::bmcl_client_url(&v.id),
+                    Some(m) => crate::mc::download::official_client_url(m, &v.id)?,
+                    None => crate::mc::download::bmcl_client_url(&v.id),
                 };
                 let id = v.id.clone();
-                crate::mc_download::download_to(&url, &dest, &mut |received, total| {
+                crate::mc::download::download_to(&url, &dest, &mut |received, total| {
                     emit_setup_progress(
                         app,
                         BaseSetupProgress {
@@ -2337,13 +2238,13 @@ fn setup_one(
         .mc_dir
         .as_ref()
         .map(PathBuf::from)
-        .or_else(crate::base_db::default_minecraft_dir);
+        .or_else(crate::pack::base::default_minecraft_dir);
     let mut langs = match &mc_dir {
-        Some(dir) => crate::base_db::find_lang_files(dir, &v.id),
+        Some(dir) => crate::pack::base::find_lang_files(dir, &v.id),
         None => Vec::new(),
     };
     let warning = fill_missing_langs(v, manifest, mc_dir.as_deref(), source, &mut langs);
-    crate::jar_file::build_pack_to_with_langs(
+    crate::pack::jar::build_pack_to_with_langs(
         &jar_path.to_string_lossy(),
         &out.to_string_lossy(),
         &v.id,
@@ -2352,8 +2253,8 @@ fn setup_one(
         langs,
     )?;
 
-    let jar = crate::jar_file::JarFile::open(&jar_path.to_string_lossy())?;
-    crate::entitydb_write::add_version(entities_path, &jar, v.data_version, &v.id)?;
+    let jar = crate::pack::jar::JarFile::open(&jar_path.to_string_lossy())?;
+    crate::pack::entity_write::add_version(entities_path, &jar, v.data_version, &v.id)?;
 
     emit_setup_progress(
         app,
@@ -2385,7 +2286,7 @@ fn has_lang(langs: &[(String, Vec<u8>)], lang: &str) -> bool {
 /// 把 `en_us` 也算进来会让库完全正常时报出误报——它在 jar 里，资源索引里
 /// 没有对应条目，永远补不上。
 fn langs_to_download(langs: &[(String, Vec<u8>)]) -> Vec<&'static str> {
-    crate::base_db::LANG_KEYS
+    crate::pack::base::LANG_KEYS
         .iter()
         .copied()
         .filter(|lang| !LANGS_IN_JAR.contains(lang))
@@ -2411,17 +2312,17 @@ fn fill_missing_langs(
     if missing.is_empty() {
         return None;
     }
-    let req = crate::mc_download::LangDownload {
+    let req = crate::mc::download::LangDownload {
         version_id: &v.id,
         source: match source {
-            SetupSource::Official => crate::mc_download::AssetSource::Official,
-            SetupSource::Bmcl => crate::mc_download::AssetSource::Bmcl,
+            SetupSource::Official => crate::mc::download::AssetSource::Official,
+            SetupSource::Bmcl => crate::mc::download::AssetSource::Bmcl,
         },
         mc_dir,
         manifest,
         langs: &missing,
     };
-    match crate::mc_download::download_lang_files(&req) {
+    match crate::mc::download::download_lang_files(&req) {
         Ok(extra) => {
             langs.extend(extra);
             // 索引里没有请求的语言时也值得说一声：那说明这个版本确实不带它，
@@ -2434,7 +2335,7 @@ fn fill_missing_langs(
         }
         Err(e) => {
             // 不能让失败消失：用户看到英文名时，得能查到是因为没取到语言表
-            crate::run_log::warn(&format!(
+            crate::app::run_log::warn(&format!(
                 "版本 {} 的语言表未能取得，界面将显示英文名：{e}",
                 v.id
             ));

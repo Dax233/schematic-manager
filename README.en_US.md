@@ -114,7 +114,7 @@ The installer name, install directory, executable name and bundle identifier all
 - macOS Finder name and menu-bar name: `src-tauri/Info.plist`,
   `bundle.macOS.bundleName`
 - Linux desktop entry name: `src-tauri/linux/main.desktop`
-- Startup failure dialog: `src-tauri/src/startup.rs`
+- Startup failure dialog: `src-tauri/src/app/startup.rs`
 
 Windows gets no override: the installer takes the Start Menu and desktop shortcut names as well as the "Apps & features" entry from `productName`, and Tauri has no option that separates them, so those places show `schematic-manager`; the window title and the text inside the UI remain Chinese.
 

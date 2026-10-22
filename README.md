@@ -125,7 +125,7 @@ BMCLAPI，供清单里没有、本机也没装的版本）。支持补齐的正�
 - macOS 的 Finder 名称与菜单栏名称：`src-tauri/Info.plist`、
   `bundle.macOS.bundleName`
 - Linux 桌面项名称：`src-tauri/linux/main.desktop`
-- 启动失败提示：`src-tauri/src/startup.rs`
+- 启动失败提示：`src-tauri/src/app/startup.rs`
 
 Windows 上不额外指定：安装器把开始菜单与桌面快捷方式、以及「应用和功能」
 里的名称全部取自 `productName`，Tauri 没有把它们与其分开的配置项，因此这些
