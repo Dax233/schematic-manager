@@ -1,7 +1,6 @@
 mod app;
 mod block;
 mod commands;
-mod dto;
 mod error;
 mod format;
 mod mc;
@@ -58,7 +57,7 @@ pub fn run() {
                     Ok(()) => {
                         // 等级先按界面上次存下的取值，debug 用户才能从第一行起
                         // 就有完整日志，而不是等界面把等级推过来才开始记
-                        app::run_log::set_level(commands::saved_log_level(app.handle()));
+                        app::run_log::set_level(commands::log::saved_log_level(app.handle()));
                         let info = app.package_info();
                         app::run_log::info(&format!(
                             "启动 {} {}，数据目录 {}",
@@ -96,50 +95,50 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::peek_schematic,
-            commands::scan_litematics,
-            commands::analyze_schematic,
-            commands::render_block_icons,
-            commands::mc_version_name,
-            commands::build_scene,
-            commands::list_backups,
-            commands::restore_backup,
-            commands::delete_backup,
-            commands::configure_run_log,
-            commands::read_run_log,
-            commands::clear_run_log,
-            commands::open_run_log_dir,
-            commands::log_ui_event,
-            commands::run_log_dir,
-            commands::search_blocks,
-            commands::list_blocks,
-            commands::list_block_versions,
-            commands::preview_replace,
-            commands::apply_replace,
-            commands::scan_duplicates,
-            commands::convert_targets,
-            commands::analyze_conversion,
-            commands::apply_conversion,
-            commands::save_metadata,
-            commands::save_schematic_as,
-            commands::delete_files,
-            commands::copy_files_to_clipboard,
-            commands::copy_files_to_dir,
-            commands::reveal_in_file_manager,
-            commands::rename_schematic,
-            commands::entity_texture_status,
-            commands::entity_texture_pixels,
-            commands::load_ui_state,
-            commands::save_ui_state,
-            commands::base_db_status,
-            commands::default_minecraft_dir,
-            commands::scan_minecraft,
-            commands::setup_add_versions,
-            commands::load_setup_state,
-            commands::save_setup_state,
-            commands::app_version,
-            commands::check_update,
-            commands::open_url,
+            commands::schematic::peek_schematic,
+            commands::schematic::scan_litematics,
+            commands::schematic::analyze_schematic,
+            commands::blocks::render_block_icons,
+            commands::schematic::mc_version_name,
+            commands::schematic::build_scene,
+            commands::files::list_backups,
+            commands::files::restore_backup,
+            commands::files::delete_backup,
+            commands::log::configure_run_log,
+            commands::log::read_run_log,
+            commands::log::clear_run_log,
+            commands::log::open_run_log_dir,
+            commands::log::log_ui_event,
+            commands::log::run_log_dir,
+            commands::blocks::search_blocks,
+            commands::blocks::list_blocks,
+            commands::blocks::list_block_versions,
+            commands::blocks::preview_replace,
+            commands::blocks::apply_replace,
+            commands::duplicates::scan_duplicates,
+            commands::convert::convert_targets,
+            commands::convert::analyze_conversion,
+            commands::convert::apply_conversion,
+            commands::schematic::save_metadata,
+            commands::schematic::save_schematic_as,
+            commands::files::delete_files,
+            commands::files::copy_files_to_clipboard,
+            commands::files::copy_files_to_dir,
+            commands::files::reveal_in_file_manager,
+            commands::files::rename_schematic,
+            commands::blocks::entity_texture_status,
+            commands::blocks::entity_texture_pixels,
+            commands::state::load_ui_state,
+            commands::state::save_ui_state,
+            commands::setup::base_db_status,
+            commands::setup::default_minecraft_dir,
+            commands::setup::scan_minecraft,
+            commands::setup::setup_add_versions,
+            commands::setup::load_setup_state,
+            commands::setup::save_setup_state,
+            commands::app::app_version,
+            commands::app::check_update,
+            commands::app::open_url,
         ])
         .run(context);
 

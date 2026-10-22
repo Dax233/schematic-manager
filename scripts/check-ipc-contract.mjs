@@ -24,9 +24,9 @@
  *
  * 用法：node scripts/check-ipc-contract.mjs
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 
-const COMMANDS_RS = "src-tauri/src/commands.rs";
+const COMMANDS_DIR = "src-tauri/src/commands";
 const LIB_RS = "src-tauri/src/lib.rs";
 const API_TS = "src/api.ts";
 
@@ -38,7 +38,7 @@ function toLowerCamel(snake) {
   return parts[0] + parts.slice(1).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join("");
 }
 
-/** 从 commands.rs 提取：命令名 -> { params: [{name, optional, injected}] } */
+/** 从命令层各模块提取：命令名 -> { params: [{name, optional, injected}] } */
 function parseRustCommands(src) {
   const out = new Map();
   // 匹配 `pub fn name(` 到配对的 `)` 之前的内容（参数表可能跨多行）
@@ -204,7 +204,11 @@ function findTopLevelColon(piece) {
   return -1;
 }
 
-const rustSrc = read(COMMANDS_RS);
+const rustSrc = readdirSync(COMMANDS_DIR)
+  .filter((name) => name.endsWith(".rs"))
+  .sort()
+  .map((name) => read(`${COMMANDS_DIR}/${name}`))
+  .join("\n");
 const libSrc = read(LIB_RS);
 const apiSrc = read(API_TS);
 
@@ -218,7 +222,7 @@ const warnings = [];
 // 1) 前端调用的命令必须已注册且已实现
 for (const [cmd, info] of front) {
   if (!rust.has(cmd)) {
-    errors.push(`前端调用 ${cmd}，但 commands.rs 里没有这个函数`);
+    errors.push(`前端调用 ${cmd}，但命令层里没有这个函数`);
     continue;
   }
   if (!handlers.has(cmd)) {

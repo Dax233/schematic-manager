@@ -1627,7 +1627,7 @@ fn every_real_project_backs_up_and_restores_byte_for_byte() {
 
 /// 诊断单个投影「分析」这条路是否通：方块表为什么会是空的。
 ///
-/// 复刻 `commands::analyze_schematic` 的全部步骤（载入 → 选版本 → 统计），
+/// 复刻 `commands::schematic::analyze_schematic` 的全部步骤（载入 → 选版本 → 统计），
 /// 但不经过 AppHandle，因此可以在命令行里直接跑真实文件。
 ///
 /// 输入文件优先取 `SM_ANALYZE_ONE`；没设时取 `SM_REAL_DIR` 下的第一个投影，
