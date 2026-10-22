@@ -101,8 +101,12 @@ $stubs = @(
 foreach ($s in $stubs) {
     $out = Join-Path $here $s.out
     Remove-Item $out -Force -ErrorAction SilentlyContinue
-    & cmd /c "rustc --edition 2021 --crate-type lib --crate-name $($s.name) --emit=link -o `"$out`" `"$(Join-Path $here $s.src)`" 2>nul"
-    if (-not (Test-Path $out)) { Write-Host "  $($s.name) 桩编译失败"; exit 1 }
+    $stubOut = & cmd /c "rustc --edition 2021 --crate-type lib --crate-name $($s.name) --emit=link -o `"$out`" `"$(Join-Path $here $s.src)`" 2>&1"
+    if (-not (Test-Path $out)) {
+        $stubOut | Select-Object -First 20 | ForEach-Object { Write-Host "    $_" }
+        Write-Host "  $($s.name) 桩编译失败"
+        exit 1
+    }
 }
 $externArgs = "--extern `"flate2=$(Join-Path $here 'libflate2.rlib')`" " +
     "--extern `"serde=$(Join-Path $here 'libserde.rlib')`" " +
@@ -123,7 +127,24 @@ if ($theoryErr -gt 0) { exit $theoryErr }
 Write-Host "3/6 生成并检查命令层与 DTO…"
 $py = "C:\Users\hsds\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
 if (-not (Test-Path $py)) { $py = "python" }
-& $py (Join-Path $here 'gen_cmd_check.py') | Out-Null
+# 先清掉旧副本：生成中途失败时若不清理，第 3/6 步会编译上一次的旧文件并「通过」。
+$generated = Join-Path $here 'generated'
+Remove-Item $generated -Recurse -Force -ErrorAction SilentlyContinue
+$genOut = & $py (Join-Path $here 'gen_cmd_check.py') 2>&1
+$genExit = $LASTEXITCODE
+if ($genExit -ne 0) {
+    $genOut | Select-Object -Last 20 | ForEach-Object { Write-Host "    $_" }
+    Write-Host "  gen_cmd_check.py 退出码 $genExit"
+    exit $genExit
+}
+$genDir = Join-Path $generated 'commands'
+$genCount = @(Get-ChildItem $genDir -Filter '*.rs' -File -ErrorAction SilentlyContinue).Count
+$srcCount = @(Get-ChildItem (Join-Path $env:CARGO_MANIFEST_DIR 'src\commands') -Filter '*.rs' -File).Count
+if ($genCount -ne $srcCount) {
+    Write-Host "  命令层副本数量不符：生成 $genCount 个，源码 $srcCount 个"
+    exit 1
+}
+Write-Host "  已生成 $genCount 个命令层副本。"
 $cmdsOut = & cmd /c "rustc --edition 2021 --crate-type bin --crate-name cmds $externArgs `"$(Join-Path $here 'check_cmds.rs')`" --emit=metadata -o `"$(Join-Path $here 'cmds.rmeta')`" 2>&1"
 $cmdsErr = @($cmdsOut | Select-String -Pattern '^error').Count
 if ($cmdsErr -gt 0) { $cmdsOut | Select-Object -First 40 }
@@ -150,17 +171,23 @@ $cmdsTestExit = $LASTEXITCODE
 # 过程宏，to_value 只能返回空对象。这些测试在本地必然失败，但必须保留并运行：
 # CI 用真实 serde，它们在那里才真正生效；本地能编译它们，就足以发现字段改名
 # 后忘记同步断言这类错误。
-$cmdsStubBound = 'dto::tests::'
+# 受桩限制的 3 条必须逐条列出，不能按 dto 模块前缀整体豁免：
+# 前缀豁免会把该模块今后新增的、不依赖 rename_all 的真实回归也一并吞掉。
+$cmdsStubBound = @(
+    'commands::dto::tests::backup_entry_created_ns_is_a_string',
+    'commands::dto::tests::convertible_keys_are_camel_case',
+    'commands::dto::tests::update_info_keys_are_camel_case'
+)
 $cmdsFailed = $cmdsTestOut | Select-String -Pattern '^    ((?:[a-z_][a-z_0-9]*::)+[a-z_0-9]+)$' |
     ForEach-Object { $_.Matches[0].Groups[1].Value }
-$cmdsReal = $cmdsFailed | Where-Object { $_ -notmatch $cmdsStubBound }
+$cmdsReal = $cmdsFailed | Where-Object { $cmdsStubBound -notcontains $_ }
 if ($cmdsReal.Count -gt 0) {
     Write-Host "  命令层测试失败（与代码相关）："
     $cmdsReal | ForEach-Object { Write-Host "    $_" }
     exit $cmdsReal.Count
 }
-if ($cmdsTestExit -ne 0 -and $cmdsFailed.Count -eq 0) {
-    Write-Host "  命令层测试进程退出码为 $cmdsTestExit，但输出中未找到失败项（可能是崩溃或超时）"
+if ($cmdsTestExit -ne 0 -and $cmdsFailed.Count -ne $cmdsStubBound.Count) {
+    Write-Host "  命令层测试退出码 $cmdsTestExit，失败 $($cmdsFailed.Count) 项，与已知受桩限制的 $($cmdsStubBound.Count) 项不符：$($cmdsFailed -join ', ')"
     $cmdsTestOut | Select-Object -Last 20 | ForEach-Object { Write-Host "    $_" }
     exit $cmdsTestExit
 }
@@ -174,8 +201,12 @@ if ($cmdsTotal) {
 Write-Host "5/6 运行单元测试…"
 $exe = Join-Path $here 'check.exe'
 Remove-Item $exe -Force -ErrorAction SilentlyContinue
-& cmd /c "rustc --edition 2021 --crate-type lib --crate-name check --test $externArgs `"$(Join-Path $here 'check.rs')`" -o `"$exe`" 2>nul"
-if (-not (Test-Path $exe)) { Write-Host "  测试可执行文件编译失败"; exit 1 }
+$exeBuild = & cmd /c "rustc --edition 2021 --crate-type lib --crate-name check --test $externArgs `"$(Join-Path $here 'check.rs')`" -o `"$exe`" 2>&1"
+if (-not (Test-Path $exe)) {
+    $exeBuild | Select-Object -First 30 | ForEach-Object { Write-Host "    $_" }
+    Write-Host "  测试可执行文件编译失败"
+    exit 1
+}
 $testOut = & $exe --test-threads=4 2>&1
 $testExit = $LASTEXITCODE
 $testOut | Where-Object { $_ -match 'test result|^failures:|^    ' } | Select-Object -First 40
@@ -187,11 +218,11 @@ if ($testExit -eq 0) {
     Write-Host "测试全部通过。"
 } else {
     # 已知受桩限制的测试（真实 gzip/zlib 相关）。本机 flate2 桩已实现解压，
-    # 该清单目前为空；保留机制以便将来出现桩局限时有处记录。
-    $stubBound = '___no_stub_bound_tests___'
+    # 该清单目前为空；出现桩局限时把具体测试全名加进来，不要按模块前缀过滤。
+    $stubBound = @()
     $names = $testOut | Select-String -Pattern '^    ((?:[a-z_][a-z_0-9]*::)+[a-z_0-9]+)$' |
         ForEach-Object { $_.Matches[0].Groups[1].Value }
-    $real = $names | Where-Object { $_ -notmatch $stubBound }
+    $real = $names | Where-Object { $stubBound -notcontains $_ }
     Write-Host ""
     Write-Host "失败项中与代码相关的:"
     if ($real.Count -eq 0) {

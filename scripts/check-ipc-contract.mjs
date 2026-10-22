@@ -204,10 +204,19 @@ function findTopLevelColon(piece) {
   return -1;
 }
 
-const rustSrc = readdirSync(COMMANDS_DIR)
-  .filter((name) => name.endsWith(".rs"))
+function listRustFiles(dir) {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const p = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) out.push(...listRustFiles(p));
+    else if (entry.name.endsWith(".rs")) out.push(p);
+  }
+  return out;
+}
+
+const rustSrc = listRustFiles(COMMANDS_DIR)
   .sort()
-  .map((name) => read(`${COMMANDS_DIR}/${name}`))
+  .map((p) => read(p))
   .join("\n");
 const libSrc = read(LIB_RS);
 const apiSrc = read(API_TS);
@@ -218,6 +227,15 @@ const front = parseFrontendCalls(apiSrc);
 
 const errors = [];
 const warnings = [];
+
+// 命令函数的解析依赖正则；出现无返回类型、嵌套泛型逗号或以后拆出子目录时
+// 可能静默漏掉某个命令。用 #[tauri::command] 的数量兜底：漏解析就报错。
+const attrCount = (rustSrc.match(/#\[tauri::command\]/g) || []).length;
+if (attrCount !== rust.size) {
+  errors.push(
+    `命令层有 ${attrCount} 个 #[tauri::command]，但只解析出 ${rust.size} 个命令（解析规则需要同步更新）`,
+  );
+}
 
 // 1) 前端调用的命令必须已注册且已实现
 for (const [cmd, info] of front) {
