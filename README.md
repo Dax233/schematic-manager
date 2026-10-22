@@ -105,7 +105,11 @@ BMCLAPI，供清单里没有、本机也没装的版本）。支持补齐的正�
   - 方块库与实体贴图库不随包分发：首次运行时由「版本库」界面引导扫描本机目录
     （含子目录，扫到即导入）或经官方/BMCL API 下载客户端 jar，在 app 数据目录
     生成基础库
-  - `src-tauri/tests/data/` —— 测试用的真实 `.litematic` 样本
+  - `src-tauri/src/` 按业务域分包：`block/`（方块库）、`pack/`（资源包与基础库构建）、
+    `format/`（NBT/PNG/ZIP）、`schematic/`（投影与方块状态）、`render/`（场景与网格）、
+    `app/`（应用基础设施）、`mc/`（版本与客户端下载）、`commands/`（前端命令入口，含 DTO）
+  - `src-tauri/src/tests/` —— 单元测试包，按同样的包结构分文件，经 `#[path]` 挂到各模块下
+  - `src-tauri/src/tests/data/` —— 测试用的真实 `.litematic` 样本
 - `legacy-cpp/` —— 原有的 Windows 专用 C++ 实现，**仅作参考**。
   其中的 `.litematic` 解析、NBT 位打包、ZIP/PNG 解码、多版本方块库烘焙等
   已通过实测验证的语义，是 Rust 重写时的对照依据。
@@ -188,7 +192,12 @@ pnpm build           # vite build
 cargo test --manifest-path src-tauri/Cargo.toml --lib
 ```
 
-仓库内只随源码分发一个小体积样本（见 `src-tauri/tests/data/README.md`）。
+单元测试集中在 `src-tauri/src/tests/`，文件与源码的包结构一一对应；每个测试文件是一个模块
+`mod tests` 的本体，经源码末尾的 `#[cfg(test)] #[path = "../tests/…"] mod tests;` 挂载，
+因此能访问私有项，并随上面的 `cargo test --lib` 一起运行。`support.rs` 放造内存 zip/PNG
+与按用例隔离的临时目录等共用辅助，`real_project.rs` 是按需运行的端到端核验。
+
+仓库内只随源码分发一个小体积样本（见 `src-tauri/src/tests/data/README.md`）。
 若要拿自己收藏的真实投影核验各功能的覆盖面，用这几个按需运行的用例：
 
 ```bash

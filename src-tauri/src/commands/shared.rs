@@ -3,7 +3,6 @@
 use crate::error::AppResult;
 use std::path::{Path, PathBuf};
 
-
 /// 递归收集投影文件的默认层数上限。
 ///
 /// 文件列表与重复筛查共用这一个值：两处一旦不同，筛查就会与用户看到的
@@ -190,21 +189,4 @@ pub(crate) fn open_db(app: &tauri::AppHandle) -> AppResult<std::sync::Arc<Loaded
         Some(existing) => std::sync::Arc::clone(existing),
         None => loaded,
     })
-}
-
-/// 每个用例用独立的临时目录，避免并行执行时互相覆盖
-#[cfg(test)]
-pub(crate) fn temp_state_dir(tag: &str) -> PathBuf {
-    let mut d = std::env::temp_dir();
-    d.push(format!(
-        "sm-ui-state-{tag}-{}-{}",
-        std::process::id(),
-        // 用纳秒时间戳区分同一进程内的多次调用
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|v| v.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::create_dir_all(&d).expect("建临时目录失败");
-    d
 }

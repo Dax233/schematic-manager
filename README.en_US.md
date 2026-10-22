@@ -95,7 +95,14 @@ The environment variable `SCHEMATIC_MANAGER_NO_ERROR_DIALOG=1` makes startup fai
     (subdirectories included; anything found is imported) or downloading client jars
     from the official or BMCL API endpoints, and builds the base library in the app
     data directory
-  - `src-tauri/tests/data/` — real `.litematic` samples used by tests
+  - `src-tauri/src/` is split into domain packages: `block/` (block library),
+    `pack/` (resource packs and base-library building), `format/` (NBT/PNG/ZIP),
+    `schematic/` (schematics and block states), `render/` (scene and meshes),
+    `app/` (application infrastructure), `mc/` (versions and client downloads) and
+    `commands/` (frontend command entry points, DTOs included)
+  - `src-tauri/src/tests/` — unit-test package mirroring the same package layout; each
+    file is mounted with `#[path]` and runs with `cargo test --lib`
+  - `src-tauri/src/tests/data/` — real `.litematic` samples used by tests
 - `legacy-cpp/` — the original Windows-only C++ implementation, **kept for reference
   only**. Its semantics for `.litematic` parsing, NBT bit packing, ZIP/PNG decoding and
   multi-version block-library baking have been verified in practice, and served as the
@@ -173,7 +180,14 @@ Backend unit tests:
 cargo test --manifest-path src-tauri/Cargo.toml --lib
 ```
 
-Only a small sample ships with the source (see `src-tauri/tests/data/README.md`).
+Unit tests live under `src-tauri/src/tests/`, mirroring the source package layout. Each
+test file is the body of a module's `mod tests`, mounted by the
+`#[cfg(test)] #[path = "../tests/…"] mod tests;` declaration at the end of that module,
+so private items stay reachable and everything runs with `cargo test --lib`.
+`support.rs` holds shared helpers (in-memory zip/PNG builders, per-test temp dirs) and
+`real_project.rs` is the opt-in end-to-end check.
+
+Only a small sample ships with the source (see `src-tauri/src/tests/data/README.md`).
 To check feature coverage against your own real schematics, use these opt-in tests:
 
 ```bash

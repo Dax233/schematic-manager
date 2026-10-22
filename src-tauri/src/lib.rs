@@ -8,8 +8,14 @@ mod pack;
 mod render;
 mod schematic;
 
+// 单元测试共用的小工具：造 zip / PNG、按用例隔离的临时目录。
+#[cfg(test)]
+#[path = "tests/support.rs"]
+pub(crate) mod test_support;
+
 // 针对任意真实投影集合的端到端核对，按需运行（标了 #[ignore]）
 #[cfg(test)]
+#[path = "tests/real_project.rs"]
 mod real_project;
 
 /// 运行日志所在目录：应用数据目录下的 `logs`。
