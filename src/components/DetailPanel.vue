@@ -525,7 +525,9 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- 预设角度：悬停或点击展开子菜单。十个项目太多，平铺会把主菜单
-           撑得很长，且 issue 指定的就是子菜单形态。 -->
+           撑得很长，且 issue 指定的就是子菜单形态。
+           自定义预设也归进这个子菜单：它们同样是「按角度切视角」，
+           和内置的十个放在一起才找得到，分到主菜单上是两类东西混排。 -->
       <div
         class="ctx-menu__item view-menu__sub"
         role="menuitem"
@@ -560,35 +562,37 @@ onBeforeUnmount(() => {
         >
           {{ t(item.labelKey) }}
         </div>
-      </div>
 
-      <!-- 自定义预设：存在时单独一组，每项带删除入口 -->
-      <template v-if="savedViews.length > 0">
-        <div class="ctx-menu__sep" role="none" />
-        <div class="ctx-menu__label" role="none">{{ t("view.menuCustomPresets") }}</div>
-        <div
-          v-for="preset in savedViews"
-          :key="preset.name"
-          class="ctx-menu__item view-menu__custom"
-          role="menuitem"
-          tabindex="0"
-          @click="pickCustomPreset(preset.name)"
-          @keydown.enter.prevent="pickCustomPreset(preset.name)"
-          @keydown.space.prevent="pickCustomPreset(preset.name)"
-        >
-          <span class="view-menu__name">{{ preset.name }}</span>
-          <a
-            class="view-menu__del"
-            role="button"
+        <!-- 自定义预设：存在时接在十个内置预设后面，每项带删除入口 -->
+        <template v-if="savedViews.length > 0">
+          <div class="ctx-menu__sep" role="none" />
+          <div class="ctx-menu__label" role="none">
+            {{ t("view.menuCustomPresets") }}
+          </div>
+          <div
+            v-for="preset in savedViews"
+            :key="preset.name"
+            class="ctx-menu__item view-menu__custom"
+            role="menuitem"
             tabindex="0"
-            :title="t('view.menuDeletePreset')"
-            @click.stop="deletePreset(preset.name)"
-            @keydown.enter.prevent.stop="deletePreset(preset.name)"
-            @keydown.space.prevent.stop="deletePreset(preset.name)"
-            >×</a
+            @click="pickCustomPreset(preset.name)"
+            @keydown.enter.prevent="pickCustomPreset(preset.name)"
+            @keydown.space.prevent="pickCustomPreset(preset.name)"
           >
-        </div>
-      </template>
+            <span class="view-menu__name">{{ preset.name }}</span>
+            <a
+              class="view-menu__del"
+              role="button"
+              tabindex="0"
+              :title="t('view.menuDeletePreset')"
+              @click.stop="deletePreset(preset.name)"
+              @keydown.enter.prevent.stop="deletePreset(preset.name)"
+              @keydown.space.prevent.stop="deletePreset(preset.name)"
+              >×</a
+            >
+          </div>
+        </template>
+      </div>
     </div>
 
     <!-- 保存为预设角度的面板 -->

@@ -5679,6 +5679,31 @@ describe("自定义视角预设", () => {
     );
   }
 
+  /** 展开「预设角度」子菜单（内置十个角度与自定义预设都在里面）。
+   *
+   *  用点击而不是派发 mouseenter：两者的处理函数都会置 presetSubOpen，
+   *  但 jsdom 里合成的 mouseenter 不会被 Vue 的 @mouseenter 收到。
+   */
+  async function openPresetSub() {
+    // 不能按文字找："保存为预设角度…" 里也含 "预设角度"，会选错项
+    const trigger = document.querySelector<HTMLElement>(".view-menu .view-menu__sub");
+    expect(trigger, "主菜单里应有预设角度入口").toBeTruthy();
+    // 入口是切换语义：已经展开时再点会收起，所以只在没展开时点
+    if (!document.querySelector(".view-menu__submenu")) {
+      trigger!.click();
+      await flushPromises();
+    }
+    const sub = document.querySelector(".view-menu__submenu");
+    expect(sub, "子菜单应已展开").toBeTruthy();
+    return sub as HTMLElement;
+  }
+
+  /** 在子菜单里找文字包含 label 的那一项 */
+  function subItem(label: string): HTMLElement | undefined {
+    return [...document.querySelectorAll<HTMLElement>(".view-menu__submenu .ctx-menu__item")]
+      .find((el) => (el.textContent ?? "").includes(label));
+  }
+
   it("菜单里有「保存为预设角度」入口", async () => {
     const w = await setup();
     await openMenu(w);
@@ -5711,11 +5736,14 @@ describe("自定义视角预设", () => {
     ok!.click();
     await flushPromises();
 
-    // 再开菜单，自定义分组里应出现刚才那条
+    // 再开菜单：主菜单里不该有自定义预设，它归在「预设角度」子菜单里
     await openMenu(w);
-    const menuText = document.querySelector(".view-menu")!.textContent ?? "";
-    expect(menuText, "应出现自定义预设分组").toContain("自定义预设");
-    expect(menuText, "应出现刚保存的预设名").toContain("我的视角");
+    const mainText = document.querySelector(".view-menu")!.textContent ?? "";
+    expect(mainText, "自定义预设不该出现在主菜单").not.toContain("我的视角");
+    expect(mainText, "主菜单不该有自定义分组标题").not.toContain("自定义预设");
+    const subText = (await openPresetSub()).textContent ?? "";
+    expect(subText, "应出现自定义预设分组").toContain("自定义预设");
+    expect(subText, "应出现刚保存的预设名").toContain("我的视角");
     w.unmount();
   });
 
@@ -5734,18 +5762,19 @@ describe("自定义视角预设", () => {
       .click();
     await flushPromises();
 
-    // 打开菜单点删除
+    // 打开菜单、展开「预设角度」子菜单后点删除
     await openMenu(w);
+    await openPresetSub();
     const del = document.querySelector<HTMLElement>(".view-menu .view-menu__del");
     expect(del, "自定义预设应有删除入口").toBeTruthy();
     del!.click();
     await flushPromises();
 
-    // 再开菜单应看不到它
+    // 再开菜单、展开子菜单应看不到它
     await w.find(".preview__stage").trigger("contextmenu", { clientX: 300, clientY: 200 });
     await flushPromises();
-    const menuText = document.querySelector(".view-menu")?.textContent ?? "";
-    expect(menuText, "删除后不应再出现该预设").not.toContain("待删除");
+    const subText = (await openPresetSub()).textContent ?? "";
+    expect(subText, "删除后不应再出现该预设").not.toContain("待删除");
     w.unmount();
   });
 
@@ -5777,11 +5806,10 @@ describe("自定义视角预设", () => {
       .click();
     await flushPromises();
 
-    // 菜单里点它，应当把预览切成正射投影
+    // 子菜单里点它，应当把预览切成正射投影
     await openMenu(w);
-    [...document.querySelectorAll<HTMLElement>(".view-menu .ctx-menu__item")]
-      .find((el) => (el.textContent ?? "").includes("正射视角"))!
-      .click();
+    await openPresetSub();
+    subItem("正射视角")!.click();
     await flushPromises();
     // 再开菜单看「正射投影」这一项是否被勾上
     await openMenu(w);
@@ -5829,11 +5857,10 @@ describe("自定义视角预设", () => {
       .click();
     await flushPromises();
 
-    // 菜单里出现该预设，点它之后相机应摆到正上方
+    // 子菜单里出现该预设，点它之后相机应摆到正上方
     await openMenu(w);
-    const item = [...document.querySelectorAll<HTMLElement>(".view-menu .ctx-menu__item")].find(
-      (el) => (el.textContent ?? "").includes("俯视"),
-    );
+    await openPresetSub();
+    const item = subItem("俯视");
     expect(item, "改过位置的预设应保存成功").toBeTruthy();
     w.unmount();
   });

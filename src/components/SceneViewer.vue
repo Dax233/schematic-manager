@@ -99,10 +99,18 @@ const fps = ref(0);
  *  Vue 持续重渲染，而方向标只在相机转动时才需要重画。 */
 const orientation = ref<THREE.Quaternion | null>(null);
 
-/** 把当前相机朝向同步给方向标 */
+/** 把当前相机朝向同步给方向标。
+ *
+ * 只在朝向真的变了时才写 ref：每帧都写会让 Vue 持续重渲染，
+ * 而方向标只有在相机转动时才需要重画。滚轮缩放会触发 controls 的
+ * change，但那不改朝向——挡掉重复写才不会白白重渲方向标。
+ */
 function syncOrientation() {
   const cam = activeCamera();
-  orientation.value = cam ? cam.quaternion.clone() : null;
+  const next = cam ? cam.quaternion : null;
+  const prev = orientation.value;
+  if (next && prev && prev.angleTo(next) < 1e-6) return;
+  orientation.value = next ? next.clone() : null;
 }
 
 /** 累计一帧并每秒结算一次 */
@@ -401,24 +409,24 @@ onMounted(() => {
 
     const loop = () => {
       raf = requestAnimationFrame(loop);
-      let changed = controls?.update() ?? false;
+      // `update()` 必须每帧调：阻尼动画靠它逐帧收敛。
+      // 但它返回的「有没有变化」不能当作是否重绘的依据——滚轮缩放时
+      // OrbitControls 内部已经调过一次并丢掉了结果，这里再调就是 false。
+      // 重绘统一由 controls 的 change 事件与 requestRender() 驱动。
+      controls?.update();
       const cam = activeCamera();
       // 距离变了就要跟着改裁剪面，否则一直拉近会穿进近裁剪面、模型被切没。
       // 这项只对透视相机有意义：正交的裁剪面不随视角变化
       if (cam instanceof THREE.PerspectiveCamera && controls) {
-        if (syncClipPlanes(cam, controls.target)) changed = true;
+        if (syncClipPlanes(cam, controls.target)) needsRender = true;
       }
-      // 阻尼未停时必须每帧重绘，否则拖动动画会卡住
-      if (needsRender || changed) {
+      if (needsRender) {
         needsRender = false;
         if (renderer.value && cam) {
           renderer.value.render(scene, cam);
           countFrame(performance.now());
         }
       }
-      // 方向标要跟着相机转：只在朝向真的变了时更新，
-      // 否则每帧都写响应式 ref 会让 Vue 持续重渲染
-      if (changed) syncOrientation();
     };
     loop();
     startFpsClock();
@@ -557,7 +565,14 @@ async function exportPng(w: number, h: number): Promise<Uint8Array> {
 }
 
 /** 创建并配置一台 OrbitControls。切换相机时必须重建：
- *  它在构造时绑死相机实例，没有换相机的接口。 */
+ *  它在构造时绑死相机实例，没有换相机的接口。
+ *
+ * 重绘不能只靠渲染循环里 `update()` 的返回值：滚轮缩放走的是
+ * `_handleMouseWheel`，它内部自己调一次 `update()` 并把结果丢掉；
+ * 等循环再调一次时状态已经稳定，`zoomChanged` 为 false，于是正交投影下
+ * 「缩放要等下一次拖动才生效」。改为订阅 `change` 事件请求重绘——
+ * 只要 controls 改动了相机就一定会触发它。
+ */
 function makeControls(cam: THREE.Camera, dom: HTMLElement): OrbitControls {
   const c = new OrbitControls(cam, dom);
   c.enableDamping = true;
@@ -565,7 +580,14 @@ function makeControls(cam: THREE.Camera, dom: HTMLElement): OrbitControls {
   c.screenSpacePanning = true;
   c.enableZoom = true;
   c.zoomSpeed = 0.9;
+  c.addEventListener("change", onControlsChange);
   return c;
+}
+
+/** controls 改动了相机：标记重绘，并同步方向标 */
+function onControlsChange() {
+  requestRender();
+  syncOrientation();
 }
 
 /** 记下 controls 构造时的相机 up 与极轴。
