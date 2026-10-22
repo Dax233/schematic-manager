@@ -285,7 +285,7 @@ where
             let mut resolved: Vec<(bool, crate::block::state::VariantEntry, Chain, crate::block::state::ModelDef)> =
                 Vec::new();
             // 箱子一类方块的几何由游戏代码绘制，jar 里只有空壳模型，
-            // 因此改由 code_models 按方块名与状态给出几何；贴图仍取自 jar。
+            // 因此改由 pack::code_models 按方块名与状态给出几何；贴图仍取自 jar。
             for cv in crate::pack::code_models::variants_of(&qualified).unwrap_or_default() {
                 let chain = Chain {
                     textures: std::collections::HashMap::new(),

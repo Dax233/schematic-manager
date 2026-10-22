@@ -16,7 +16,7 @@ use crate::block::db::{Model, ModelElement, ModelFace};
 use crate::block::state::{ModelDef, ModelElementDef};
 use crate::block::state_chain::{is_force_translucent, resolve_tex_ref, Chain};
 
-/// 六个面名，下标即面序号（与 blockdb::Face 一致）
+/// 六个面名，下标即面序号（与 block::db::Face 一致）
 pub const FACE_NAMES: [&str; 6] = ["down", "up", "north", "south", "west", "east"];
 
 /// 面名对应的序号；未知面名返回 None

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 /// 支持补齐的正式版：(数据版本, 版本号)，按数据版本严格升序。
 ///
 /// 清单取自 legacy-cpp/data/pack_report.json 的构建结果，即历史上实际
-/// 能完整构建方块库的正式版集合。不能从 mcver::DATA_VERSIONS 反推：
+/// 能完整构建方块库的正式版集合。不能从 mc::ver::DATA_VERSIONS 反推：
 /// 快照也占数据版本号，一个数据版本可能对应多个版本号，且 1.20.3/
 /// 1.20.5 与 26.x 段的正式版在那里没有可区分的条目。
 pub const SUPPORTED_RELEASES: &[(i32, &str)] = &[

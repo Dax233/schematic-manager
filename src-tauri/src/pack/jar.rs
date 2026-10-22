@@ -1,9 +1,9 @@
 //! 以 jar/zip 文件为内容来源，供资源包构建使用。
 //!
-//! 把 `pack_build::JarSource` 落到真实文件上：打开 zip、读中央目录，
+//! 把 `pack::build::JarSource` 落到真实文件上：打开 zip、读中央目录，
 //! 按需解压条目。PNG 贴图也在这里解码成像素供构建使用。
 //!
-//! 与 pack_build 分开是为了让构建逻辑不依赖文件系统：构建侧只认
+//! 与 pack::build 分开是为了让构建逻辑不依赖文件系统：构建侧只认
 //! JarSource 契约，因此可用内存假 jar 完整测试；这里只负责把文件接上。
 
 use crate::error::{AppError, AppResult};
