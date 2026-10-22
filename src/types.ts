@@ -60,6 +60,14 @@ export interface BlockCount {
  * 因此 `forms` 必须保留下来（见 blockReplace.ts 的 onBlockRowClick）。
  */
 export interface BlockRow extends BlockCount {
+  /**
+   * 行的唯一键，供表格的 row-key 与「当前行」判定使用。
+   *
+   * 不能借用 `state`：按物品合计时同一个状态可能出现在两行里（带花的花盆会
+   * 同时贡献「花盆」与「植物」两件物品），两张行共用同一个 state 会让表格
+   * 认错行，也会让行内按钮作用到另一行上。
+   */
+  key: string;
   /** 这一行合计进来的方块状态条目数；1 表示只有一条 */
   stateCount: number;
   /** 这一行跨了哪几个方块名（火把与墙上的火把是两个），按首次出现顺序 */

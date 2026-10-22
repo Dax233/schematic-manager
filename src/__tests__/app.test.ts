@@ -2810,14 +2810,33 @@ describe("方块栏渲染图", () => {
     return w;
   }
 
-  /** 取一行的各单元格文本：0 渲染图、1 中文名、2 方块、3 状态、4 数量、5 堆叠 */
+  /** 取一行的各单元格文本。
+   *
+   * 折叠视图：0 渲染图、1 中文名、2 方块、3 数量、4 堆叠；
+   * 分状态视图在方块与数量之间多一列状态。按需取下标即可。
+   */
   function cells(row: { element: Element }): string[] {
     return Array.from(row.element.querySelectorAll("td")).map((td) =>
       (td.textContent ?? "").trim(),
     );
   }
 
-  it("同一方块的各状态合计成一行", async () => {
+  /** 表头的列标题 */
+  function headerTitles(w: ReturnType<typeof mountApp>): string[] {
+    return w
+      .findAll(".block-table thead th")
+      .map((th) => (th.text() ?? "").trim());
+  }
+
+  /** 切换「区分属性」开关 */
+  async function toggleSplit(w: ReturnType<typeof mountApp>) {
+    const sw = w.find('.block-split button[role="switch"]');
+    expect(sw.exists(), "表头应有「区分属性」开关").toBe(true);
+    await sw.trigger("click");
+    await flushPromises();
+  }
+
+  it("默认按物品合计，且不显示状态列", async () => {
     // 统计口径：一个方块的所有状态累加成一行（红石强度、铁轨朝向与通电、
     // 楼梯朝向都是摆放形态，对「这种物品一共要用多少个」没有意义）。
     const rows: BlockCount[] = [
@@ -2837,22 +2856,60 @@ describe("方块栏渲染图", () => {
     expect(tableRows.length, "8 条状态记录应并成 4 行").toBe(4);
     const rowOf = (name: string) => tableRows.find((r) => cells(r)[2] === name)!;
 
+    // 折叠视图没有状态列：这一行的数量是所有状态的总和，写一个代表状态会误导
+    expect(headerTitles(w), "折叠视图不应有状态列").not.toContain("状态");
+
     // 铁轨：9+8=17
-    expect(cells(rowOf("minecraft:powered_rail"))[4], "数量应是各状态之和").toBe("17");
-    expect(cells(rowOf("minecraft:powered_rail"))[3], "应写明合计了几种状态").toBe(
-      "（含 2 种状态）",
-    );
+    expect(cells(rowOf("minecraft:powered_rail"))[3], "数量应是各状态之和").toBe("17");
     // 红石粉：7+5+4=16
-    expect(cells(rowOf("minecraft:redstone_wire"))[4], "红石粉数量应是各状态之和").toBe("16");
-    expect(cells(rowOf("minecraft:redstone_wire"))[3]).toBe("（含 3 种状态）");
+    expect(cells(rowOf("minecraft:redstone_wire"))[3], "红石粉数量应是各状态之和").toBe("16");
     // 楼梯同样合计：3+2=5，不按朝向分行
-    expect(cells(rowOf("minecraft:oak_stairs"))[4], "楼梯数量应是各朝向之和").toBe("5");
-    // 只有一种状态的方块直接写出状态，不写「含 1 种状态」
-    expect(cells(rowOf("minecraft:stone"))[3], "单状态方块应直接写出状态").toBe(
-      "minecraft:stone",
-    );
+    expect(cells(rowOf("minecraft:oak_stairs"))[3], "楼梯数量应是各朝向之和").toBe("5");
     // 合计后数量最大的排在最前
     expect(cells(tableRows[0])[2], "数量最大的行应排在最前").toBe("minecraft:powered_rail");
+    w.unmount();
+  });
+
+  it("打开区分属性后每种状态一行，状态列显示完整状态键", async () => {
+    // 替换规则按「方块名 + 属性」精确匹配，需要按状态核对时把开关打开：
+    // 此时的数量是处于该状态的方块数，也就是这条规则会命中的数量。
+    const rows: BlockCount[] = [
+      { name: "minecraft:oak_stairs", state: "minecraft:oak_stairs[facing=east]", count: 3, zhName: "橡木楼梯", enName: "Oak Stairs" },
+      { name: "minecraft:oak_stairs", state: "minecraft:oak_stairs[facing=west]", count: 2, zhName: "橡木楼梯", enName: "Oak Stairs" },
+      { name: "minecraft:stone", state: "minecraft:stone", count: 10, zhName: "石头", enName: "Stone" },
+    ];
+    const w = await selectWithBlocks(rows);
+
+    expect(w.findAll(".block-table tbody tr").length, "关闭时按物品合计成 2 行").toBe(2);
+
+    await toggleSplit(w);
+    const tableRows = w.findAll(".block-table tbody tr");
+    expect(tableRows.length, "开启后每种状态一行").toBe(3);
+    expect(headerTitles(w), "开启后应出现状态列").toContain("状态");
+
+    // 每行数量是自己的方块数，而不是合计
+    const stairsEast = tableRows.find((r) =>
+      cells(r)[3] === "minecraft:oak_stairs[facing=east]",
+    );
+    expect(stairsEast, "状态列应写出完整状态键").toBeTruthy();
+    expect(cells(stairsEast!)[4], "数量是该状态的方块数").toBe("3");
+    const stairsWest = tableRows.find((r) =>
+      cells(r)[3] === "minecraft:oak_stairs[facing=west]",
+    );
+    expect(cells(stairsWest!)[4], "另一状态单独一行").toBe("2");
+
+    // 两个方向的状态框都应是可区分的行键：点其中一行后只有它高亮
+    await stairsEast!.trigger("click");
+    await flushPromises();
+    expect(
+      w.findAll(".block-table tbody tr.block-row--active").length,
+      "同一方块的两个状态各自独立，只应有一行高亮",
+    ).toBe(1);
+
+    // 再关掉回到折叠
+    await toggleSplit(w);
+    expect(w.findAll(".block-table tbody tr").length, "关闭后回到合计视图").toBe(2);
+    expect(headerTitles(w), "关闭后状态列应消失").not.toContain("状态");
     w.unmount();
   });
 
@@ -2871,30 +2928,74 @@ describe("方块栏渲染图", () => {
 
     const tableRows = w.findAll(".block-table tbody tr");
     expect(tableRows.length, "6 条记录应并成 4 行").toBe(4);
-    const rowOf = (name: string) => tableRows.find((r) => cells(r)[2] === name)!;
+    // 方块名那一列可能带「（N 种形态）」后缀，因此按前缀匹配
+    const rowOf = (name: string) =>
+      tableRows.find((r) => (cells(r)[2] ?? "").startsWith(name))!;
 
     // 火把：103+82=185，代表形态取基础形态（火把），中文名与渲染图也用它
     const torch = cells(rowOf("minecraft:torch"));
     expect(torch[1], "应显示基础形态的中文名").toBe("火把");
-    expect(torch[4], "数量应是两种形态之和").toBe("185");
-    expect(torch[3], "应注明跨了几种形态").toBe("（含 2 种形态、共 2 种状态）");
+    expect(torch[3], "数量应是两种形态之和").toBe("185");
+    // 状态列不显示时，跨了哪几种形态必须在名字那一列注明
+    expect(torch[2], "应注明跨了几种形态").toContain("（2 种形态）");
+    // 悬停时列出具体是哪几种，用户才知道替换会漏掉哪些
+    const torchNameSpan = rowOf("minecraft:torch")
+      .findAll("td:nth-child(3) span")
+      .find((s) => s.attributes("title") !== undefined);
+    expect(torchNameSpan, "方块名那一列应有说明覆盖范围的提示").toBeTruthy();
+    expect(torchNameSpan!.attributes("title"), "应列出这一行合计了哪些方块名").toContain(
+      "minecraft:wall_torch",
+    );
     // 告示牌同理：基础形态数量更少（1 个）也要当代表
     const sign = cells(rowOf("minecraft:oak_sign"));
     expect(sign[1], "代表形态取基础形态，中文名也取它的").toBe("橡木告示牌");
-    expect(sign[4], "数量应是两种形态之和").toBe("196");
+    expect(sign[3], "数量应是两种形态之和").toBe("196");
     // 只有墙挂形态时，行的名字是物品名（告示牌），因为要备的就是告示牌物品；
-    // 中文名与状态仍取自投影里真实存在的那一行
+    // 中文名仍取自投影里真实存在的那一行
     const paleOak = cells(rowOf("minecraft:pale_oak_sign"));
-    expect(paleOak[4], "数量应如实显示").toBe("14");
+    expect(paleOak[3], "数量应如实显示").toBe("14");
     expect(paleOak[1], "中文名取自投影里存在的墙挂形态").toBe("淡橡木墙上的告示牌");
-    expect(paleOak[3], "单形态单状态直接写出状态").toBe(
-      "minecraft:pale_oak_wall_sign[facing=north]",
-    );
+    expect(paleOak[2], "只有一种形态时不该标注跨形态").not.toContain("种形态");
     // 真正的墙方块不能被带走
     expect(rowOf("minecraft:cobblestone_wall"), "圆石墙是另一种物品，应保持独立").toBeTruthy();
     w.unmount();
   });
 
+  it("导出的表格随开关切换列，与界面看到的一致", async () => {
+    // 导出与显示对不上会让人以为导出漏了方块：折叠视图没有状态列，
+    // 导出就不该多出一列；分状态视图按状态分行，导出也得带上状态键
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const rows: BlockCount[] = [
+      { name: "minecraft:oak_stairs", state: "minecraft:oak_stairs[facing=east]", count: 3, zhName: "橡木楼梯", enName: "Oak Stairs" },
+      { name: "minecraft:oak_stairs", state: "minecraft:oak_stairs[facing=west]", count: 2, zhName: "橡木楼梯", enName: "Oak Stairs" },
+    ];
+    const w = await selectWithBlocks(rows);
+
+    const copyBtn = () => w.findAll(".block-head button").find((b) => b.text().includes("复制表格"))!;
+    await copyBtn().trigger("click");
+    await flushPromises();
+
+    const folded = String(writeText.mock.calls.at(-1)?.[0] ?? "");
+    expect(folded, "折叠视图的导出不应有状态列").not.toContain("状态");
+    expect(folded.split("\r\n")[0], "表头应与界面一致").toBe(
+      "显示名称\t方块ID\t数量\t堆叠",
+    );
+    expect(folded.split("\r\n").length, "两行数据加一行表头").toBe(2);
+    expect(folded, "折叠视图的合计数量应是 5").toContain("\t5\t");
+
+    // 打开开关后再导出：多出状态列，且每个状态一行
+    await toggleSplit(w);
+    await copyBtn().trigger("click");
+    await flushPromises();
+    const split = String(writeText.mock.calls.at(-1)?.[0] ?? "");
+    expect(split.split("\r\n")[0], "分状态视图的导出应带状态列").toBe(
+      "显示名称\t方块ID\t状态\t数量\t堆叠",
+    );
+    expect(split.split("\r\n").length, "两个状态各一行").toBe(3);
+    expect(split, "应写出完整状态键").toContain("minecraft:oak_stairs[facing=west]");
+    w.unmount();
+  });
   it("点跨了多个方块名的行时说清只替换其中一个名字", async () => {
     // 替换在后端按方块名精确相等匹配，而这一行的数量是整个物品的合计。
     // 若只说「已设为替换源」，用户会以为墙上的火把也会被替换。

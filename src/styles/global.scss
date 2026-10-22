@@ -1011,7 +1011,7 @@ $preview-stage-h: 344px;
   word-break: break-all;
 }
 
-// 方块栏头部：统计信息 + 导出按钮，一行放不下时换行
+// 方块栏头部：统计信息 + 区分属性开关 + 导出按钮，一行放不下时换行
 .block-head {
   display: flex;
   flex: 0 0 auto;
@@ -1019,6 +1019,17 @@ $preview-stage-h: 344px;
   align-items: center;
   gap: 8px;
   margin-bottom: 6px;
+}
+
+// 区分属性开关与它的文字：两者是一个整体，文字跟随开关垂直居中。
+// 用 label 包住，点文字也能切换（开关本身很小，只点它容易点偏）。
+.block-split {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-2);
+  font-size: 12px;
+  cursor: pointer;
 }
 
 // 方块/实体页签要撑满详情区剩余高度（用户反馈「没有自适应到最低位置」）。

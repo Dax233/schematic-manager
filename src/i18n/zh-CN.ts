@@ -402,6 +402,11 @@ export default {
     loadVersionsFailed: "读取版本列表失败：{error}",
   },
   stats: {
+    distinguish: "区分属性",
+    distinguishTitle:
+      "开启后每种方块状态单独一行并显示状态列；关闭时按物品合计，状态列隐藏",
+    mergedFormsShort: "（{count} 种形态）",
+    mergedFormsTitle: "这一行合计了：{forms}",
     icon: "渲染图",
     block: "方块",
     entityId: "实体ID",
@@ -412,8 +417,6 @@ export default {
     stateKinds: "状态种类：{value}",
     nonAir: "非空气方块：{value}",
     air: "空气方块：{value}",
-    mergedForms: "（含 {forms} 种形态、共 {states} 种状态）",
-    mergedStates: "（含 {states} 种状态）",
     copyTable: "复制表格",
     exportTable: "导出表格",
     resetWidths: "列宽复位",
@@ -421,6 +424,8 @@ export default {
     /** 方块替换按钮在方块列表区，文案因此归 stats */
     replace: "方块替换",
     hint: "数量按建造所需的物品折算：水与岩浆只算源头一个桶、门与床只算一次、双层台阶算两个，摆法差异（墙上的火把等）与同一物品合为一行；点击任意行可以把它设为方块替换的源方块，表头可拖动调整列宽",
+    hintSplit:
+      "每种方块状态单独一行，数量是处于该状态的方块数（替换规则正是按状态匹配，这就是这条规则会命中的数量）；点任意行可以把它设为替换源",
     noIcon: "无图",
     noBlocks: "选择投影文件后显示方块统计",
     noEntitiesSelected: "选择投影文件后显示实体统计",

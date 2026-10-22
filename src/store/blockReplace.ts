@@ -40,7 +40,12 @@ export interface BlockReplaceDeps {
 }
 
 export function createBlockReplaceSlice(s: BlockReplaceDeps) {
-  const activeBlock = ref<{ name: string } | null>(null);
+  /** 方块表里当前选中的那一行。
+   *
+   * 存行键而不是方块名：按物品合计时同一个方块名可能出现在两行里
+   * （带花的花盆既是「花盆」也是「植物」），只比名字会让两行同时高亮。
+   */
+  const activeBlock = ref<{ key: string; name: string } | null>(null);
 
   // 方块替换
   const replaceOpen = ref(false);
@@ -325,7 +330,7 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
     // 状态串形如 minecraft:oak_stairs[facing=east,half=top]
     const m = /^([^[\]]+)\[([^\]]*)\]\s*$/.exec(rec.state ?? "");
     const blockName = m ? m[1] : rec.state;
-    activeBlock.value = { name: blockName };
+    activeBlock.value = { key: rec.key, name: blockName };
     replaceForm.value.fromName = blockName;
     const single = rec.forms.length === 1 && rec.stateCount === 1;
     replaceForm.value.fromPropsText = single && m ? m[2] : "";

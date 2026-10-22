@@ -406,6 +406,11 @@ const enUS: typeof zhCN = {
     loadVersionsFailed: "Failed to read the version list: {error}",
   },
   stats: {
+    distinguish: "Split states",
+    distinguishTitle:
+      "When on, every block state gets its own row and the state column is shown; when off, rows are folded by item and the state column is hidden",
+    mergedFormsShort: " ({count} forms)",
+    mergedFormsTitle: "This row merges: {forms}",
     icon: "Render",
     block: "Block",
     entityId: "Entity ID",
@@ -416,8 +421,6 @@ const enUS: typeof zhCN = {
     stateKinds: "State kinds: {value}",
     nonAir: "Non-air blocks: {value}",
     air: "Air blocks: {value}",
-    mergedForms: "({forms} forms, {states} states in total)",
-    mergedStates: "({states} states)",
     copyTable: "Copy table",
     exportTable: "Export table",
     resetWidths: "Reset column widths",
@@ -425,6 +428,8 @@ const enUS: typeof zhCN = {
     /** 方块替换按钮在方块列表区，文案因此归 stats */
     replace: "Block replacement",
     hint: "Counts are folded into the items needed to build it: water and lava count only the single source bucket, doors and beds count once, double slabs count twice, and placement variants (wall torches and the like) are merged into the same item as one row; click any row to set it as the source block for block replacement, and drag table headers to resize columns",
+    hintSplit:
+      "Every block state gets its own row and the count is the number of blocks in that state (replacement rules match by exact state, so this is how many blocks the rule would hit); click any row to set it as the replacement source",
     noIcon: "No icon",
     noBlocks: "Select a schematic to see block statistics",
     noEntitiesSelected: "Select a schematic to see entity statistics",
