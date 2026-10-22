@@ -476,7 +476,7 @@ fn unresolvable_or_unregistered_texture_returns_none() {
 // ---- resolve_face_texture_path：产品实际走的那条路径 ----
 //
 // 上面那组测试针对 resolve_face_texture，它多一层字符串池查表；
-// 而 pack_build 与 collect_texture_paths 走的是不带池的
+// 而 pack::build 与 collect_texture_paths 走的是不带池的
 // resolve_face_texture_path。此前它只有间接覆盖，这里直接测。
 
 #[test]

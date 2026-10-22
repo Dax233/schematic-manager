@@ -104,7 +104,6 @@ fn no_texture(_p: &str) -> Option<(u16, u16, Vec<u8>)> {
     None
 }
 
-
 /// 直接验证贴图登记本身（不经主流程），便于定位失败环节
 #[test]
 fn intern_texture_registers_for_existing_entry() {
@@ -145,7 +144,6 @@ fn intern_texture_uses_injected_loader() {
     );
     assert_eq!(textures.len(), 1, "注入的加载器应被采用");
 }
-
 
 /// tiny_png 生成的字节必须能被 png::decode 解出。
 /// 若这条失败，说明是测试助手构造的 PNG 有问题，而不是产线代码。

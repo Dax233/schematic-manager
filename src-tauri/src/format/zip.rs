@@ -61,7 +61,6 @@ impl Archive {
     pub fn find(&self, name: &str) -> Option<&Entry> {
         self.entries.iter().find(|e| e.name == name)
     }
-
 }
 
 fn u16le(b: &[u8], off: usize) -> u16 {

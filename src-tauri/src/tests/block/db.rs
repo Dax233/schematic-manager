@@ -347,7 +347,6 @@ fn decompress_does_not_misread_plain_bytes_as_zlib() {
     assert_eq!(BlockDb::decompress(raw).unwrap(), raw, "头校验不通过应按未压缩处理");
 }
 
-
 // ---- 叠加包合并 ----
 
 /// 造一个最小可用的库：一个基础版本 + 一张贴图 + 一个模型 + 一个方块
@@ -427,7 +426,7 @@ fn merge_offsets_model_texture_string_index() {
 
 /// 语言表**存在但为空**是合法状态，合并不应报错。
 ///
-/// 运行期新建的资源包就是这样：pack_build 会放一张空语言表
+/// 运行期新建的资源包就是这样：pack::build 会放一张空语言表
 /// （没有译名，但下标有效）。语言表越界校验若把「表是空的」误判成
 /// 「下标越界」，这类包就再也合并不进来。
 #[test]

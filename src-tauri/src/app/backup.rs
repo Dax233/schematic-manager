@@ -268,7 +268,6 @@ pub fn relink(root: &Path, old: &Path, new: &Path) -> AppResult<usize> {
     Ok(relinked)
 }
 
-
 /// 一条备份记录
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackupEntry {

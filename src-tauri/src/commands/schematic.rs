@@ -7,7 +7,6 @@ use super::dto::{SchematicSummary, BlockCount, EntityCount, EntityInstanceDto, S
 use super::shared::{SCAN_MAX_DEPTH, SkipReport, collect_litematics, exe_dir, open_db};
 use std::path::{Path, PathBuf};
 
-
 /// 由内部摘要转换为对前端的契约
 fn to_dto(s: Summary) -> SchematicSummary {
     let p = PathBuf::from(&s.path);

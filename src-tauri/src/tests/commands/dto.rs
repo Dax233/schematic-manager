@@ -16,7 +16,7 @@ fn keys(v: &serde_json::Value) -> Vec<String> {
 ///
 /// 两端都排序：手写顺序极易出错，例如 `failedBlocks` 是
 /// `failedBlockstates` 的前缀、排序时在前，而按业务语序写就会写成
-/// 相反的顺序。这类错误只在 CI 才暴露（本地 check 不编译 cfg(test)）。
+/// 相反的顺序；这里按排序后的集合断言，顺序写错不会成为漏网之鱼。
 fn assert_keys(v: &serde_json::Value, expected: &[&str]) {
     let mut want: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
     want.sort();

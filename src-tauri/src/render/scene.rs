@@ -92,9 +92,6 @@ pub struct SceneData {
     pub unresolved_blocks: usize,
 }
 
-impl SceneData {
-}
-
 /// 取一张贴图的 RGBA 像素。越界或长度不足时返回 None。
 pub(crate) fn texture_rgba(db: &BlockDb, idx: u32) -> Option<Vec<u8>> {
     let t: &TextureInfo = db.textures.get(idx as usize)?;

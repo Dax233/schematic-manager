@@ -158,9 +158,6 @@ pub struct VersionDef {
     pub is_overlay: bool,
 }
 
-impl VersionDef {
-}
-
 /// 解析器。所有读取都做边界检查，损坏数据返回错误而不是越界。
 struct BinReader<'a> {
     data: &'a [u8],
@@ -675,7 +672,7 @@ impl BlockDb {
         for v in &other.versions {
             let mut v = v.clone();
             // 语言表要重新取出：读取端就是按 lang_idx 从语言表池里取的，
-            // 只平移下标而不重挂，display_name 会拿不到中文名。
+            // 只平移下标而不重挂，按 lang_idx 取名的调用方会拿不到中文名。
             //
             // 必须用**平移前**的原始下标去 other.langs 里取，不能先加法再
             // 反向减回来：那样一旦 lang_idx 极大，saturating_add 会饱和到

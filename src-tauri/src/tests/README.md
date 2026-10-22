@@ -3,6 +3,8 @@
 本目录存放 Rust 侧的单元测试，按 `src-tauri/src/` 的包结构一一对应分文件
 （例如 `src/block/db.rs` 的测试在 `src/tests/block/db.rs`）。
 
+当前规模：46 个测试文件、607 项测试，其中 21 项标了 `#[ignore]` 按需运行。
+
 测试文件本身是各模块 `mod tests` 的本体：源码里只保留一处挂载声明，
 
 ```rust

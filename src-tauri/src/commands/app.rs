@@ -4,7 +4,6 @@ use crate::app::open_url;
 use crate::app::update;
 use super::dto::UpdateInfoDto;
 
-
 /// 当前可执行文件的版本号。
 ///
 /// 取自编译进二进制的包版本，而不是界面里的常量：CI 在构建前会把版本号写进

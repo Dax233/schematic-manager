@@ -2,7 +2,6 @@
 
 use super::state::{read_ui_state_file, ui_state_path};
 
-
 /// 读取运行日志，由新到旧。
 #[tauri::command]
 pub fn read_run_log(max_lines: Option<usize>) -> Vec<String> {

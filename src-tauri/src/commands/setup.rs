@@ -6,7 +6,6 @@ use super::shared::{open_entity_db, invalidate_db, invalidate_entity_db};
 use super::state::{read_ui_state_file, write_ui_state_file, config_dir};
 use std::path::{Path, PathBuf};
 
-
 // ---------------------------------------------------------------- 版本库（基础库补全）
 
 /// 「版本库」界面状态文件名。内容是前端自己解释的 JSON

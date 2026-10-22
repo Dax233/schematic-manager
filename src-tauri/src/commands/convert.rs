@@ -4,7 +4,6 @@ use super::dto::{ConvertItemDto, ConvertTargetDto, ConvertOutcomeDto};
 use super::shared::open_db;
 use std::path::Path;
 
-
 /// 列出可作为转换目标的版本
 #[tauri::command]
 pub fn convert_targets(app: tauri::AppHandle, schematic_path: String) -> Result<Vec<ConvertTargetDto>, String> {

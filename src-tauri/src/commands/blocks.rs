@@ -7,7 +7,6 @@ use super::dto::{EntityTextureStatusDto, EntityTextureDto, ReplaceRuleDto, Repla
 use super::shared::{exe_dir, open_db, open_entity_db};
 use std::path::Path;
 
-
 /// 一次最多渲染多少张方块图。
 ///
 /// 前端一页 50 行、按 128 一批请求，正常远低于这个数；

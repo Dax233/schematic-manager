@@ -39,7 +39,6 @@ fn db_with(block: BlockDef, version_name: &str, data_version: i32) -> BlockDb {
     }
 }
 
-
 /// 默认值必须取「首次出现」的值，而不是字典序最小的值。
 ///
 /// 这里刻意让两者不同：facing 的取值域排序后以 east 开头，

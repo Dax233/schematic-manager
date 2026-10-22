@@ -239,7 +239,6 @@ fn write_string(out: &mut Vec<u8>, s: &str) -> AppResult<()> {
     Ok(())
 }
 
-
 // ---------------------------------------------------------------- 读取
 
 struct Reader<'a> {

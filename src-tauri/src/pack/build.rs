@@ -420,7 +420,6 @@ where
         is_overlay,
     };
 
-
     let db = BlockDb {
         strings: strings.items.clone(),
         langs: vec![lang_entries],

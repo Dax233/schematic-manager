@@ -87,7 +87,6 @@ impl<T> ContentPool<T> {
     pub fn items(&self) -> &[T] {
         &self.items
     }
-
 }
 
 /// 把模型编码成用于去重的字节串。

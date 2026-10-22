@@ -5,7 +5,6 @@ use super::shared::{SCAN_MAX_DEPTH, SkipReport, collect_litematics};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-
 /// 在一个或多个目录下筛查内容重复的投影文件。
 ///
 /// 递归遍历子目录，用的是文件列表那套收集逻辑与同一个层数上限，因此
