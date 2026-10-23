@@ -39,11 +39,45 @@ fn remove_default(value: &mut Value, key: &str, expected: f64, path: &str) -> Ap
     Ok(())
 }
 
+fn attributes(value: &Value, path: &str) -> AppResult<Value> {
+    let entries = value.as_list().ok_or_else(|| invalid(path, "属性应为列表"))?;
+    let mut result = Vec::new();
+    let mut names = std::collections::BTreeSet::new();
+    for (i, entry) in entries.iter().enumerate() {
+        let path = format!("{path}[{i}]");
+        let Value::Compound(fields) = entry else { return Err(invalid(&path, "属性应为复合标签")); };
+        if fields.iter().any(|(key, _)| !matches!(key.as_str(), "id" | "base" | "modifiers")) {
+            return Err(invalid(&path, "属性含有尚不能迁移的字段"));
+        }
+        if let Some(modifiers) = entry.get("modifiers") {
+            if !modifiers.as_list().is_some_and(|v| v.is_empty()) {
+                return Err(invalid(&path, "实体属性修饰符尚不能等价转换为 1.20.4"));
+            }
+        }
+        let id = entry.get("id").and_then(Value::as_str).ok_or_else(|| invalid(&path, "属性缺少 id"))?;
+        let name = id.strip_prefix("minecraft:").unwrap_or(id);
+        let old_name = include_str!("../data/attributes-1.20.4.txt").lines().find(|known| {
+            // 新版 jump_strength 适用于更多实体，不能仅凭名称还原成马专用属性。
+            *known == name || (*known != "horse.jump_strength" && !name.contains('.')
+                && known.split_once('.').is_some_and(|(_, suffix)| suffix == name))
+        }).ok_or_else(|| invalid(&path, &format!("目标版本不存在属性 {id}")))?;
+        if !names.insert(old_name) { return Err(invalid(&path, "属性重复")); }
+        let base = entry.get("base").and_then(Value::as_f64).filter(|v| v.is_finite())
+            .ok_or_else(|| invalid(&path, "属性缺少有限的基础数值"))?;
+        result.push(Value::Compound(vec![
+            ("Name".into(), Value::String(format!("minecraft:{old_name}"))),
+            ("Base".into(), Value::Double(base)),
+        ]));
+    }
+    Ok(Value::List(result, 10))
+}
+
 /// 还原字段名称、数字类型及船类型；不迁移物品或任意自定义数据。
 pub fn downgrade(value: &mut Value, path: &str) -> AppResult<()> {
-    if let Some(attributes) = value.get("attributes") {
-        if !attributes.as_list().is_some_and(|items| items.is_empty()) {
-            return Err(invalid(&format!("{path}/attributes"), "新版实体属性及修饰符尚不能等价转换为 1.20.4"));
+    if let Some(data) = value.get("attributes") {
+        let converted = attributes(data, &format!("{path}/attributes"))?;
+        if !converted.as_list().unwrap().is_empty() || value.get("Attributes").is_some() {
+            assign(value, "Attributes", converted, path)?;
         }
         remove(value, "attributes");
     }
@@ -136,6 +170,35 @@ pub fn validate_type(value: &Value, path: &str) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base_attributes_keep_values_and_reject_modifiers_and_unknown_names() {
+        for name in ["minecraft:generic.movement_speed", "minecraft:movement_speed"] {
+            let attr = Value::Compound(vec![("id".into(), Value::String(name.into())), ("base".into(), Value::Double(0.7))]);
+            let mut entity = c("armor_stand", vec![("attributes", Value::List(vec![attr], 10))]);
+            downgrade(&mut entity, "stand").unwrap();
+            let attr = &entity.get("Attributes").unwrap().as_list().unwrap()[0];
+            assert_eq!(attr.get("Name"), Some(&Value::String("minecraft:generic.movement_speed".into())));
+            assert_eq!(attr.get("Base"), Some(&Value::Double(0.7)));
+            assert!(entity.get("attributes").is_none());
+        }
+        for name in ["minecraft:generic.jump_strength", "minecraft:jump_strength"] {
+            let mut entity = c("armor_stand", vec![("attributes", Value::List(vec![Value::Compound(vec![
+                ("id".into(), Value::String(name.into())), ("base".into(), Value::Double(0.8)),
+            ])], 10))]);
+            assert!(downgrade(&mut entity, "stand").is_err());
+        }
+        let mut conflict = c("armor_stand", vec![
+            ("attributes", Value::List(vec![], 10)),
+            ("Attributes", Value::List(vec![Value::Compound(vec![])], 10)),
+        ]);
+        assert!(downgrade(&mut conflict, "conflict").is_err());
+        for name in ["minecraft:generic.movement_speed", "minecraft:scale"] {
+            let mut attr = Value::Compound(vec![("id".into(), Value::String(name.into())), ("base".into(), Value::Double(0.7))]);
+            if name.contains("movement_speed") { attr.set("modifiers", Value::List(vec![Value::Compound(vec![])], 10)); }
+            assert!(downgrade(&mut c("armor_stand", vec![("attributes", Value::List(vec![attr], 10))]), "stand").is_err());
+        }
+    }
 
     fn c(id: &str, fields: Vec<(&str, Value)>) -> Value {
         let mut value = Value::Compound(fields.into_iter().map(|(k, v)| (k.into(), v)).collect());

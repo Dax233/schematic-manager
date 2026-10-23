@@ -147,18 +147,66 @@ fn enchantments(value: &Value, path: &str) -> AppResult<Value> {
     }
     let levels = value.get("levels").ok_or_else(|| invalid(path, "缺少 levels"))?;
     let mut result = Vec::new();
+    let mut ids = std::collections::BTreeSet::new();
     for (id, level) in compound(levels, path)? {
+        let id = if id == "minecraft:sweeping_edge" { "minecraft:sweeping" } else { id.as_str() };
         if !known_id(id, include_str!("../data/enchantments-1.20.4.txt")) {
             return Err(invalid(path, &format!("目标版本不存在附魔 {id}")));
         }
+        if !ids.insert(id) { return Err(invalid(path, "附魔映射后名称重复")); }
         let level = level.as_i64().and_then(|v| i16::try_from(v).ok())
             .ok_or_else(|| invalid(path, "附魔等级超出旧版范围"))?;
         result.push(Value::Compound(vec![
-            ("id".into(), Value::String(id.clone())),
+            ("id".into(), Value::String(id.into())),
             ("lvl".into(), Value::Short(level)),
         ]));
     }
     Ok(Value::List(result, 10))
+}
+
+fn unbreakable(value: &Value, tag: &mut Value, path: &str) -> AppResult<()> {
+    if compound(value, path)?.iter().any(|(key, _)| key != "show_in_tooltip") {
+        return Err(invalid(path, "不可破坏组件含有尚不能迁移的字段"));
+    }
+    let show = match value.get("show_in_tooltip") {
+        None | Some(Value::Byte(1)) => true,
+        Some(Value::Byte(0)) => false,
+        _ => return Err(invalid(path, "提示标记应为布尔值")),
+    };
+    let flags = tag.get("HideFlags").map(|v| v.as_i64().and_then(|v| i32::try_from(v).ok())
+        .ok_or_else(|| invalid(path, "HideFlags 应为32位整数"))).transpose()?.unwrap_or(0);
+    if show && flags & 4 != 0 { return Err(invalid(path, "不可破坏提示与旧 HideFlags 冲突")); }
+    insert(tag, "Unbreakable", Value::Byte(1), path)?;
+    if !show { tag.set("HideFlags", Value::Int(flags | 4)); }
+    Ok(())
+}
+
+fn writable_book(value: &Value, tag: &mut Value, path: &str) -> AppResult<()> {
+    if compound(value, path)?.iter().any(|(key, _)| key != "pages") {
+        return Err(invalid(path, "书与笔含有尚不能迁移的字段"));
+    }
+    let mut pages = Vec::new();
+    let mut filtered = Value::Compound(vec![]);
+    if let Some(values) = value.get("pages") {
+        for (i, page) in list(values, path)?.iter().enumerate() {
+            let path = format!("{path}/pages[{i}]");
+            if let Value::String(_) = page { pages.push(page.clone()); continue; }
+            if compound(page, &path)?.iter().any(|(key, _)| key != "raw" && key != "filtered") {
+                return Err(invalid(&path, "书页含有尚不能迁移的字段"));
+            }
+            let raw = page.get("raw").filter(|v| v.as_str().is_some()).ok_or_else(|| invalid(&path, "书页缺少原始文本"))?;
+            pages.push(raw.clone());
+            if let Some(text) = page.get("filtered") {
+                if text.as_str().is_none() { return Err(invalid(&path, "过滤后书页应为文本")); }
+                filtered.set(&i.to_string(), text.clone());
+            }
+        }
+    }
+    insert(tag, "pages", Value::List(pages, 8), path)?;
+    if !compound(&filtered, path)?.is_empty() || tag.get("filtered_pages").is_some() {
+        insert(tag, "filtered_pages", filtered, path)?;
+    }
+    Ok(())
 }
 
 fn custom_model_data(value: &Value, path: &str) -> AppResult<Value> {
@@ -219,6 +267,8 @@ fn components(value: &Value, tag: &mut Value, path: &str, migration: &mut Migrat
         let path = format!("{path}/{name}");
         match name.as_str() {
             "minecraft:custom_data" => {}
+            "minecraft:unbreakable" => unbreakable(value, tag, &path)?,
+            "minecraft:writable_book_content" => writable_book(value, tag, &path)?,
             "minecraft:custom_name" => {
                 if value.as_str().is_none() {
                     return Err(invalid(&path, "自定义名称应为 JSON 字符串"));
@@ -444,6 +494,57 @@ pub fn prepare(root: &Value, source: i32, target: i32) -> AppResult<Option<Prepa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sword_keeps_unbreakable_and_sweeping_level() {
+        let mut item = stack("minecraft:netherite_sword", 1, c(vec![
+            ("minecraft:unbreakable", c(vec![])),
+            ("minecraft:enchantments", c(vec![("levels", c(vec![("minecraft:sweeping_edge", Value::Int(3))]))])),
+        ]));
+        downgrade_item(&mut item, "sword").unwrap();
+        let tag = item.get("tag").unwrap();
+        assert_eq!(tag.get("Unbreakable"), Some(&Value::Byte(1)));
+        assert_eq!(tag.get("Enchantments"), Some(&Value::List(vec![c(vec![
+            ("id", text("minecraft:sweeping")), ("lvl", Value::Short(3)),
+        ])], 10)));
+        let mut hidden = stack("minecraft:stone", 1, c(vec![
+            ("minecraft:custom_data", c(vec![("HideFlags", Value::Int(1))])),
+            ("minecraft:unbreakable", c(vec![("show_in_tooltip", Value::Byte(0))])),
+        ]));
+        downgrade_item(&mut hidden, "hidden").unwrap();
+        assert_eq!(hidden.get("tag").unwrap().get("HideFlags"), Some(&Value::Int(5)));
+    }
+
+    #[test]
+    fn writable_pages_keep_plain_text_line_breaks_and_filtered_variants() {
+        let mut book = stack("minecraft:writable_book", 1, c(vec![
+            ("minecraft:writable_book_content", c(vec![("pages", Value::List(vec![
+                c(vec![("raw", text("说明\n11gt攻击")), ("filtered", text("说明\n过滤文本"))]),
+                c(vec![("raw", text("How to stop\nStop spawning."))]),
+            ], 10))])),
+        ]));
+        downgrade_item(&mut book, "book").unwrap();
+        let tag = book.get("tag").unwrap();
+        assert_eq!(tag.get("pages"), Some(&Value::List(vec![text("说明\n11gt攻击"), text("How to stop\nStop spawning.")], 8)));
+        assert_eq!(tag.get("filtered_pages"), Some(&c(vec![("0", text("说明\n过滤文本"))])));
+    }
+
+    #[test]
+    fn conflicting_book_or_unbreakable_data_rejects_without_changing_root() {
+        for data in [
+            c(vec![("minecraft:unbreakable", c(vec![])), ("minecraft:custom_data", c(vec![("Unbreakable", Value::Byte(0))]))]),
+            c(vec![("minecraft:writable_book_content", c(vec![("pages", Value::List(vec![c(vec![("raw", text("new"))])], 10))])),
+                ("minecraft:custom_data", c(vec![("pages", Value::List(vec![text("old")], 8))]))]),
+            c(vec![("minecraft:enchantments", c(vec![("levels", c(vec![("minecraft:sweeping", Value::Int(2)), ("minecraft:sweeping_edge", Value::Int(3))]))]))]),
+            c(vec![("minecraft:writable_book_content", c(vec![("pages", Value::List(vec![c(vec![("raw", text("new"))])], 10))])),
+                ("minecraft:custom_data", c(vec![("filtered_pages", c(vec![("0", text("old filtered"))]))]))]),
+        ] {
+            let input = root(vec![c(vec![("Items", Value::List(vec![stack("minecraft:stone", 1, data)], 10))])]);
+            let before = input.clone();
+            assert!(prepare(&input, 3953, 3700).is_err());
+            assert_eq!(input, before);
+        }
+    }
     fn downgrade_item(value: &mut Value, path: &str) -> AppResult<()> {
         super::downgrade_item(value, path, &mut Migration::default())
     }

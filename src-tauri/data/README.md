@@ -20,12 +20,19 @@
 [1.21.2](https://www.minecraft.net/en-us/article/minecraft-java-edition-1-21-2)、
 [1.21.4](https://www.minecraft.net/en-us/article/minecraft-java-edition-1-21-4) 更新说明：
 迁移熔炉计时、TNT 矿车引信、原有材质的船类型和可表示为整数的模型数据；
-新版非空实体属性、火球加速度、新版容器锁、燃烧中的熔炉总时长、非默认 TNT 行为和多通道模型数据不作有损近似。
+新版实体属性修饰符、火球加速度、新版容器锁、燃烧中的熔炉总时长、非默认 TNT 行为和多通道模型数据不作有损近似。
 对 1.20.5 起改名或改结构但尚未支持的旗帜图案、头颅档案、蜂巢、药水实体、坐标和拴绳字段，
 也会按字段路径拒绝；刷怪笼的实体子树递归迁移，新装备战利品表拒绝。
 这些变化依据 [1.20.5 更新说明](https://www.minecraft.net/en-us/article/minecraft-java-edition-1-20-5)。
 方块实体中的 `minecraft:custom_data` 仅作为任意元数据保留，不用其中的历史备份覆盖当前库存；
 其他方块实体组件拒绝。输出文件保留这些元数据不表示 1.20.4 游戏加载、再保存后仍会保留它们。
+
+`attributes-1.20.4.txt` 来自同版本的
+[属性注册表](https://github.com/misode/mcmeta/blob/1.20.4-registries/attribute/data.json)。
+无修饰符的基础属性还原为 `Attributes/Name/Base`；1.21.2 起省略的属性类型前缀由目标清单恢复，
+不存在的属性仍拒绝。物品保留不可破坏标记及提示显隐（合并 `HideFlags` 的位4），
+将 `sweeping_edge` 还原为旧附魔 `sweeping`，将书与笔的原始/过滤后页面还原为
+`pages/filtered_pages`，不解析或改写纯文本内容。以上处理不扩大源、目标版本范围。
 
 ## 方块注册与状态信息
 
