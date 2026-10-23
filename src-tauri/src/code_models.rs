@@ -385,6 +385,7 @@ pub fn variants_of(block: &str) -> Option<Vec<CodeVariant>> {
 
     // 头颅：方块名形如 <类型>_head（僵尸、玩家）/ <类型>_skull（骷髅、苦力怕）
     if let Some(kind) = short.strip_suffix("_head").or_else(|| short.strip_suffix("_skull")) {
+        let (kind, wall) = kind.strip_suffix("_wall").map(|kind| (kind, true)).unwrap_or((kind, false));
         // 贴图与像素尺寸按类型区分：玩家的头贴图是 64×64，骷髅一类是 64×32，
         // 尺寸不同则同一个 8×8×8 头方块对应的展开区域也不同。
         let (texture, px) = match kind {
@@ -396,8 +397,10 @@ pub fn variants_of(block: &str) -> Option<Vec<CodeVariant>> {
             // 龙首与猪灵头不是简单的立方体（有长吻与耳朵），不在此列
             _ => return None,
         };
-        // 地面头颅 16 档旋转；墙上的另有 facing
-        let mut out = floor_rotation_variants(&skull_element(texture, px, false));
+        if !wall {
+            return Some(floor_rotation_variants(&skull_element(texture, px, false)));
+        }
+        let mut out = Vec::new();
         for (i, facing) in ["north", "east", "south", "west"].iter().enumerate() {
             out.push(CodeVariant {
                 when: format!("facing={facing}"),
@@ -838,8 +841,9 @@ mod tests {
         assert_eq!(up_uv("minecraft:skeleton_skull"), [4.0, 0.0, 6.0, 4.0]);
 
         let skull = variants_of("minecraft:skeleton_skull").unwrap();
-        assert_eq!(skull.len(), 20, "地面 16 档朝向 + 墙上 4 个朝向");
-        let wall = skull.iter().find(|v| v.when == "facing=north").unwrap();
+        assert!(skull.iter().all(|v| v.when.starts_with("rotation=")));
+        let walls = variants_of("minecraft:skeleton_wall_skull").unwrap();
+        let wall = walls.iter().find(|v| v.when == "facing=north").unwrap();
         assert_eq!(wall.elements[0].from[1], 4.0, "墙上的头挂在半空");
         // 龙首与猪灵头不是立方体，不接管
         assert!(variants_of("minecraft:dragon_head").is_none());

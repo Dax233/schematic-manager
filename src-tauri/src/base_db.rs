@@ -155,6 +155,9 @@ pub fn load_base_block_db(dir: &Path) -> AppResult<(BlockDb, Vec<(String, String
             Err(e) => failures.push((name, format!("载入失败：{e}"))),
         }
     }
+    for version in &mut db.versions {
+        crate::block_registry::complete_names(version);
+    }
     Ok((db, failures))
 }
 
@@ -465,6 +468,23 @@ mod tests {
         e.write_all(&raw).expect("压缩失败");
         let packed = e.finish().expect("压缩失败");
         std::fs::write(dir.join(name), packed).expect("写 pack 失败");
+    }
+
+    #[test]
+    fn cached_base_pack_recovers_special_block_names_without_rewriting_file() {
+        let dir = test_dir("registry");
+        write_pack(&dir, "3700-1.20.4.dat.z", 3700, "1.20.4");
+        let path = dir.join("3700-1.20.4.dat.z");
+        let before = std::fs::read(&path).unwrap();
+        let (db, failures) = load_base_block_db(&dir).unwrap();
+        assert!(failures.is_empty());
+        for name in ["water", "lava", "bubble_column", "wither_skeleton_wall_skull", "birch_wall_sign"] {
+            let block = db.versions[0].blocks.iter().find(|block| block.name == format!("minecraft:{name}")).unwrap();
+            assert!(block.variants.is_empty(), "注册信息不制造模型");
+        }
+        assert!(!db.versions[0].blocks.iter().any(|block| block.name == "minecraft:pale_oak_wall_sign"));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

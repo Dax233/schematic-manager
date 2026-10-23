@@ -46,7 +46,7 @@ pub struct BuildStats {
     pub langs: usize,
     /// 解析失败而被跳过的 blockstate 数
     pub failed_blockstates: usize,
-    /// 因无法解析模型而被跳过的方块数
+    /// 已登记方块但没有可用模型的数量
     pub failed_blocks: usize,
 }
 
@@ -335,6 +335,7 @@ where
             }
             if resolved.is_empty() {
                 stats.failed_blocks += 1;
+                blocks.push(BlockDef { name: qualified, variants: Vec::new(), multipart: Vec::new() });
                 continue;
             }
 
@@ -373,7 +374,6 @@ where
             }
             if variants.is_empty() && multipart.is_empty() {
                 stats.failed_blocks += 1;
-                continue;
             }
             strings.intern(&qualified);
             blocks.push(BlockDef { name: qualified, variants, multipart });
@@ -1261,15 +1261,38 @@ mod tests {
     }
 
     #[test]
-    fn missing_model_marks_block_failed() {
+    fn missing_model_keeps_registered_block_without_geometry() {
         // blockstate 引用了不存在的模型
         let mut jar = FakeJar::new();
         jar.add(
             "assets/minecraft/blockstates/ghost.json",
             r##"{"variants":{"":{"model":"block/ghost"}}}"##,
         );
-        let e = build(&jar, "test", 0, false, no_texture).unwrap_err().to_string();
-        assert!(e.contains("没有解析出任何方块"), "模型缺失应导致该方块被跳过：{e}");
+        let built = build(&jar, "test", 0, false, no_texture).unwrap();
+        assert_eq!(built.stats.failed_blocks, 1);
+        let db = BlockDb::load_from_bytes(&built.data, false).unwrap();
+        assert_eq!(db.versions[0].blocks[0].name, "minecraft:ghost");
+        assert!(db.versions[0].blocks[0].variants.is_empty());
+    }
+
+    #[test]
+    fn special_rendered_blocks_survive_pack_roundtrip() {
+        let mut jar = minimal_jar();
+        for name in ["water", "lava", "bubble_column"] {
+            jar.add(&format!("assets/minecraft/blockstates/{name}.json"),
+                r#"{"variants":{"":{"model":"block/special"}}}"#);
+        }
+        jar.add("assets/minecraft/models/block/special.json", r#"{"textures":{}}"#);
+        jar.add("assets/minecraft/blockstates/wither_skeleton_wall_skull.json",
+            r#"{"variants":{"":{"model":"block/skull"}}}"#);
+        let built = build(&jar, "test", 0, false, no_texture).unwrap();
+        let db = BlockDb::load_from_bytes(&built.data, false).unwrap();
+        let blocks = &db.versions[0].blocks;
+        for name in ["water", "lava", "bubble_column", "wither_skeleton_wall_skull"] {
+            assert!(blocks.iter().any(|block| block.name == format!("minecraft:{name}")));
+        }
+        let skull = blocks.iter().find(|block| block.name == "minecraft:wither_skeleton_wall_skull").unwrap();
+        assert!(skull.variants.iter().any(|variant| variant.when == "facing=west"));
     }
 
     #[test]

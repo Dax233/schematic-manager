@@ -1,0 +1,674 @@
+[
+  {
+    "data_version": 1952,
+    "version": "1.14",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.14-registries/block/data.json",
+        "sha256": "786623e7587a80d7032e4b963ee04666a4e3738ec083500d6314d1e62f2253fc"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.14-summary/blocks/data.json",
+        "sha256": "80458ca4e57efbdb6daef11045a79c4e64c6611b61e0f051051bbceb5b011672"
+      }
+    ]
+  },
+  {
+    "data_version": 1957,
+    "version": "1.14.1",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.14.1-registries/block/data.json",
+        "sha256": "786623e7587a80d7032e4b963ee04666a4e3738ec083500d6314d1e62f2253fc"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.14.1-summary/blocks/data.json",
+        "sha256": "80458ca4e57efbdb6daef11045a79c4e64c6611b61e0f051051bbceb5b011672"
+      }
+    ]
+  },
+  {
+    "data_version": 1963,
+    "version": "1.14.2",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.14.2-registries/block/data.json",
+        "sha256": "786623e7587a80d7032e4b963ee04666a4e3738ec083500d6314d1e62f2253fc"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.14.2-summary/blocks/data.json",
+        "sha256": "80458ca4e57efbdb6daef11045a79c4e64c6611b61e0f051051bbceb5b011672"
+      }
+    ]
+  },
+  {
+    "data_version": 1968,
+    "version": "1.14.3",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.14.3-registries/block/data.json",
+        "sha256": "786623e7587a80d7032e4b963ee04666a4e3738ec083500d6314d1e62f2253fc"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.14.3-summary/blocks/data.json",
+        "sha256": "80458ca4e57efbdb6daef11045a79c4e64c6611b61e0f051051bbceb5b011672"
+      }
+    ]
+  },
+  {
+    "data_version": 1976,
+    "version": "1.14.4",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.14.4-registries/block/data.json",
+        "sha256": "786623e7587a80d7032e4b963ee04666a4e3738ec083500d6314d1e62f2253fc"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.14.4-summary/blocks/data.json",
+        "sha256": "80458ca4e57efbdb6daef11045a79c4e64c6611b61e0f051051bbceb5b011672"
+      }
+    ]
+  },
+  {
+    "data_version": 2225,
+    "version": "1.15",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.15-registries/block/data.json",
+        "sha256": "e88eb4e580a7dff6fedeb935ec31a5a80602290876df25739e154a488118c29f"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.15-summary/blocks/data.json",
+        "sha256": "d57715e39a647874edbbdeb36ac1c96144d3385ef411a12c2d96496e94156a05"
+      }
+    ]
+  },
+  {
+    "data_version": 2227,
+    "version": "1.15.1",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.15.1-registries/block/data.json",
+        "sha256": "e88eb4e580a7dff6fedeb935ec31a5a80602290876df25739e154a488118c29f"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.15.1-summary/blocks/data.json",
+        "sha256": "d57715e39a647874edbbdeb36ac1c96144d3385ef411a12c2d96496e94156a05"
+      }
+    ]
+  },
+  {
+    "data_version": 2230,
+    "version": "1.15.2",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.15.2-registries/block/data.json",
+        "sha256": "e88eb4e580a7dff6fedeb935ec31a5a80602290876df25739e154a488118c29f"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.15.2-summary/blocks/data.json",
+        "sha256": "d57715e39a647874edbbdeb36ac1c96144d3385ef411a12c2d96496e94156a05"
+      }
+    ]
+  },
+  {
+    "data_version": 2566,
+    "version": "1.16",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.16-registries/block/data.json",
+        "sha256": "8d612fa7a4f5553eebd31324933ec2d68f2bc408545c8a8fc4e735694e991368"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.16-summary/blocks/data.json",
+        "sha256": "991b30c12c196975b191c7721274718edc2d1d3f5ab98a68048c0023845d13b3"
+      }
+    ]
+  },
+  {
+    "data_version": 2567,
+    "version": "1.16.1",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.16.1-registries/block/data.json",
+        "sha256": "8d612fa7a4f5553eebd31324933ec2d68f2bc408545c8a8fc4e735694e991368"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.16.1-summary/blocks/data.json",
+        "sha256": "991b30c12c196975b191c7721274718edc2d1d3f5ab98a68048c0023845d13b3"
+      }
+    ]
+  },
+  {
+    "data_version": 2578,
+    "version": "1.16.2",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.16.2-registries/block/data.json",
+        "sha256": "8d612fa7a4f5553eebd31324933ec2d68f2bc408545c8a8fc4e735694e991368"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.16.2-summary/blocks/data.json",
+        "sha256": "acdb6d01f40ba3ff5197c0bc39c9642ab79cc3edbba0e93e1ca202239ab73dc6"
+      }
+    ]
+  },
+  {
+    "data_version": 2580,
+    "version": "1.16.3",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.16.3-registries/block/data.json",
+        "sha256": "8d612fa7a4f5553eebd31324933ec2d68f2bc408545c8a8fc4e735694e991368"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.16.3-summary/blocks/data.json",
+        "sha256": "acdb6d01f40ba3ff5197c0bc39c9642ab79cc3edbba0e93e1ca202239ab73dc6"
+      }
+    ]
+  },
+  {
+    "data_version": 2584,
+    "version": "1.16.4",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.16.4-registries/block/data.json",
+        "sha256": "8d612fa7a4f5553eebd31324933ec2d68f2bc408545c8a8fc4e735694e991368"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.16.4-summary/blocks/data.json",
+        "sha256": "acdb6d01f40ba3ff5197c0bc39c9642ab79cc3edbba0e93e1ca202239ab73dc6"
+      }
+    ]
+  },
+  {
+    "data_version": 2586,
+    "version": "1.16.5",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.16.5-registries/block/data.json",
+        "sha256": "8d612fa7a4f5553eebd31324933ec2d68f2bc408545c8a8fc4e735694e991368"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.16.5-summary/blocks/data.json",
+        "sha256": "acdb6d01f40ba3ff5197c0bc39c9642ab79cc3edbba0e93e1ca202239ab73dc6"
+      }
+    ]
+  },
+  {
+    "data_version": 2724,
+    "version": "1.17",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.17-registries/block/data.json",
+        "sha256": "860a1cb51a68f18f9505d0c3a1302eccdb1891b485af3d0f134d74546f229650"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.17-summary/blocks/data.json",
+        "sha256": "d406121c34a2dc77e7762be10780da2542d794ce55fbff5716cacae7beff5500"
+      }
+    ]
+  },
+  {
+    "data_version": 2730,
+    "version": "1.17.1",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.17.1-registries/block/data.json",
+        "sha256": "860a1cb51a68f18f9505d0c3a1302eccdb1891b485af3d0f134d74546f229650"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.17.1-summary/blocks/data.json",
+        "sha256": "d406121c34a2dc77e7762be10780da2542d794ce55fbff5716cacae7beff5500"
+      }
+    ]
+  },
+  {
+    "data_version": 2860,
+    "version": "1.18",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.18-registries/block/data.json",
+        "sha256": "860a1cb51a68f18f9505d0c3a1302eccdb1891b485af3d0f134d74546f229650"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.18-summary/blocks/data.json",
+        "sha256": "d406121c34a2dc77e7762be10780da2542d794ce55fbff5716cacae7beff5500"
+      }
+    ]
+  },
+  {
+    "data_version": 2865,
+    "version": "1.18.1",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.18.1-registries/block/data.json",
+        "sha256": "860a1cb51a68f18f9505d0c3a1302eccdb1891b485af3d0f134d74546f229650"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.18.1-summary/blocks/data.json",
+        "sha256": "d406121c34a2dc77e7762be10780da2542d794ce55fbff5716cacae7beff5500"
+      }
+    ]
+  },
+  {
+    "data_version": 2975,
+    "version": "1.18.2",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.18.2-registries/block/data.json",
+        "sha256": "860a1cb51a68f18f9505d0c3a1302eccdb1891b485af3d0f134d74546f229650"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.18.2-summary/blocks/data.json",
+        "sha256": "d406121c34a2dc77e7762be10780da2542d794ce55fbff5716cacae7beff5500"
+      }
+    ]
+  },
+  {
+    "data_version": 3105,
+    "version": "1.19",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.19-registries/block/data.json",
+        "sha256": "809e8592484a07b9a9a7674924f7e43efb071a35bcfeff9a77700d178d89c008"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.19-summary/blocks/data.json",
+        "sha256": "c8473945fa4cdf52df7ccc88c1affb152f21ef9232085381d07986d003932c35"
+      }
+    ]
+  },
+  {
+    "data_version": 3117,
+    "version": "1.19.1",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.19.1-registries/block/data.json",
+        "sha256": "809e8592484a07b9a9a7674924f7e43efb071a35bcfeff9a77700d178d89c008"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.19.1-summary/blocks/data.json",
+        "sha256": "c8473945fa4cdf52df7ccc88c1affb152f21ef9232085381d07986d003932c35"
+      }
+    ]
+  },
+  {
+    "data_version": 3120,
+    "version": "1.19.2",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.19.2-registries/block/data.json",
+        "sha256": "809e8592484a07b9a9a7674924f7e43efb071a35bcfeff9a77700d178d89c008"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.19.2-summary/blocks/data.json",
+        "sha256": "c8473945fa4cdf52df7ccc88c1affb152f21ef9232085381d07986d003932c35"
+      }
+    ]
+  },
+  {
+    "data_version": 3218,
+    "version": "1.19.3",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.19.3-registries/block/data.json",
+        "sha256": "a4f5fd4bb85d509db857aedcf56daf8775be2b3738ed7e65441d83d99e72e2c8"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.19.3-summary/blocks/data.json",
+        "sha256": "72b9e74c578c77e3c57a340dba8d2497bbcf0c4f901eee22151cf0e36feb7385"
+      }
+    ]
+  },
+  {
+    "data_version": 3337,
+    "version": "1.19.4",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.19.4-registries/block/data.json",
+        "sha256": "8fe7af7d692e86b2b62d44b5131d80e899f3b0fa638d3c093f2112d05c618a80"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.19.4-summary/blocks/data.json",
+        "sha256": "7c99f975d0222fdc0eb7fa26f8e32bd524f8f27c3caa216bbb77b776b0f909a7"
+      }
+    ]
+  },
+  {
+    "data_version": 3463,
+    "version": "1.20",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.20-registries/block/data.json",
+        "sha256": "d50107c462b64aeb131adc6373b14796ce108bd1d478dfae65c3fd6dfa443c9d"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.20-summary/blocks/data.json",
+        "sha256": "06e99cc190051e09462691db3a0ce4b034f8e78d09279258978a92b98cc74c54"
+      }
+    ]
+  },
+  {
+    "data_version": 3465,
+    "version": "1.20.1",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.20.1-registries/block/data.json",
+        "sha256": "d50107c462b64aeb131adc6373b14796ce108bd1d478dfae65c3fd6dfa443c9d"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.20.1-summary/blocks/data.json",
+        "sha256": "06e99cc190051e09462691db3a0ce4b034f8e78d09279258978a92b98cc74c54"
+      }
+    ]
+  },
+  {
+    "data_version": 3578,
+    "version": "1.20.2",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.20.2-registries/block/data.json",
+        "sha256": "d50107c462b64aeb131adc6373b14796ce108bd1d478dfae65c3fd6dfa443c9d"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.20.2-summary/blocks/data.json",
+        "sha256": "2a8c1376d3ee84b61b10f2334311be1605a1a86dedd19e7b697f865d3c257aaf"
+      }
+    ]
+  },
+  {
+    "data_version": 3698,
+    "version": "1.20.3",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.20.3-registries/block/data.json",
+        "sha256": "5ce2daac9c99bd9443d2439d5bdcd9854296c78fbe6a5c8dababafc632a7fed2"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.20.3-summary/blocks/data.json",
+        "sha256": "92e5d07a5b2340b913754d334d1643452455aa0e4a66101f49c636381b480d75"
+      }
+    ]
+  },
+  {
+    "data_version": 3700,
+    "version": "1.20.4",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.20.4-registries/block/data.json",
+        "sha256": "5ce2daac9c99bd9443d2439d5bdcd9854296c78fbe6a5c8dababafc632a7fed2"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.20.4-summary/blocks/data.json",
+        "sha256": "92e5d07a5b2340b913754d334d1643452455aa0e4a66101f49c636381b480d75"
+      }
+    ]
+  },
+  {
+    "data_version": 3837,
+    "version": "1.20.5",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.20.5-registries/block/data.json",
+        "sha256": "df14a277fb64c47f11b8dfbaecd743ac4b31231840651b0f73dcbf081c317d5e"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.20.5-summary/blocks/data.json",
+        "sha256": "6c4c0d87b27d665b5f52be4edb000a6d83c4a9b2e6c5c9c931ba695a45f8df24"
+      }
+    ]
+  },
+  {
+    "data_version": 3839,
+    "version": "1.20.6",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.20.6-registries/block/data.json",
+        "sha256": "df14a277fb64c47f11b8dfbaecd743ac4b31231840651b0f73dcbf081c317d5e"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.20.6-summary/blocks/data.json",
+        "sha256": "6c4c0d87b27d665b5f52be4edb000a6d83c4a9b2e6c5c9c931ba695a45f8df24"
+      }
+    ]
+  },
+  {
+    "data_version": 3953,
+    "version": "1.21",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21-registries/block/data.json",
+        "sha256": "df14a277fb64c47f11b8dfbaecd743ac4b31231840651b0f73dcbf081c317d5e"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21-summary/blocks/data.json",
+        "sha256": "6c4c0d87b27d665b5f52be4edb000a6d83c4a9b2e6c5c9c931ba695a45f8df24"
+      }
+    ]
+  },
+  {
+    "data_version": 3955,
+    "version": "1.21.1",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.1-registries/block/data.json",
+        "sha256": "df14a277fb64c47f11b8dfbaecd743ac4b31231840651b0f73dcbf081c317d5e"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.1-summary/blocks/data.json",
+        "sha256": "6c4c0d87b27d665b5f52be4edb000a6d83c4a9b2e6c5c9c931ba695a45f8df24"
+      }
+    ]
+  },
+  {
+    "data_version": 4080,
+    "version": "1.21.2",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.2-registries/block/data.json",
+        "sha256": "310ed756b4b7fd73f6cb8b336d77243189af67680e53d8ee99c716a8e41012a8"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.2-summary/blocks/data.json",
+        "sha256": "d8ce8b323c0e7eef1ebc2e7f8bd73140d2391d09fcfa5f72cf9464295ee8c7f5"
+      }
+    ]
+  },
+  {
+    "data_version": 4082,
+    "version": "1.21.3",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.3-registries/block/data.json",
+        "sha256": "310ed756b4b7fd73f6cb8b336d77243189af67680e53d8ee99c716a8e41012a8"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.3-summary/blocks/data.json",
+        "sha256": "d8ce8b323c0e7eef1ebc2e7f8bd73140d2391d09fcfa5f72cf9464295ee8c7f5"
+      }
+    ]
+  },
+  {
+    "data_version": 4189,
+    "version": "1.21.4",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.4-registries/block/data.json",
+        "sha256": "93039a8af335498f34f88a81ece4985025f83cbf3c60e6561bc83ea05cafdf51"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.4-summary/blocks/data.json",
+        "sha256": "660409b3f6899ff3547b731972fa7df2f2c108245e396540a1f86b9108ee5d87"
+      }
+    ]
+  },
+  {
+    "data_version": 4325,
+    "version": "1.21.5",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.5-registries/block/data.json",
+        "sha256": "fa88512f11ac4b43c005761b61fd287b0d4f5016d5c27279a57404370ce8a0b6"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.5-summary/blocks/data.json",
+        "sha256": "f2d4cd7430cc389bf3a6c3f12258888498b97c07e68d365212ddb3c2ad15d58a"
+      }
+    ]
+  },
+  {
+    "data_version": 4435,
+    "version": "1.21.6",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.6-registries/block/data.json",
+        "sha256": "408c1b1fd2c848995327d54d2b73def482d9f733ad7f9a93e3eec4302ab82d4c"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.6-summary/blocks/data.json",
+        "sha256": "dd5e4e749823f38d05feafe990481da801f539d9ca743ce6bd854d2de3b031a6"
+      }
+    ]
+  },
+  {
+    "data_version": 4438,
+    "version": "1.21.7",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.7-registries/block/data.json",
+        "sha256": "408c1b1fd2c848995327d54d2b73def482d9f733ad7f9a93e3eec4302ab82d4c"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.7-summary/blocks/data.json",
+        "sha256": "dd5e4e749823f38d05feafe990481da801f539d9ca743ce6bd854d2de3b031a6"
+      }
+    ]
+  },
+  {
+    "data_version": 4440,
+    "version": "1.21.8",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.8-registries/block/data.json",
+        "sha256": "408c1b1fd2c848995327d54d2b73def482d9f733ad7f9a93e3eec4302ab82d4c"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.8-summary/blocks/data.json",
+        "sha256": "dd5e4e749823f38d05feafe990481da801f539d9ca743ce6bd854d2de3b031a6"
+      }
+    ]
+  },
+  {
+    "data_version": 4554,
+    "version": "1.21.9",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.9-registries/block/data.json",
+        "sha256": "46de533f3629d8c0d077652a82e6991c2675ddc97cb0d3e5174cd2a1c9baabc2"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.9-summary/blocks/data.json",
+        "sha256": "d365936ff7ed70388394f3cd4a4bf3d7ffa0414b48ba3d8e194e55f9e313d8a1"
+      }
+    ]
+  },
+  {
+    "data_version": 4556,
+    "version": "1.21.10",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.10-registries/block/data.json",
+        "sha256": "46de533f3629d8c0d077652a82e6991c2675ddc97cb0d3e5174cd2a1c9baabc2"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.10-summary/blocks/data.json",
+        "sha256": "d365936ff7ed70388394f3cd4a4bf3d7ffa0414b48ba3d8e194e55f9e313d8a1"
+      }
+    ]
+  },
+  {
+    "data_version": 4671,
+    "version": "1.21.11",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.11-registries/block/data.json",
+        "sha256": "46de533f3629d8c0d077652a82e6991c2675ddc97cb0d3e5174cd2a1c9baabc2"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/1.21.11-summary/blocks/data.json",
+        "sha256": "d365936ff7ed70388394f3cd4a4bf3d7ffa0414b48ba3d8e194e55f9e313d8a1"
+      }
+    ]
+  },
+  {
+    "data_version": 4786,
+    "version": "26.1",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/26.1-registries/block/data.json",
+        "sha256": "fbcb066e95f9b78e708d17be0e063aadfb1cddc64e54ef3cf6d3f7c47950456a"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/26.1-summary/blocks/data.json",
+        "sha256": "226acb5f23d8d467271d853cc762e4533511417c5ef46bc90ad9b4029b123b80"
+      }
+    ]
+  },
+  {
+    "data_version": 4788,
+    "version": "26.1.1",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/26.1.1-registries/block/data.json",
+        "sha256": "fbcb066e95f9b78e708d17be0e063aadfb1cddc64e54ef3cf6d3f7c47950456a"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/26.1.1-summary/blocks/data.json",
+        "sha256": "226acb5f23d8d467271d853cc762e4533511417c5ef46bc90ad9b4029b123b80"
+      }
+    ]
+  },
+  {
+    "data_version": 4790,
+    "version": "26.1.2",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/26.1.2-registries/block/data.json",
+        "sha256": "fbcb066e95f9b78e708d17be0e063aadfb1cddc64e54ef3cf6d3f7c47950456a"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/26.1.2-summary/blocks/data.json",
+        "sha256": "226acb5f23d8d467271d853cc762e4533511417c5ef46bc90ad9b4029b123b80"
+      }
+    ]
+  },
+  {
+    "data_version": 4903,
+    "version": "26.2",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/26.2-registries/block/data.json",
+        "sha256": "23f25d37b89746a5b01302ffcf88a176fff204b2762458a60c5425801ad0faf6"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/26.2-summary/blocks/data.json",
+        "sha256": "0b1470910281d2f7ac36544672fc04befcd600c9dab1574d0636727ae6531726"
+      }
+    ]
+  },
+  {
+    "data_version": 5023,
+    "version": "26.3",
+    "inputs": [
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/26.3-registries/block/data.json",
+        "sha256": "f0a264dcec2a72b1e2d3a36e1dc70c73b99c04c4637b20f909b908eca8c651ae"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/misode/mcmeta/26.3-summary/blocks/data.json",
+        "sha256": "4d4f4e55cddefd0d28aa28d5b92c19b29a8fe5cc6418196e73d819f4406e9ba9"
+      }
+    ]
+  }
+]

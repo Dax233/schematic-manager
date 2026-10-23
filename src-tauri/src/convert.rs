@@ -42,17 +42,76 @@ fn is_vanilla(id: &str) -> bool {
     id.starts_with("minecraft:")
 }
 
+// 这些形式使用不同的方块 ID 与属性，不能通过材质相似度跨形式推荐。
+fn placement_form(name: &str) -> Option<&'static str> {
+    let path = path_of(name);
+    ["_wall_hanging_sign", "_hanging_sign", "_wall_sign", "_sign",
+     "_wall_skull", "_skull", "_wall_head", "_head", "_wall_banner", "_banner",
+     "_wall_torch", "_torch", "_wall_fan", "_fan"]
+        .into_iter().find(|suffix| path == suffix.trim_start_matches('_') || path.ends_with(suffix))
+}
+
+fn target_names(target: &crate::blockdb::VersionDef) -> Vec<String> {
+    let mut names = std::collections::BTreeSet::new();
+    let registry = crate::block_registry::get(target.data_version);
+    for block in &target.blocks {
+        if !is_vanilla(&block.name) || registry.is_none() {
+            names.insert(block.name.clone());
+        }
+    }
+    if let Some(registry) = registry {
+        names.extend(registry.keys().map(|name| format!("minecraft:{name}")));
+    }
+    names.into_iter().collect()
+}
+
+/// 转换只使用目标版本的完整原版属性；模组属性由目标资源包提供。
+struct ConversionInfo<'a> {
+    fallback: crate::block_model::DbBlockInfo<'a>,
+}
+
+impl crate::replace::BlockInfo for ConversionInfo<'_> {
+    fn supports_prop(&self, block: &str, prop: &str, value: &str) -> bool {
+        if let Some(name) = block.strip_prefix("minecraft:") {
+            if let Some(registry) = crate::block_registry::get(self.fallback.version.data_version) {
+                return registry.get(name).and_then(|(domain, _)| domain.get(prop))
+                    .is_some_and(|values| values.iter().any(|v| v == value));
+            }
+        }
+        self.fallback.supports_prop(block, prop, value)
+    }
+
+    fn default_props(&self, block: &str) -> Vec<(String, String)> {
+        if let Some(name) = block.strip_prefix("minecraft:") {
+            if let Some(registry) = crate::block_registry::get(self.fallback.version.data_version) {
+                return registry.get(name).map(|(_, defaults)| defaults.iter()
+                    .map(|(key, value)| (key.clone(), value.clone())).collect()).unwrap_or_default();
+            }
+        }
+        self.fallback.default_props(block)
+    }
+}
+
 /// 为一个在原版/目标版本中消失的方块推荐替代品。
 ///
 /// 先找同后缀（`_stairs`、`_slab` 之类），再找同前缀（`deepslate_` 之类）。
 /// 候选顺序为原版优先、其次字典序，保证同一输入总是给出同一推荐。
 fn suggest_block(name: &str, target: &[&str]) -> String {
-    let mut cand: Vec<&str> = target.to_vec();
+    if matches!(name, "minecraft:water" | "minecraft:lava" | "minecraft:bubble_column") {
+        return String::new();
+    }
+    let form = placement_form(name);
+    let mut cand: Vec<&str> = target.iter().copied()
+        .filter(|candidate| placement_form(candidate) == form).collect();
     cand.sort_by(|a, b| match (is_vanilla(a), is_vanilla(b)) {
         (true, false) => std::cmp::Ordering::Less,
         (false, true) => std::cmp::Ordering::Greater,
         _ => a.cmp(b),
     });
+
+    if form.is_some() {
+        return cand.first().copied().unwrap_or_default().to_string();
+    }
 
     let p = path_of(name);
     // 1) 同后缀：最后一个下划线起
@@ -87,7 +146,8 @@ pub fn analyze(sc: &Schematic, db: &BlockDb, target_idx: usize) -> Vec<ConvertIt
     let Some(target) = db.versions.get(target_idx) else {
         return Vec::new();
     };
-    let names: Vec<&str> = target.blocks.iter().map(|b| b.name.as_str()).collect();
+    let names = target_names(target);
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
 
     // 统计每个方块名在投影中出现的次数
     let mut counts: std::collections::BTreeMap<&str, u64> = std::collections::BTreeMap::new();
@@ -99,10 +159,10 @@ pub fn analyze(sc: &Schematic, db: &BlockDb, target_idx: usize) -> Vec<ConvertIt
             }
         }
         for (i, st) in r.palette.iter().enumerate() {
-            if st.is_air() || st.name.is_empty() {
+            if st.is_air() || st.name.is_empty() || per[i] == 0 {
                 continue;
             }
-            if target.blocks.iter().any(|b| b.name == st.name) {
+            if names.contains(&st.name.as_str()) {
                 continue; // 目标版本有，不用处理
             }
             *counts.entry(st.name.as_str()).or_insert(0) += per[i];
@@ -153,6 +213,18 @@ pub fn convert(
         return Err(AppError::Parse("源版本不存在".into()));
     };
 
+    if target.data_version >= 1631 && crate::block_registry::get(target.data_version).is_none() {
+        return Err(AppError::UnsupportedVersion(format!(
+            "缺少目标数据版本 {} 的完整方块注册与属性信息，无法安全转换", target.data_version)));
+    }
+    let target_names = target_names(target);
+    for item in items {
+        let replacement = item.replacement();
+        if !replacement.is_empty() && !target_names.iter().any(|name| name == replacement) {
+            return Err(AppError::Parse(format!("目标版本不存在替代方块：{replacement}")));
+        }
+    }
+
     let source_version = sc.root.get("MinecraftDataVersion")
         .and_then(|v| v.as_i64()).and_then(|v| i32::try_from(v).ok())
         .unwrap_or(source.data_version);
@@ -161,7 +233,7 @@ pub fn convert(
         sc.root = prepared.root;
         out.compatibility_replacements = prepared.replacements;
     }
-    let info = crate::block_model::DbBlockInfo { db, version: source };
+    let info = ConversionInfo { fallback: crate::block_model::DbBlockInfo { db, version: target } };
 
     for it in items {
         let repl = it.replacement();
@@ -452,6 +524,93 @@ mod tests {
     #[test]
     fn suggest_returns_empty_when_nothing_matches() {
         assert_eq!(suggest_block("minecraft:stone", &["mod:completely_different"]), "");
+    }
+
+    #[test]
+    fn suggestions_preserve_placement_forms() {
+        let target = ["minecraft:birch_sign", "minecraft:birch_wall_sign",
+            "minecraft:birch_hanging_sign", "minecraft:birch_wall_hanging_sign",
+            "minecraft:skeleton_skull", "minecraft:skeleton_wall_skull",
+            "minecraft:player_head", "minecraft:player_wall_head"];
+        for (from, to) in [
+            ("pale_oak_sign", "birch_sign"), ("pale_oak_wall_sign", "birch_wall_sign"),
+            ("pale_oak_hanging_sign", "birch_hanging_sign"),
+            ("pale_oak_wall_hanging_sign", "birch_wall_hanging_sign"),
+            ("wither_skeleton_wall_skull", "skeleton_wall_skull"),
+            ("zombie_wall_head", "player_wall_head"),
+        ] {
+            assert_eq!(suggest_block(&format!("minecraft:{from}"), &target), format!("minecraft:{to}"));
+        }
+        assert_eq!(suggest_block("minecraft:pale_oak_wall_sign", &["minecraft:oak_sign"]), "");
+        assert_eq!(suggest_block("minecraft:bubble_column", &["minecraft:bubble_coral"]), "");
+        assert_eq!(suggest_block("minecraft:soul_wall_torch", &["minecraft:torch", "minecraft:wall_torch"]), "minecraft:wall_torch");
+        assert_eq!(suggest_block("minecraft:soul_torch", &["minecraft:torch", "minecraft:wall_torch"]), "minecraft:torch");
+    }
+
+    #[test]
+    fn analyze_uses_registry_even_when_cached_models_are_missing() {
+        let db = db_with(vec![version("1.20.4", 3700, &[])]);
+        let sc = schematic(vec!["water", "lava", "bubble_column", "wither_skeleton_wall_skull",
+            "pale_oak_wall_sign", "pale_oak_sign"].into_iter()
+            .map(|name| BlockState::new(&format!("minecraft:{name}"))).collect(), vec![0, 1, 2, 3, 4], 4189);
+        let items = analyze(&sc, &db, 0);
+        assert_eq!(items.len(), 1, "合法特殊方块与未使用调色板项不应列为缺失");
+        assert_eq!(items[0].name, "minecraft:pale_oak_wall_sign");
+        assert!(items[0].suggested.ends_with("_wall_sign"));
+    }
+
+    #[test]
+    fn conversion_preserves_target_wall_sign_properties_without_render_conditions() {
+        let db = db_with(vec![version("source", 100, &["mod:custom_wall_sign"]),
+            version("1.20.4", 3700, &["minecraft:birch_wall_sign"])]);
+        let mut state = BlockState::new("mod:custom_wall_sign");
+        state.set_prop("facing", "east");
+        state.set_prop("waterlogged", "true");
+        state.set_prop("rotation", "8");
+        let mut sc = schematic(vec![state], vec![0], 100);
+        let items = vec![ConvertItem { name: "mod:custom_wall_sign".into(), count: 1,
+            suggested: "minecraft:birch_wall_sign".into(), chosen: String::new() }];
+        convert(&mut sc, &db, 0, 1, &items).unwrap();
+        let result = &sc.regions[0].palette[sc.regions[0].indices[0] as usize];
+        assert_eq!(result.name, "minecraft:birch_wall_sign");
+        assert_eq!(result.prop("facing"), Some("east"));
+        assert_eq!(result.prop("waterlogged"), Some("true"));
+        assert_eq!(result.prop("rotation"), None);
+    }
+
+    #[test]
+    fn conversion_checks_target_version_property_domain() {
+        let mut source = version("source", 100, &["mod:old", "mod:new"]);
+        source.blocks[1].variants[0].when = "facing=east,removed=yes".into();
+        let mut target = version("target", 200, &["mod:new"]);
+        target.blocks[0].variants[0].when = "facing=west,added=true".into();
+        let db = db_with(vec![source, target]);
+        let mut state = BlockState::new("mod:old");
+        state.set_prop("facing", "east");
+        state.set_prop("removed", "yes");
+        let mut sc = schematic(vec![state], vec![0], 100);
+        let items = vec![ConvertItem { name: "mod:old".into(), count: 1,
+            suggested: "mod:new".into(), chosen: String::new() }];
+        convert(&mut sc, &db, 0, 1, &items).unwrap();
+        let result = &sc.regions[0].palette[sc.regions[0].indices[0] as usize];
+        assert_eq!(result.prop("facing"), Some("west"));
+        assert_eq!(result.prop("added"), Some("true"));
+        assert_eq!(result.prop("removed"), None);
+    }
+
+    #[test]
+    fn invalid_target_or_replacement_leaves_input_unchanged() {
+        let db = db_with(vec![version("source", 100, &["mod:old"]),
+            version("1.20.4", 3700, &[]), version("snapshot", 3699, &[])]);
+        let mut sc = schematic(vec![BlockState::new("mod:old")], vec![0], 100);
+        let root = sc.root.clone();
+        let palette = sc.regions[0].palette.clone();
+        let items = vec![ConvertItem { name: "mod:old".into(), count: 1,
+            suggested: "minecraft:not_a_block".into(), chosen: String::new() }];
+        assert!(convert(&mut sc, &db, 0, 1, &items).unwrap_err().to_string().contains("替代方块"));
+        assert!(convert(&mut sc, &db, 0, 2, &[]).unwrap_err().to_string().contains("完整方块"));
+        assert_eq!(sc.root, root);
+        assert_eq!(sc.regions[0].palette, palette);
     }
 
     #[test]

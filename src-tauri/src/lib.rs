@@ -2,6 +2,7 @@ mod backup;
 mod base_db;
 mod block_icon;
 mod block_model;
+mod block_registry;
 mod block_search;
 mod blockstate;
 mod blockstate_chain;
