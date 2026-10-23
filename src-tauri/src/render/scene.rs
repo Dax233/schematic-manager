@@ -109,6 +109,29 @@ pub(crate) fn texture_rgba(db: &BlockDb, idx: u32) -> Option<Vec<u8>> {
 ///
 /// 这样拆分是为了让组装逻辑可脱离文件 IO 单独测试。
 pub fn build_from(sc: &Schematic, db: &BlockDb) -> AppResult<SceneData> {
+    build_data(sc, db, None)
+}
+
+/// 只按指定区域组装场景。区域外不加入邻接方块，因此区域边界面会保留。
+pub fn build_from_region(sc: &Schematic, db: &BlockDb, region_name: &str) -> AppResult<SceneData> {
+    let region = sc
+        .regions
+        .iter()
+        .find(|r| r.name == region_name)
+        .cloned()
+        .ok_or_else(|| AppError::Parse(format!("投影中不存在区域：{region_name}")))?;
+    let enclosing = region.size;
+    let regional = Schematic {
+        root: sc.root.clone(),
+        regions: vec![region],
+        path: sc.path.clone(),
+        meta_modified: sc.meta_modified,
+        blocks_modified: sc.blocks_modified,
+    };
+    build_data(&regional, db, Some(enclosing))
+}
+
+fn build_data(sc: &Schematic, db: &BlockDb, enclosing: Option<[i32; 3]>) -> AppResult<SceneData> {
     let summary = sc.summary();
     let version_idx = db
         .pick_version(summary.data_version)
@@ -174,7 +197,7 @@ pub fn build_from(sc: &Schematic, db: &BlockDb) -> AppResult<SceneData> {
         batches,
         total_vertices,
         total_triangles,
-        enclosing: summary.enclosing,
+        enclosing: enclosing.unwrap_or(summary.enclosing),
         origin,
         mc_version_name: summary.mc_version_name,
         data_version: summary.data_version,
@@ -192,6 +215,19 @@ pub fn build_with_db(schematic_path: &str, db: &BlockDb) -> AppResult<SceneData>
     }
     let sc = Schematic::load(schematic_path)?;
     build_from(&sc, db)
+}
+
+/// 从文件载入投影并只组装指定区域，方块库由调用方提供。
+pub fn build_region_with_db(
+    schematic_path: &str,
+    db: &BlockDb,
+    region_name: &str,
+) -> AppResult<SceneData> {
+    if db.versions.is_empty() {
+        return Err(AppError::Parse("方块库为空".into()));
+    }
+    let sc = Schematic::load(schematic_path)?;
+    build_from_region(&sc, db, region_name)
 }
 
 #[cfg(test)]

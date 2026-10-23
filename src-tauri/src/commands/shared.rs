@@ -1,5 +1,6 @@
 //! 命令层共用：默认扫描深度、备份目录、方块库与实体贴图库的进程内缓存。
 
+use crate::commands::dto::DirectoryNode;
 use crate::error::AppResult;
 use std::path::{Path, PathBuf};
 
@@ -72,6 +73,75 @@ pub(crate) fn collect_litematics(dir: &Path, depth: u32, out: &mut Vec<PathBuf>,
             out.push(p);
         }
     }
+}
+
+/// 在一次目录遍历中同时收集投影文件与目录树，避免两条视图各自读取目录后
+/// 因文件系统变化或权限错误而得到不一致的内容。
+pub(crate) fn collect_directory(
+    dir: &Path,
+    root: &Path,
+    depth: u32,
+    out: &mut Vec<PathBuf>,
+    skipped: &mut SkipReport,
+) -> DirectoryNode {
+    let mut node = DirectoryNode {
+        path: dir.to_string_lossy().into_owned(),
+        name: dir
+            .file_name()
+            .unwrap_or_else(|| dir.as_os_str())
+            .to_string_lossy()
+            .into_owned(),
+        relative_path: dir
+            .strip_prefix(root)
+            .unwrap_or(dir)
+            .to_string_lossy()
+            .into_owned(),
+        file_paths: Vec::new(),
+        children: Vec::new(),
+        truncated: depth == 0,
+    };
+    if depth == 0 {
+        return node;
+    }
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => {
+            skipped.record(dir);
+            return node;
+        }
+    };
+    for e in entries {
+        let entry = match e {
+            Ok(v) => v,
+            Err(_) => {
+                skipped.record(dir);
+                continue;
+            }
+        };
+        let p = entry.path();
+        let ft = match entry.file_type() {
+            Ok(v) => v,
+            Err(_) => {
+                skipped.record(&p);
+                continue;
+            }
+        };
+        if ft.is_dir() {
+            node.children
+                .push(collect_directory(&p, root, depth - 1, out, skipped));
+        } else if ft.is_file()
+            && p.extension()
+                .map(|x| x.eq_ignore_ascii_case("litematic"))
+                .unwrap_or(false)
+        {
+            node.file_paths.push(p.to_string_lossy().into_owned());
+            out.push(p);
+        }
+    }
+    node.file_paths.sort();
+    node.children.sort_by(|a, b| a.path.cmp(&b.path));
+    node
 }
 
 /// 已载入的实体贴图库。
