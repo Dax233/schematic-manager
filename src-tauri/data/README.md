@@ -1,4 +1,4 @@
-# 1.20.4 物品降级校验数据
+# 1.20.4 降级校验数据
 
 `items-1.20.4.txt` 和 `enchantments-1.20.4.txt` 是 1.20.4 原版物品、附魔标识列表，
 省略 `minecraft:` 命名空间，每行一个。转换时用于识别需要兼容替换的物品和拒绝不存在的附魔，
@@ -8,9 +8,24 @@
 
 - [物品注册表](https://github.com/misode/mcmeta/blob/1.20.4-registries/item/data.json)
 - [附魔注册表](https://github.com/misode/mcmeta/blob/1.20.4-registries/enchantment/data.json)
+- [实体注册表](https://github.com/misode/mcmeta/blob/1.20.4-registries/entity_type/data.json)：
+  `entities-1.20.4.txt` 用于转换船类型后校验顶层实体和乘客，避免新版实体被旧游戏直接丢弃。
 
 按 JSON 数组顺序逐行导出，未添加或删除标识。更新支持的目标版本时，需要同时核对物品结构、
-组件映射及该版本的注册表，不能仅替换这两份列表。
+组件映射及该版本的注册表，不能仅替换这些列表。
+
+跨物品组件格式的降级支持 1.20.5–1.21.4 → 1.20.4，遇到不能等价表达的组件或实体行为
+会在保存前报告位置并拒绝转换。关联字段变化依据 Mojang 的
+[1.21](https://www.minecraft.net/en-us/article/minecraft-java-edition-1-21)、
+[1.21.2](https://www.minecraft.net/en-us/article/minecraft-java-edition-1-21-2)、
+[1.21.4](https://www.minecraft.net/en-us/article/minecraft-java-edition-1-21-4) 更新说明：
+迁移熔炉计时、TNT 矿车引信、原有材质的船类型和可表示为整数的模型数据；
+新版非空实体属性、火球加速度、新版容器锁、燃烧中的熔炉总时长、非默认 TNT 行为和多通道模型数据不作有损近似。
+对 1.20.5 起改名或改结构但尚未支持的旗帜图案、头颅档案、蜂巢、药水实体、坐标和拴绳字段，
+也会按字段路径拒绝；刷怪笼的实体子树递归迁移，新装备战利品表拒绝。
+这些变化依据 [1.20.5 更新说明](https://www.minecraft.net/en-us/article/minecraft-java-edition-1-20-5)。
+方块实体中的 `minecraft:custom_data` 仅作为任意元数据保留，不用其中的历史备份覆盖当前库存；
+其他方块实体组件拒绝。输出文件保留这些元数据不表示 1.20.4 游戏加载、再保存后仍会保留它们。
 
 ## 方块注册与状态信息
 

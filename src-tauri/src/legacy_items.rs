@@ -1,4 +1,4 @@
-//! 将 1.20.5–1.21.1 的物品组件转换为 1.20.4 的物品 NBT。
+//! 将 1.20.5–1.21.4 的物品组件及关联实体结构转换为 1.20.4 的 NBT。
 //!
 //! 只在明确支持的版本边界运行；无法表达的组件报错，避免输出看似成功却丢失物品属性的文件。
 use crate::error::{AppError, AppResult};
@@ -97,9 +97,27 @@ fn list<'a>(value: &'a Value, path: &str) -> AppResult<&'a [Value]> {
     value.as_list().ok_or_else(|| invalid(path, "应为列表"))
 }
 
+// NBT 复合标签的键顺序不影响游戏含义；列表顺序与数值类型仍须严格相同。
+fn same_data(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Compound(a), Value::Compound(b)) => {
+            if a.len() != b.len() { return false; }
+            let mut a: Vec<_> = a.iter().collect();
+            let mut b: Vec<_> = b.iter().collect();
+            a.sort_by(|a, b| a.0.cmp(&b.0));
+            b.sort_by(|a, b| a.0.cmp(&b.0));
+            a.iter().zip(b).all(|(a, b)| a.0 == b.0 && same_data(&a.1, &b.1))
+        }
+        (Value::List(a, at), Value::List(b, bt)) => {
+            at == bt && a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_data(a, b))
+        }
+        _ => left == right,
+    }
+}
+
 fn insert(value: &mut Value, key: &str, item: Value, path: &str) -> AppResult<()> {
     if let Some(existing) = value.get(key) {
-        if existing != &item {
+        if !same_data(existing, &item) {
             return Err(invalid(path, &format!("旧物品字段 {key} 与组件冲突")));
         }
     } else {
@@ -141,6 +159,29 @@ fn enchantments(value: &Value, path: &str) -> AppResult<Value> {
         ]));
     }
     Ok(Value::List(result, 10))
+}
+
+fn custom_model_data(value: &Value, path: &str) -> AppResult<Value> {
+    if let Some(number) = value.as_i64().and_then(|n| i32::try_from(n).ok()) {
+        return Ok(Value::Int(number));
+    }
+    for (key, data) in compound(value, path)? {
+        match key.as_str() {
+            "floats" => { list(data, path)?; }
+            "flags" | "strings" | "colors" if list(data, path)?.is_empty() => {}
+            _ => return Err(invalid(path, "多通道自定义模型数据无法等价转换为旧版整数")),
+        }
+    }
+    let values = value.get("floats").map(|v| list(v, path)).transpose()?.unwrap_or(&[]);
+    let number = match values {
+        [] => 0.0,
+        [number] => number.as_f64().ok_or_else(|| invalid(path, "自定义模型数据应为数值"))?,
+        _ => return Err(invalid(path, "多个模型数值无法等价转换为旧版整数")),
+    };
+    if !number.is_finite() || number.fract() != 0.0 || number < i32::MIN as f64 || number > i32::MAX as f64 {
+        return Err(invalid(path, "模型数值超出旧版整数范围或精度"));
+    }
+    Ok(Value::Int(number as i32))
 }
 
 fn container(value: &Value, path: &str, migration: &mut Migration) -> AppResult<Value> {
@@ -207,15 +248,14 @@ fn components(value: &Value, tag: &mut Value, path: &str, migration: &mut Migrat
                 }
                 tag.set("BlockEntityTag", existing);
             }
-            "minecraft:damage" | "minecraft:repair_cost" | "minecraft:custom_model_data" => {
+            "minecraft:damage" | "minecraft:repair_cost" => {
                 let number = value.as_i64().and_then(|v| i32::try_from(v).ok())
                     .ok_or_else(|| invalid(&path, "应为 32 位整数"))?;
-                let key = match name.as_str() {
-                    "minecraft:damage" => "Damage",
-                    "minecraft:repair_cost" => "RepairCost",
-                    _ => "CustomModelData",
-                };
+                let key = if name == "minecraft:damage" { "Damage" } else { "RepairCost" };
                 insert(tag, key, Value::Int(number), &path)?;
+            }
+            "minecraft:custom_model_data" => {
+                insert(tag, "CustomModelData", custom_model_data(value, &path)?, &path)?;
             }
             "minecraft:enchantments" | "minecraft:stored_enchantments" => {
                 let key = if name == "minecraft:enchantments" { "Enchantments" } else { "StoredEnchantments" };
@@ -266,6 +306,7 @@ fn downgrade_item(value: &mut Value, path: &str, migration: &mut Migration) -> A
 }
 
 fn downgrade_contents(value: &mut Value, path: &str, migration: &mut Migration) -> AppResult<()> {
+    crate::legacy_entities::downgrade(value, path)?;
     let Value::Compound(fields) = value else { return Err(invalid(path, "实体应为复合标签")); };
     for (key, item) in fields {
         let path = format!("{path}/{key}");
@@ -282,11 +323,46 @@ fn downgrade_contents(value: &mut Value, path: &str, migration: &mut Migration) 
             "Passengers" => {
                 let Value::List(items, _) = item else { return Err(invalid(&path, "乘客应为列表")); };
                 for (i, item) in items.iter_mut().enumerate() {
-                    downgrade_contents(item, &format!("{path}[{i}]"), migration)?;
+                    let path = format!("{path}[{i}]");
+                    downgrade_contents(item, &path, migration)?;
+                    crate::legacy_entities::validate_type(item, &path)?;
                 }
             }
+            "SpawnData" => downgrade_spawn_data(item, &path, migration)?,
+            "SpawnPotentials" => {
+                let Value::List(entries, _) = item else { return Err(invalid(&path, "刷怪候选应为列表")); };
+                for (i, entry) in entries.iter_mut().enumerate() {
+                    let path = format!("{path}[{i}]");
+                    let Value::Compound(fields) = entry else { return Err(invalid(&path, "刷怪候选应为复合标签")); };
+                    for (key, data) in fields {
+                        let path = format!("{path}/{key}");
+                        match key.as_str() {
+                            "data" => downgrade_spawn_data(data, &path, migration)?,
+                            "equipment" => return Err(invalid(&path, "刷怪装备战利品表尚不能等价转换为 1.20.4")),
+                            _ => reject_unhandled_items(data, &path)?,
+                        }
+                    }
+                }
+            }
+            "components" => {}
             // 非支持的物品位置必须显式拒绝；不能让新版物品绕过组件检查。
             _ => reject_unhandled_items(item, &path)?,
+        }
+    }
+    Ok(())
+}
+
+fn downgrade_spawn_data(value: &mut Value, path: &str, migration: &mut Migration) -> AppResult<()> {
+    let Value::Compound(fields) = value else { return Err(invalid(path, "刷怪数据应为复合标签")); };
+    for (key, value) in fields {
+        let path = format!("{path}/{key}");
+        match key.as_str() {
+            "entity" => {
+                downgrade_contents(value, &path, migration)?;
+                crate::legacy_entities::validate_type(value, &path)?;
+            }
+            "equipment" => return Err(invalid(&path, "刷怪装备战利品表尚不能等价转换为 1.20.4")),
+            _ => reject_unhandled_items(value, &path)?,
         }
     }
     Ok(())
@@ -319,8 +395,8 @@ pub fn prepare(root: &Value, source: i32, target: i32) -> AppResult<Option<Prepa
     if source < 3837 || target >= 3837 {
         return Ok(None);
     }
-    if target != 3700 || source > 3955 {
-        return Err(invalid("MinecraftDataVersion", "跨越物品组件格式的降级目前支持 1.20.5–1.21.1 → 1.20.4"));
+    if target != 3700 || source > 4189 {
+        return Err(invalid("MinecraftDataVersion", "跨越物品组件格式的降级目前支持 1.20.5–1.21.4 → 1.20.4"));
     }
     let mut result = root.clone();
     let mut migration = Migration::default();
@@ -336,7 +412,16 @@ pub fn prepare(root: &Value, source: i32, target: i32) -> AppResult<Option<Prepa
                     let Value::List(entries, _) = data else { return Err(invalid(name, "实体应为列表")); };
                     for (i, entry) in entries.iter_mut().enumerate() {
                         migration.location = location(name, &region_info, entry, key == "Entities");
-                        downgrade_contents(entry, &format!("Regions/{name}/{key}[{i}]"), &mut migration)?;
+                        let path = format!("Regions/{name}/{key}[{i}]");
+                        let mut migrate = || -> AppResult<()> {
+                            downgrade_contents(entry, &path, &mut migration)?;
+                            if key == "Entities" { crate::legacy_entities::validate_type(entry, &path)?; }
+                            Ok(())
+                        };
+                        migrate().map_err(|error| match error {
+                            AppError::UnsupportedVersion(reason) => invalid(&migration.location, &reason),
+                            other => other,
+                        })?;
                     }
                 }
             }
@@ -499,7 +584,7 @@ mod tests {
         assert!(prepare(&input, 3700, 3953).unwrap().is_none());
         assert!(prepare(&input, 3953, 3955).unwrap().is_none());
         assert!(prepare(&input, 3953, 3465).is_err());
-        assert!(prepare(&input, 4189, 3700).is_err());
+        assert!(prepare(&input, 4325, 3700).is_err());
     }
 
     #[test]
@@ -602,5 +687,143 @@ mod tests {
         let block = item.get("tag").unwrap().get("BlockEntityTag").unwrap();
         assert_eq!(block.get("id"), Some(&text("minecraft:chest")));
         assert_eq!(block.get("Items").unwrap().as_list().unwrap()[0].get("Count"), Some(&Value::Byte(32)));
+    }
+
+    #[test]
+    fn version_1_21_4_restores_furnace_fields_and_nested_inventory() {
+        let furnace = c(vec![
+            ("id", text("minecraft:furnace")),
+            ("cooking_time_spent", Value::Int(15)), ("cooking_total_time", Value::Int(200)),
+            ("lit_time_remaining", Value::Int(0)), ("lit_total_time", Value::Int(0)),
+            ("Items", Value::List(vec![stack("minecraft:iron_ore", 32, c(vec![]))], 10)),
+        ]);
+        let item = stack("minecraft:furnace", 1, c(vec![("minecraft:block_entity_data", furnace.clone())]));
+        let input = root(vec![furnace, c(vec![("Items", Value::List(vec![item], 10))])]);
+        let output = prepare(&input, 4189, 3700).unwrap().unwrap().root;
+        assert_eq!(output.get("Version"), Some(&Value::Int(6)));
+        let entries = output.get("Regions").unwrap().get("r").unwrap().get("TileEntities").unwrap().as_list().unwrap();
+        let embedded = entries[1].get("Items").unwrap().as_list().unwrap()[0]
+            .get("tag").unwrap().get("BlockEntityTag").unwrap();
+        for value in [&entries[0], embedded] {
+            assert_eq!(value.get("CookTime"), Some(&Value::Short(15)));
+            assert_eq!(value.get("Items").unwrap().as_list().unwrap()[0].get("Count"), Some(&Value::Byte(32)));
+        }
+    }
+
+    #[test]
+    fn version_1_21_4_migrates_boat_passengers_and_rejects_new_entity_types_atomically() {
+        let boat = c(vec![
+            ("id", text("minecraft:cherry_chest_boat")),
+            ("Items", Value::List(vec![stack("minecraft:stone", 6, c(vec![]))], 10)),
+            ("Passengers", Value::List(vec![c(vec![("id", text("minecraft:oak_boat"))])], 10)),
+        ]);
+        let mut input = root(vec![]);
+        input.set("Regions", c(vec![("r", c(vec![("Entities", Value::List(vec![boat], 10))]))]));
+        let output = prepare(&input, 4189, 3700).unwrap().unwrap().root;
+        let boat = &output.get("Regions").unwrap().get("r").unwrap().get("Entities").unwrap().as_list().unwrap()[0];
+        assert_eq!(boat.get("id"), Some(&text("minecraft:chest_boat")));
+        assert_eq!(boat.get("Type"), Some(&text("cherry")));
+        assert_eq!(boat.get("Items").unwrap().as_list().unwrap()[0].get("Count"), Some(&Value::Byte(6)));
+        assert_eq!(boat.get("Passengers").unwrap().as_list().unwrap()[0].get("Type"), Some(&text("oak")));
+        input.set("Regions", c(vec![("r", c(vec![("Entities", Value::List(vec![c(vec![("id", text("minecraft:creaking"))])], 10))]))]));
+        let before = input.clone();
+        assert!(prepare(&input, 4189, 3700).unwrap_err().to_string().contains("minecraft:creaking"));
+        assert_eq!(input, before);
+    }
+
+    #[test]
+    fn model_components_accept_only_one_exact_integer_channel() {
+        for data in [Value::Int(7), c(vec![("floats", Value::List(vec![Value::Float(7.0)], 5))])] {
+            let mut item = stack("minecraft:stone", 1, c(vec![("minecraft:custom_model_data", data)]));
+            downgrade_item(&mut item, "model").unwrap();
+            assert_eq!(item.get("tag").unwrap().get("CustomModelData"), Some(&Value::Int(7)));
+        }
+        for data in [
+            c(vec![("floats", Value::List(vec![Value::Float(1.5)], 5))]),
+            c(vec![("floats", Value::List(vec![Value::Float(1.0), Value::Float(2.0)], 5))]),
+            c(vec![("floats", Value::List(vec![Value::Float(f32::NAN)], 5))]),
+            c(vec![("floats", Value::List(vec![Value::Float(2147483648.0)], 5))]),
+            c(vec![("flags", Value::List(vec![Value::Byte(1)], 1))]),
+            c(vec![("strings", Value::List(vec![text("model")], 8))]),
+            c(vec![("colors", Value::List(vec![Value::Int(1)], 3))]),
+        ] {
+            let input = root(vec![c(vec![("Items", Value::List(vec![stack("minecraft:stone", 1,
+                c(vec![("minecraft:custom_model_data", data)]))], 10))])]);
+            let before = crate::nbt::serialize(&input, "").unwrap();
+            let err = prepare(&input, 4189, 3700).unwrap_err().to_string();
+            assert!(err.contains("minecraft:custom_model_data"));
+            assert_eq!(crate::nbt::serialize(&input, "").unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn unrepresentable_entity_fields_do_not_partially_change_the_input() {
+        let input = root(vec![c(vec![
+            ("id", text("minecraft:furnace")), ("x", Value::Int(4)),
+            ("y", Value::Int(5)), ("z", Value::Int(6)),
+            ("cooking_time_spent", Value::Int(15)), ("lit_time_remaining", Value::Int(0)),
+            ("lit_total_time", Value::Int(1600)),
+            ("Items", Value::List(vec![stack("minecraft:iron_ore", 32, c(vec![]))], 10)),
+        ])]);
+        let before = input.clone();
+        let error = prepare(&input, 4189, 3700).unwrap_err().to_string();
+        assert!(error.contains("lit_total_time"));
+        assert!(error.contains("minecraft:furnace"));
+        assert_eq!(input, before);
+    }
+
+    #[test]
+    fn redundant_legacy_inventory_compares_tag_content_without_requiring_key_order() {
+        let legacy_item = c(vec![("Slot", Value::Byte(0)), ("id", text("minecraft:shulker_shell")), ("Count", Value::Byte(64))]);
+        let legacy_block = c(vec![("id", text("minecraft:shulker_box")), ("Items", Value::List(vec![legacy_item], 10))]);
+        for count in [64, 63] {
+            let outer = stack("minecraft:shulker_box", 1, c(vec![
+                ("minecraft:block_entity_data", legacy_block.clone()),
+                ("minecraft:custom_data", c(vec![("BlockEntityTag", legacy_block.clone()), ("VV|Protocol1_20_3To1_20_5", Value::Byte(1))])),
+                ("minecraft:container", Value::List(vec![c(vec![
+                    ("slot", Value::Int(0)), ("item", stack("minecraft:shulker_shell", count, c(vec![]))),
+                ])], 10)),
+            ]));
+            let input = root(vec![c(vec![("Items", Value::List(vec![outer], 10))])]);
+            let before = input.clone();
+            let result = prepare(&input, 4189, 3700);
+            if count == 64 {
+                let output = result.unwrap().unwrap().root;
+                let tag = output.get("Regions").unwrap().get("r").unwrap().get("TileEntities").unwrap().as_list().unwrap()[0]
+                    .get("Items").unwrap().as_list().unwrap()[0].get("tag").unwrap();
+                assert_eq!(tag.get("BlockEntityTag"), Some(&legacy_block));
+                assert_eq!(tag.get("VV|Protocol1_20_3To1_20_5"), Some(&Value::Byte(1)));
+            } else {
+                assert!(result.unwrap_err().to_string().contains("冲突"));
+            }
+            assert_eq!(input, before);
+        }
+    }
+
+    #[test]
+    fn spawner_entity_subtrees_receive_the_same_migration_and_rejection() {
+        let spawn = c(vec![("entity", c(vec![
+            ("id", text("minecraft:zombie")),
+            ("HandItems", Value::List(vec![stack("minecraft:stone", 1, c(vec![])), c(vec![])], 10)),
+        ]))]);
+        let make_input = |data: Value| root(vec![c(vec![
+            ("id", text("minecraft:mob_spawner")), ("SpawnData", spawn.clone()),
+            ("SpawnPotentials", Value::List(vec![c(vec![("weight", Value::Int(1)), ("data", data)])], 10)),
+        ])]);
+        let input = make_input(spawn.clone());
+        let output = prepare(&input, 4189, 3700).unwrap().unwrap().root;
+        let spawner = &output.get("Regions").unwrap().get("r").unwrap().get("TileEntities").unwrap().as_list().unwrap()[0];
+        let entity = spawner.get("SpawnData").unwrap().get("entity").unwrap();
+        assert_eq!(entity.get("HandItems").unwrap().as_list().unwrap()[0].get("Count"), Some(&Value::Byte(1)));
+        for data in [
+            c(vec![("entity", c(vec![("id", text("minecraft:creaking"))]))]),
+            c(vec![("entity", c(vec![("id", text("minecraft:zombie")), ("attributes", Value::List(vec![c(vec![])], 10))]))]),
+            c(vec![("entity", c(vec![("id", text("minecraft:zombie"))])), ("equipment", c(vec![("loot_table", text("minecraft:equipment/trial_chamber"))]))]),
+        ] {
+            let input = make_input(data);
+            let before = input.clone();
+            assert!(prepare(&input, 4189, 3700).unwrap_err().to_string().contains("SpawnPotentials[0]/data"));
+            assert_eq!(input, before);
+        }
     }
 }

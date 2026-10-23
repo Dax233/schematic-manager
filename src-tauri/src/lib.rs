@@ -21,6 +21,7 @@ mod file_ops;
 mod geometry;
 mod jar_file;
 mod jar_index;
+mod legacy_entities;
 mod legacy_items;
 mod litematic;
 mod mc_download;
