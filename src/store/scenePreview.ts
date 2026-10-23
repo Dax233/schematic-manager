@@ -11,6 +11,7 @@
  * 而不是整棵 store，避免类型上的循环引用（见 store/fileList.ts）。
  */
 import { computed, ref, watch } from "vue";
+import * as THREE from "three";
 import type { ComputedRef, Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import type { TableColumnData } from "@arco-design/web-vue";
@@ -19,9 +20,18 @@ import { writeFile } from "@tauri-apps/plugin-fs";
 import { displayName, t } from "../i18n";
 import { buildScene, renderBlockIcons } from "../api";
 import type SceneViewer from "../components/SceneViewer.vue";
-import { OffscreenRenderer } from "../render/scene3d";
+import {
+  OffscreenRenderer,
+  anglesFromPosition,
+  exportPixelSize,
+  isBuiltinView,
+  isPresetNameUsable,
+  presetIsOrtho,
+  sanitizeViewPreset,
+} from "../render/scene3d";
+import type { ExportAspect, SavedViewPreset } from "../render/scene3d";
 import { NamePool, joinPath, previewStem } from "../render/export_name";
-import type { AnalysisResult, BlockRow, SceneData, SchematicSummary } from "../types";
+import type { AnalysisResult, BlockCount, BlockRow, SceneData, SchematicSummary } from "../types";
 import { itemsForState } from "../utils/material_items";
 import { formatStacks } from "../utils/format";
 
@@ -46,6 +56,15 @@ export interface ScenePreviewDeps {
  */
 const SCENE_BLOCK_LIMIT = 30000;
 
+/** 按名称比较，结果与运行环境的语言数据无关。
+ *
+ * 不用 localeCompare：它随环境语言数据变化，同一份数据在不同机器上会排出
+ * 不同顺序，用户换个系统就发现名次变了。
+ */
+function compareNames(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 export function createScenePreviewSlice(s: ScenePreviewDeps) {
   const viewer = ref<InstanceType<typeof SceneViewer> | null>(null);
   const scene = ref<SceneData | null>(null);
@@ -53,8 +72,33 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   const sceneError = ref("");
   const brightness = ref(1.45);
   const activeView = ref("left45");
-  const exportSize = ref(1024);
+  /** 预览区右键菜单的位置；open 为 false 时不显示。
+   *
+   * 与投影列表的行右键菜单分开存放：那个作用于文件行，这个作用于 3D 画布，
+   * 两者同时在屏上没有任何意义，混用一份状态会让它们互相顶掉。
+   */
+  const viewMenu = ref<{ open: boolean; x: number; y: number }>({
+    open: false,
+    x: 0,
+    y: 0,
+  });
+  /** 当前是否正射投影。与 activeView 分开记录：用户可以手动切投影而
+   *  不换角度，此时 activeView 仍然是原来那个键。 */
+  const orthoView = ref(false);
+  /** 用户保存的自定义视角预设 */
+  const savedViews = ref<SavedViewPreset[]>([]);
+  /** 「保存为预设」面板是否打开 */
+  const viewPresetOpen = ref(false);
+  const exportSize = ref<number>(1024);
+  /** 导出尺寸的宽高比；与 exportSize（短边像素）一起决定实际宽高 */
+  const exportAspect = ref<ExportAspect>("1x1");
+  /** 当前导出尺寸换算出的像素宽高 */
+  const exportPixels = computed(() => exportPixelSize(exportAspect.value, exportSize.value));
   const exporting = ref(false);
+  /** 导出设置面板是否打开 */
+  const exportOpen = ref(false);
+  /** 本次打开导出面板是为了导出当前文件，还是批量导出勾选项 */
+  const exportBatchMode = ref(false);
   /** 批量导出的进度（null 表示未在批量导出） */
   const exportingProgress = ref<{ done: number; total: number } | null>(null);
 
@@ -104,25 +148,116 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   );
 
   const sceneInfo = computed(() => {
-    if (!scene.value) return "";
     const cur = scene.value;
-    const parts = [t("export.triangles", { count: cur.totalTriangles.toLocaleString() })];
-    if (cur.unresolvedBlocks > 0) {
-      parts.push(t("export.unresolved", { count: cur.unresolvedBlocks }));
-    }
-    return parts.join(t("export.infoSeparator"));
+    // 三角形数改到 3D 视图右下角常驻显示，这条只留「有哪些方块没贴图」
+    // 这类需要提醒的异常，正常时整条不显示
+    if (!cur || cur.unresolvedBlocks <= 0) return "";
+    return t("export.unresolved", { count: cur.unresolvedBlocks });
   });
 
+  /** 切到某个视角预设。
+   *
+   * 投影方式由预设自己决定（真等距是正射，其余是透视），因此统一走
+   * applyViewPreset 而不是 applyPreset——否则切到「真等距」时只会换角度、
+   * 投影仍是上一次的。
+   */
   function setView(name: string) {
     activeView.value = name;
-    viewer.value?.applyPreset(name);
+    // 记下这次切换带上了投影方式：右键菜单里「正射投影」的勾选状态、
+    // 以及下次保存自定义预设都要读它
+    orthoView.value = presetIsOrtho(name);
+    viewer.value?.applyViewPreset(name);
   }
 
-  /** 导出当前视角为透明背景 PNG（单个文件） */
-  async function exportPreview() {
+  /** 手动切换正射/透视，不改角度。
+   *
+   * 与 setView 的区别：它只换投影方式，当前朝向保持不变。
+   * 用户想「用同一个角度看看正射什么效果」时用这个。
+   */
+  function setOrthoView(ortho: boolean) {
+    orthoView.value = ortho;
+    viewer.value?.setOrtho(ortho);
+  }
+
+  /** 在预览区某处打开右键菜单 */
+  function openViewMenu(x: number, y: number) {
+    viewMenu.value = { open: true, x, y };
+  }
+
+  function closeViewMenu() {
+    if (viewMenu.value.open) viewMenu.value = { ...viewMenu.value, open: false };
+  }
+
+  /** 把当前视角存成一条自定义预设。
+   *
+   * 位姿可传可不传：不传就取当前相机的快照（「照我现在看到的存」），
+   * 传了就按传入的值存（面板里改过角度之后存的就是改后的值）。
+   *
+   * 候选预设必须过一遍 `sanitizeViewPreset`——那是从磁盘读回来时用的同一套
+   * 校验。写读两侧用同一条规则，才不会出现「存得进、重启后被静默丢弃」：
+   * 位置与目标重合、坐标里有 NaN 这类值当次看着正常，重开就没了。
+   *
+   * 返回失败原因（用于提示），成功返回空字符串。名字不可用、或场景还没就绪
+   * 时不能存——存一条点下去没反应的预设比不存更糟。
+   */
+  function saveCurrentView(
+    name: string,
+    edited?: {
+      ortho: boolean;
+      position: [number, number, number];
+      target: [number, number, number];
+    },
+  ): string {
+    if (!scene.value) return t("view.saveNotReady");
+    const snapshot = viewer.value?.cameraPose() ?? null;
+    const pose = edited ?? snapshot;
+    if (!pose) return t("view.saveNotReady");
+    const ortho = edited ? edited.ortho : orthoView.value;
+    if (!isPresetNameUsable(name, savedViews.value)) {
+      return savedViews.value.some((p) => p.name === name.trim())
+        ? t("view.saveDuplicate")
+        : t("view.saveInvalidName");
+    }
+    const { yaw, pitch } = anglesFromPosition(
+      new THREE.Vector3(...pose.position),
+      new THREE.Vector3(...pose.target),
+    );
+    const candidate = sanitizeViewPreset({
+      name: name.trim(),
+      ortho,
+      position: pose.position,
+      target: pose.target,
+      yaw,
+      pitch,
+    });
+    if (!candidate) return t("view.saveInvalidPose");
+    savedViews.value = [...savedViews.value, candidate];
+    return "";
+  }
+
+  /** 删除一条自定义预设 */
+  function removeSavedView(name: string) {
+    savedViews.value = savedViews.value.filter((p) => p.name !== name);
+  }
+
+  /** 应用一条自定义预设 */
+  function applySavedViewByName(name: string) {
+    const preset = savedViews.value.find((p) => p.name === name);
+    if (!preset) return;
+    orthoView.value = preset.ortho;
+    activeView.value = `custom:${name}`;
+    viewer.value?.applySavedView(preset);
+  }
+
+  /** 导出当前视角为透明背景 PNG（单个文件）。
+   *
+   * 尺寸由导出面板确认后传入：面板里既能选预设，也能手填宽高。
+   * 不传时退回当前记住的尺寸，供「不改设置直接再导一次」这类调用使用。
+   */
+  async function exportPreview(size?: { w: number; h: number }) {
     const cur = s.selected.value;
     if (!cur || !scene.value) return;
-    const size = exportSize.value;
+    const px = size ?? exportPixels.value;
     const stem = cur.fileName.replace(/\.litematic$/i, "");
     // 同 pickDirectory：保存对话框失败时必须给出提示，
     // 放在 try 外会让这个 Promise 静默 reject，用户点了导出却没反应
@@ -130,7 +265,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     try {
       target = await save({
         title: t("export.previewTitle"),
-        defaultPath: `${stem}_preview_${size}.png`,
+        defaultPath: `${stem}_preview_${px.w}x${px.h}.png`,
         filters: [{ name: t("export.pngFilter"), extensions: ["png"] }],
       });
     } catch (e) {
@@ -141,10 +276,10 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
 
     exporting.value = true;
     try {
-      const bytes = await viewer.value?.exportPng(size);
+      const bytes = await viewer.value?.exportPng(px.w, px.h);
       if (!bytes) throw new Error(t("export.notReady"));
       await writeFile(target, bytes);
-      Message.success(t("export.previewExported", { size }));
+      Message.success(t("export.previewExported", { w: px.w, h: px.h }));
     } catch (e) {
       Message.error(t("export.failed", { error: String(e) }));
     } finally {
@@ -169,6 +304,24 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   }
 
   /**
+   * 批量导出该用哪个视角。
+   *
+   * `activeView` 有两种取值：内置预设的键，或 `custom:<名字>`。
+   * 后者要去 `savedViews` 里查出实际位姿——把 `custom:xxx` 当内置键传下去
+   * 会被查表兜底成正面透视，用户拿到一整批角度不对的图却没有任何提示。
+   *
+   * 查不到（预设被删、状态脏了）时返回 null，由调用方明确报错。
+   */
+  function currentExportView(): string | SavedViewPreset | null {
+    const name = activeView.value;
+    if (!name.startsWith("custom:")) {
+      return isBuiltinView(name) ? name : null;
+    }
+    const preset = savedViews.value.find((p) => `custom:${p.name}` === name);
+    return preset ?? null;
+  }
+
+  /**
    * 批量导出预览图。
    *
    * 用独立的离屏渲染器逐个渲染，而不是把界面切到每个文件再导出：
@@ -177,7 +330,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
    * 单个文件失败不中断整批——某个投影读不出来（被占用、格式异常）时
    * 其余文件仍应导出成功，最后把失败清单如实报出来。
    */
-  async function exportBatch() {
+  async function exportBatch(size?: { w: number; h: number }) {
     const list = s.checkedFiles.value.filter((f) => !f.error);
     if (list.length === 0) {
       Message.warning(t("export.noChecked"));
@@ -186,8 +339,14 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     const dir = await pickExportDir();
     if (!dir) return;
 
-    const size = exportSize.value;
-    const view = activeView.value;
+    const px = size ?? exportPixels.value;
+    // 当前视角可能是一条自定义预设：那时 activeView 是 `custom:名字`，
+    // 不能当内置视角名传下去，否则会静默退回正面透视
+    const view = currentExportView();
+    if (view === null) {
+      Message.warning(t("export.viewUnavailable"));
+      return;
+    }
     exporting.value = true;
     exportingProgress.value = { done: 0, total: list.length };
     let renderer: OffscreenRenderer | null = null;
@@ -202,8 +361,8 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
       for (const f of list) {
         try {
           const data = await buildScene(f.path);
-          const bytes = await renderer.renderPng(data, size, view);
-          const name = names.take(previewStem(f.fileName, size), ".png");
+          const bytes = await renderer.renderPng(data, px.w, px.h, view);
+          const name = names.take(previewStem(f.fileName, px.w, px.h), ".png");
           await writeFile(joinPath(dir, name), bytes);
           ok += 1;
         } catch (e) {
@@ -222,7 +381,7 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     }
 
     if (failures.length === 0) {
-      Message.success(t("export.batchDone", { count: ok, size, dir }));
+      Message.success(t("export.batchDone", { count: ok, w: px.w, h: px.h, dir }));
     } else {
       Message.warning({
         content: t("export.batchPartial", {
@@ -243,28 +402,59 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
    * 但出问题时仍需要看到 ID，因此两者都保留。
    * 中文名查不到时由 slot 回退显示 ID（见模板里的 zh 插槽）。
    *
-   * 最后一列是「堆叠」，需要可拖动就必须让**它之后**还有一列：
-   * Arco 判定 resizable 要求 `index2 < row.length - 1`（table.js:1247），
-   * 否则最后一列永远没有拖动手柄。这里同样补一个 1px 占位列。
+   * 状态列只在「区分属性」开启时出现：按物品合计的那些行里，一个状态只是
+   * 该行的代表状态，数量却是这一行所有状态的总和，写出来反而误导。
+   *
+   * 最后一列是固定的操作列，每行一个「替换」按钮（入口跟着它作用的那一行，
+   * 不必先选中再去找表头按钮）。固定的列没有拖动手柄——它的宽度不参与
+   * 布局计算，固定值是列定义里的常量。
    */
   /** 列定义随界面语言变化，用 computed 包住，切语言后表头跟着变。
    *  名字列走展示插槽：显示哪一套名字由界面语言决定，后端两套都给了。 */
-  const blockColumns = computed<TableColumnData[]>(() => [
-    { title: t("stats.icon"), slotName: "icon", width: 60 },
-    { title: t("displayName.column"), slotName: "display", width: 150, ellipsis: true, tooltip: true },
-    { title: t("stats.block"), dataIndex: "name", ellipsis: true, tooltip: true },
-    // 状态走插槽：合并显示的行要写「含 N 种状态」而不是某一个代表状态
-    { title: t("stats.state"), dataIndex: "state", slotName: "state", ellipsis: true, tooltip: true },
-    { title: t("stats.count"), dataIndex: "count", width: 90 },
-    { title: t("stats.stacks"), slotName: "stacks", width: 110 },
-    {
-      title: "",
-      dataIndex: "__block_filler",
-      width: 1,
-      headerCellClass: "block__filler-col",
-      bodyCellClass: "block__filler-col",
-    },
-  ]);
+  const blockColumns = computed<TableColumnData[]>(() => {
+    const cols: TableColumnData[] = [
+      { title: t("stats.icon"), slotName: "icon", width: 60 },
+      {
+        title: t("displayName.column"),
+        slotName: "display",
+        width: 150,
+        ellipsis: true,
+        tooltip: true,
+      },
+      // 方块名走插槽：按物品合计时一个物品可能跨了几种方块形态（火把与墙上的
+      // 火把），而状态列在合计视图下不显示，跨形态这件事只能标在这一列上
+      {
+        title: t("stats.block"),
+        dataIndex: "name",
+        slotName: "name",
+        ellipsis: true,
+        // 这一列自己给 title（跨形态时列出具体是哪几个方块名），
+        // Arco 的 tooltip 会把整段文字再套一层，两个提示会叠在一起
+        tooltip: false,
+      },
+    ];
+    if (blockSplitStates.value) {
+      cols.push({
+        title: t("stats.state"),
+        dataIndex: "state",
+        ellipsis: true,
+        tooltip: true,
+      });
+    }
+    cols.push(
+      { title: t("stats.count"), dataIndex: "count", width: 90 },
+      { title: t("stats.stacks"), slotName: "stacks", width: 110 },
+      {
+        title: t("stats.action"),
+        slotName: "act",
+        // 英文界面要放得下 "Action" 与 "Replace"：单元格左右各有 16px 内边距，
+        // 太窄会折行（中文字少，窄一点反而好看）
+        width: 96,
+        fixed: "right",
+      },
+    );
+    return cols;
+  });
 
   /** 方块栏列宽：由用户拖动表头调整，与侧栏同一套做法。
    *
@@ -276,11 +466,11 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   const blockTableKey = ref(0);
 
   function onBlockColumnResize(dataIndex: string, width: number) {
-    if (!dataIndex || dataIndex === "__block_filler") return;
+    if (!dataIndex) return;
     blockColWidths.value = { ...blockColWidths.value, [dataIndex]: width };
   }
 
-  /** 实际渲染用的方块栏列：把用户调整过的宽度套回去，并让最后一列可拖 */
+  /** 实际渲染用的方块栏列：把用户调整过的宽度套回去 */
   const blockTableColumns = computed<TableColumnData[]>(() =>
     blockColumns.value.map((c) => {
       const key = String(c.dataIndex ?? "");
@@ -300,20 +490,11 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   const ICON_BATCH = 128;
   const blockPage = ref(1);
 
-  /** 方块统计表的行：按**物品**合计，照投影模组 Litematica 的材料清单口径。
-   *
-   * 后端给的是「每个方块状态用了多少个」（红石粉的强度、铁轨的朝向与通电、
-   * 楼梯的朝向……一个方块可以占几十行）。这里先把状态折算成「建造它所需的
-   * 物品与个数」（见 utils/material_items.ts），再按物品累加：同一个物品的
-   * 不同状态与不同摆法自然合成一行，数量是要备的物品数。
-   *
-   * 代表状态取该物品下最先出现（后端按数量降序）的那一行，渲染图用它；
-   * 跨了多个方块名时，若其中有基础形态（火把与墙上的火把）就优先用基础形态
-   * 的名字、中文名与渲染图。跨了哪几个方块名记在 forms 里，替换时据此说明
-   * 只覆盖了其中一个名字。
-   */
-  const blockRows = computed<BlockRow[]>(() => {
-    const all = s.analysis.value?.blocks ?? [];
+  /** 是否「区分属性」：开启后每种方块状态单独一行，关闭则按物品合计。 */
+  const blockSplitStates = ref(false);
+
+  /** 按物品合计的行：「建造这个东西一共要备多少」。 */
+  function mergedBlockRows(all: BlockCount[]): BlockRow[] {
     const out: BlockRow[] = [];
     const at = new Map<string, number>();
     // 该物品当前的代表行是否已经是「基础形态」（方块名就等于物品名）。
@@ -326,7 +507,14 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
         const i = at.get(item.name);
         if (i === undefined) {
           at.set(item.name, out.length);
-          out.push({ ...b, name: item.name, count: add, stateCount: 1, forms: [b.name] });
+          out.push({
+            ...b,
+            key: item.name,
+            name: item.name,
+            count: add,
+            stateCount: 1,
+            forms: [b.name],
+          });
           if (b.name === item.name) baseForm.add(item.name);
           continue;
         }
@@ -347,8 +535,43 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     // 合计后的数量与后端给出的单状态数量不同，名次要重排：否则「用了 8000 个
     // 的红石粉」会排在「用了 12 个的石头」后面。数量相同按名字排，结果稳定
     //（不用 localeCompare：它随环境语言数据变化，同一份数据在不同机器上会排出不同顺序）。
-    out.sort((a, b) => b.count - a.count || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    out.sort((a, b) => b.count - a.count || compareNames(a.name, b.name));
     return out;
+  }
+
+  /** 按状态分行的行：一行就是一个方块状态，数量是处于该状态的方块数。 */
+  function splitStateRows(all: BlockCount[]): BlockRow[] {
+    const out = all.map<BlockRow>((b) => ({
+      ...b,
+      key: b.state,
+      stateCount: 1,
+      forms: [b.name],
+    }));
+    // 不依赖后端返回顺序：切换开关时行要按同一套规则重排，否则同一个方块在
+    // 两种视图里的名次会不同，用户会以为数量变了
+    out.sort((a, b) => b.count - a.count || compareNames(a.state, b.state));
+    return out;
+  }
+
+  /** 方块统计表的行。
+   *
+   * 默认按**物品**合计，照投影模组 Litematica 的材料清单口径：后端给的是
+   * 「每个方块状态用了多少个」（红石粉的强度、铁轨的朝向与通电、楼梯的朝向……
+   * 一个方块可以占几十行），先把状态折算成「建造它所需的物品与个数」
+   * （见 utils/material_items.ts），再按物品累加，数量是要备的物品数。
+   *
+   * 打开「区分属性」后改为每种状态一行，数量是该状态的方块数——这是替换规则
+   * 的实际命中口径（替换按方块名与属性精确匹配），与材料口径并列存在。
+   * 两种视图的差别不只在分组：数量本身含义不同，因此界面上要分别说明。
+   */
+  const blockRows = computed<BlockRow[]>(() => {
+    const all = s.analysis.value?.blocks ?? [];
+    return blockSplitStates.value ? splitStateRows(all) : mergedBlockRows(all);
+  });
+
+  // 行集合整个换了，停在旧页码会落到一个不知从何而来的位置
+  watch(blockSplitStates, () => {
+    blockPage.value = 1;
   });
 
   /** 数量最多的那一行方块（与统计表同一口径，也就是用户看到的那个数） */
@@ -371,21 +594,6 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     const start = (blockPage.value - 1) * BLOCK_PAGE_SIZE;
     return blockRows.value.slice(start, start + BLOCK_PAGE_SIZE);
   });
-
-  /** 状态一栏显示什么。
-   *
-   * 合计了多条记录的行不能只写它那一个代表状态：那一行的数量是所有这些记录的
-   * 总和，写一个具体状态会让人以为「只有这么多是那个状态的」。跨了多个方块名
-   * 时还要点明这一点——用户以为「这一行就是火把」，实际上墙上的火把也在里面。
-   */
-  function blockStateText(row: BlockRow): string {
-    if (row.forms.length > 1) {
-      return t("stats.mergedForms", { forms: row.forms.length, states: row.stateCount });
-    }
-    return row.stateCount > 1
-      ? t("stats.mergedStates", { states: row.stateCount })
-      : row.state;
-  }
 
   /** 状态键 → data URL。用普通 Map 而不是 reactive：
    * 这里会有几百上千项，逐项做响应式代理得不偿失，
@@ -468,21 +676,20 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
    */
   function blockTableText(): string {
     const rows: string[] = [];
-    rows.push(
-      [
-        t("export.tableName"),
-        t("export.tableId"),
-        t("export.tableState"),
-        t("export.tableCount"),
-        t("export.tableStacks"),
-      ].join("\t"),
-    );
+    const head = [t("export.tableName"), t("export.tableId")];
+    // 状态列与界面同步：界面上没有状态列时不导出它，否则拿到文件的人会以为
+    // 界面上也按状态分了行、数量口径与界面不同
+    if (blockSplitStates.value) head.push(t("export.tableState"));
+    head.push(t("export.tableCount"), t("export.tableStacks"));
+    rows.push(head.join("\t"));
     for (const b of blockRows.value) {
       // 导出的是当前界面语言看得懂的表格，但截断/落盘后语言不会再变，
       // 所以按导出时的语言取名字
       const name = displayName(b).replace(/[\t\r\n]/g, " ");
-      const state = blockStateText(b).replace(/[\t\r\n]/g, " ");
-      rows.push([name, b.name, state, String(b.count), formatStacks(b.count)].join("\t"));
+      const cells = [name, b.name];
+      if (blockSplitStates.value) cells.push(b.state.replace(/[\t\r\n]/g, " "));
+      cells.push(String(b.count), formatStacks(b.count));
+      rows.push(cells.join("\t"));
     }
     return rows.join("\r\n");
   }
@@ -544,7 +751,21 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     sceneError,
     brightness,
     activeView,
+    viewMenu,
+    orthoView,
+    savedViews,
+    viewPresetOpen,
+    saveCurrentView,
+    removeSavedView,
+    applySavedViewByName,
+    setOrthoView,
+    openViewMenu,
+    closeViewMenu,
     exportSize,
+    exportAspect,
+    exportPixels,
+    exportOpen,
+    exportBatchMode,
     exporting,
     exportingProgress,
     loadScene,
@@ -564,9 +785,9 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     resetBlockColumnWidths,
     BLOCK_PAGE_SIZE,
     blockPage,
+    blockSplitStates,
     blockRows,
     blockPageRows,
-    blockStateText,
     iconOf,
     iconErrorOf,
     resetBlockIcons,

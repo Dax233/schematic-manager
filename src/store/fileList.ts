@@ -12,18 +12,20 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Ref } from "vue";
-import { Message } from "@arco-design/web-vue";
+import { Message, Modal } from "@arco-design/web-vue";
 import type { TableColumnData, TableData } from "@arco-design/web-vue";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { t } from "../i18n";
 import {
   analyzeSchematic,
+  applyReplace,
   copyFilesToClipboard,
   copyFilesToDir,
   deleteFiles,
   renameSchematic,
   revealInFileManager,
   saveMetadata,
+  saveSchematicAs,
   scanDuplicates,
   scanLitematics,
 } from "../api";
@@ -31,9 +33,25 @@ import { NAME_COL_W } from "../composables/useSidebarResize";
 import type {
   AnalysisResult,
   DuplicateScan,
+  ReplaceRule,
   SchematicSummary,
   SceneData,
 } from "../types";
+
+/** 可排序的字段，与列表列一一对应（#43 点名的五项）。
+ *
+ * 定义在模块级而不是 slice 内部：界面状态域要用它校验从磁盘恢复的值，
+ * 写在 slice 里就没法引用。 */
+export type SortKey =
+  | "fileName"
+  | "name"
+  | "mcVersionName"
+  | "timeModified"
+  | "author";
+
+/** 排序方向。Arco 的列头第三次点击是「取消」，因此调用方还会传空值，
+ *  这个类型只覆盖有方向的那两种。 */
+export type SortOrder = "ascend" | "descend";
 
 /** 文件列表域用到的其他域成员。
  *
@@ -142,7 +160,21 @@ export function createFileListSlice(s: FileListDeps) {
   const saving = ref(false);
   // 元数据编辑草稿。选中文件时用文件中的值填充
   const draft = ref({ fileName: "", name: "", author: "", description: "" });
-  const dirty = ref(false);
+  /** 待保存的方块替换规则。
+   *
+   * 替换不再点一下就写盘：它和其他改动一样先进草稿，用户点「保存」时才
+   * 真正写回文件。这样「改了但还没保存」是一个统一的状态，撤销与确认都
+   * 只有一处入口。
+   */
+  const pendingReplace = ref<ReplaceRule | null>(null);
+  /** 是否有尚未保存的改动。元数据与替换任何一个变了都算。 */
+  const dirty = computed(
+    () =>
+      dirtyMeta.value ||
+      pendingReplace.value !== null,
+  );
+  /** 元数据是否被改过（替换另有 pendingReplace 记录） */
+  const dirtyMeta = ref(false);
   const searchText = ref("");
 
   // ---------------------------------------------------------------- 重复文件筛查
@@ -349,16 +381,75 @@ export function createFileListSlice(s: FileListDeps) {
     clearDuplicateScan();
   });
 
+  // ---------------------------------------------------------------- 排序
+  //
+  // 排序只改变**显示**顺序：files / orderedFiles 的语义（路径序、重复组置顶）
+  // 仍被筛查、勾选、选中收敛等逻辑依赖，不能动它。因此这里在列表交给表格前
+  // 单独排一次。
+  //
+  // 用工具条上的排序控件，而不是 Arco 的列头排序：要排的五个字段里，
+  // 名称、时间、作者都不是列表列（列表只有文件名/版本/尺寸/方块数），
+  // 为了排序把它们都加成列会把目录栏撑宽，而这一版正在做的正是布局优化。
+  const sortKey = ref<SortKey | null>(null);
+  const sortOrder = ref<SortOrder | null>(null);
+
+  /** 指定排序字段与方向；两者都传 null 表示回到默认的路径序。 */
+  function setSort(key: SortKey | null, order: SortOrder | null) {
+    // 只给字段不给方向时按升序：调用方（下拉框）表达的是「按这个字段排」，
+    // 不该要求它同时知道方向状态
+    sortKey.value = key;
+    sortOrder.value = key === null ? null : (order ?? "ascend");
+  }
+
+  /** 排序用的取值：字符串统一转小写比较，数字原样。
+   *  作者、名称可能为空，空值统一排到末尾（不随升降序翻转），
+   *  否则降序时一堆空作者会顶到最前面，盖住真正有内容的那几行。 */
+  function sortValue(f: SchematicSummary, key: SortKey): string | number {
+    if (key === "timeModified") return f.timeModified;
+    if (key === "author") return (f.author ?? "").toLowerCase();
+    if (key === "name") return (f.name ?? "").toLowerCase();
+    if (key === "mcVersionName") return (f.mcVersionName ?? "").toLowerCase();
+    return (f.fileName ?? "").toLowerCase();
+  }
+
+  /** 按当前排序规则排出一份新数组；未选排序时按路径（与原行为一致） */
+  function sortFiles(list: SchematicSummary[]): SchematicSummary[] {
+    const key = sortKey.value;
+    const order = sortOrder.value;
+    if (!key || !order) return [...list].sort((a, b) => a.path.localeCompare(b.path));
+    const dir = order === "descend" ? -1 : 1;
+    return [...list].sort((a, b) => {
+      const va = sortValue(a, key);
+      const vb = sortValue(b, key);
+      // 空字符串排末尾，与升降序无关
+      const ea = va === "";
+      const eb = vb === "";
+      if (ea !== eb) return ea ? 1 : -1;
+      if (ea && eb) return a.path.localeCompare(b.path);
+      const cmp =
+        typeof va === "number" && typeof vb === "number"
+          ? va - vb
+          : String(va).localeCompare(String(vb), "zh-Hans-CN");
+      // 值相同时按路径定序，保证顺序稳定（否则每次重排都可能换位置）
+      return cmp !== 0 ? cmp * dir : a.path.localeCompare(b.path);
+    });
+  }
+
   /** 列表显示顺序：重复文件排在最前（同组相邻），其次是疑似重复组，
-   *  其余仍按路径排序。
+   *  其余按当前排序规则（未选排序时仍按路径）。
    *
    * 「靠前」是为了让用户一眼看到筛查结果，不必在几百行里自己找；
    * 同组相邻才谈得上顺着颜色一份份核对。没做过筛查时顺序与原来完全一致。
+   *
+   * 排序只在同一层级、同一组内部生效，不会把筛查结果排散——
+   * 那些标记是用来顺着颜色核对的，一旦被排序拆开就失去了意义。
    */
   const orderedFiles = computed<SchematicSummary[]>(() => {
-    if (!dupResult.value && dupSuspects.value.length === 0) return files.value;
+    if (!dupResult.value && dupSuspects.value.length === 0) {
+      return sortFiles(files.value);
+    }
     // 值里的两个数依次是「层级」与「组序号」：先按层级（重复在前、疑似在后），
-    // 同层再按组序，同组内部仍按路径排
+    // 同层再按组序，同组内部按当前排序规则
     const rank = new Map<string, [number, number]>();
     (dupResult.value?.groups ?? []).forEach((g, i) => {
       for (const p of g.paths) rank.set(p, [0, i]);
@@ -366,14 +457,14 @@ export function createFileListSlice(s: FileListDeps) {
     dupSuspects.value.forEach((g, i) => {
       for (const p of g.paths) rank.set(p, [1, i]);
     });
-    if (rank.size === 0) return files.value;
-    return [...files.value].sort((a, b) => {
+    if (rank.size === 0) return sortFiles(files.value);
+    return sortFiles(files.value).sort((a, b) => {
       const ra = rank.get(a.path);
       const rb = rank.get(b.path);
-      if (ra && rb) return ra[0] - rb[0] || ra[1] - rb[1] || a.path.localeCompare(b.path);
+      if (ra && rb) return ra[0] - rb[0] || ra[1] - rb[1];
       if (ra) return -1;
       if (rb) return 1;
-      return a.path.localeCompare(b.path);
+      return 0;
     });
   });
 
@@ -693,7 +784,7 @@ export function createFileListSlice(s: FileListDeps) {
     }
   }
 
-  /** 右键菜单：只保留「打开文件夹」，作用于右键点中的那一行。
+  /** 右键菜单：只保留「打开所在目录」，作用于右键点中的那一行。
    *
    * 用 a-table 的 rowContextmenu 事件而不是自定义 tr 插槽：
    * 该插槽在 Arco 里不存在（实测只在 tbody 内部渲染 tr），
@@ -959,7 +1050,20 @@ export function createFileListSlice(s: FileListDeps) {
       author: record?.author ?? "",
       description: record?.description ?? "",
     };
-    dirty.value = false;
+    // 切文件时待替换规则一并丢弃：它记的是「这个文件要换成什么」，
+    // 换到别的文件上毫无意义，留着还会被误存到另一个投影里
+    pendingReplace.value = null;
+    dirtyMeta.value = false;
+  }
+
+  /** 记下一条待保存的替换规则。保存时才真正写进文件。 */
+  function stageReplace(rule: ReplaceRule) {
+    pendingReplace.value = rule;
+  }
+
+  /** 丢弃待保存的替换规则 */
+  function clearPendingReplace() {
+    pendingReplace.value = null;
   }
 
   /** 文件名是否被改过（忽略首尾空白，但**区分大小写**）。
@@ -979,6 +1083,31 @@ export function createFileListSlice(s: FileListDeps) {
     let renameNote = "";
     let renamedOk = false;
     try {
+      // 顺序：替换 → 改名 → 写元数据。
+      //
+      // 替换放在最前，因为它作用在**内容**上，与路径无关；改名会改变路径，
+      // 之后再用旧路径去替换就找不到文件了。元数据放最后，原因是改名本身
+      // 需要先把元数据写到新路径上（见下）。
+      let replaceNote = "";
+      if (pendingReplace.value) {
+        const rule = pendingReplace.value;
+        try {
+          const r = await applyReplace(cur.path, rule);
+          if (r.replaced > 0) {
+            replaceNote = t("files.savedReplace", { count: r.replaced });
+          } else {
+            replaceNote = t("files.savedReplaceNone");
+          }
+          // 替换已写进文件，草稿里的这条规则必须立刻清掉：
+          // 留着的话用户再点一次保存会重复替换一遍
+          pendingReplace.value = null;
+        } catch (e) {
+          // 替换失败不阻断元数据保存：两者互不影响，能存下去的应当存下去，
+          // 但必须让用户知道替换没成功，不能悄悄跳过
+          Message.error(t("files.replaceSaveFailed", { error: String(e) }));
+          throw e;
+        }
+      }
       // 改了文件名就先改名，再把元数据写到**新路径**上。
       // 顺序不能反：先写元数据再改名，会先给旧名字留一份备份，
       // 而改名又要重新链接备份，同一件事被做两遍且中间态对不上。
@@ -1006,14 +1135,16 @@ export function createFileListSlice(s: FileListDeps) {
         author: draft.value.author,
         description: draft.value.description,
       });
-      dirty.value = false;
+      dirtyMeta.value = false;
       // 重新读取，确保界面显示的是文件中的真实内容而不是内存里的草稿
       await rescanAll();
       const hit = files.value.find((f) => f.path === targetPath);
       if (hit) {
         selected.value = hit;
         resetDraft(hit);
-        Message.success(t("files.saved", { note: renameNote, path: out.backupPath }));
+        Message.success(
+          t("files.saved", { note: `${replaceNote}${renameNote}`, path: out.backupPath }),
+        );
       } else {
         // 文件被移动或重命名时，界面若继续显示旧记录会误导用户
         Message.warning(
@@ -1038,10 +1169,88 @@ export function createFileListSlice(s: FileListDeps) {
     }
   }
 
+  /** 另存为新文件。
+   *
+   * 与「保存」的区别：产物是一个全新文件，原文件不动；保存成功后把编辑对象
+   * 切到新文件，之后的保存都写到新路径上。
+   *
+   * 待替换规则不跟随：它记的是「在原文件上改哪些方块」，写到新文件里再执行
+   * 一次是合理的，但这里刻意不带过去——另存为的语义是「把当前状态存一份」，
+   * 用户随后仍可在新文件上重新挑规则。
+   */
+  async function saveAs() {
+    const cur = selected.value;
+    if (!cur) return;
+    saving.value = true;
+    try {
+      // 保存对话框失败必须提示：放在 try 外会让这个 Promise 静默 reject
+      let target: unknown;
+      try {
+        const stem = cur.fileName.replace(/\.litematic$/i, "");
+        target = await save({
+          title: t("files.saveAsTitle"),
+          defaultPath: `${stem}_copy.litematic`,
+          filters: [{ name: t("files.litematicFilter"), extensions: ["litematic"] }],
+        });
+      } catch (e) {
+        Message.error(t("files.saveDialogFailed", { error: String(e) }));
+        return;
+      }
+      if (typeof target !== "string") return;
+
+      const out = await saveSchematicAs(cur.path, target, {
+        name: draft.value.name,
+        author: draft.value.author,
+        description: draft.value.description,
+      });
+      Message.success(t("files.saveAsDone", { path: out }));
+
+      // 切到新文件：用户是拿它当「换个名字继续编辑」用的，
+      // 留在原文件上会让后续保存又写回原路径，与刚才的动作相反
+      await rescanAll();
+      const hit = files.value.find((f) => f.path === out);
+      if (hit) {
+        selected.value = hit;
+        resetDraft(hit);
+        void s.loadScene(hit);
+      }
+    } catch (e) {
+      Message.error(t("files.saveAsFailed", { error: String(e) }));
+    } finally {
+      saving.value = false;
+    }
+  }
+
+  /** 有未保存改动时请用户确认。
+   *
+   * 返回 true 表示可以继续（没有改动，或用户选择放弃改动）。
+   * 用 a-modal 的确认框而不是直接丢弃：替换与元数据都可能改了不少内容，
+   * 悄悄丢掉会让用户以为存过了。
+   */
+  async function confirmDiscard(messageKey: string): Promise<boolean> {
+    if (!dirty.value) return true;
+    try {
+      await Modal.confirm({
+        title: t("files.unsavedTitle"),
+        content: t(messageKey),
+        okText: t("files.unsavedDiscard"),
+        cancelText: t("files.unsavedCancel"),
+      });
+      return true;
+    } catch {
+      // 用户点了取消：Arco 的 confirm 以 reject 表示，不是错误
+      return false;
+    }
+  }
+
   // Arco 的 row-click 回调给出的是通用的 TableData，
   // 这里收窄回业务类型；行数据本就来自 files，字段是一致的。
   async function onRowClick(raw: TableData) {
     const record = raw as unknown as SchematicSummary;
+    // 换成另一个文件前先确认：未保存的改动会随 resetDraft 一起丢掉。
+    // 点的是当前这个文件时不必问——那正是「重新载入」，用户本来就想丢弃草稿。
+    const switching = selected.value?.path !== record.path;
+    if (switching && !(await confirmDiscard("files.unsavedSwitch"))) return;
     selected.value = record;
     s.resetBlockIcons();
     analysis.value = null;
@@ -1113,6 +1322,9 @@ export function createFileListSlice(s: FileListDeps) {
     files,
     filteredFiles,
     searchText,
+    sortKey,
+    sortOrder,
+    setSort,
     selected,
     analysis,
     analyzing,
@@ -1120,10 +1332,16 @@ export function createFileListSlice(s: FileListDeps) {
     statusText,
     draft,
     dirty,
+    dirtyMeta,
     saving,
     resetDraft,
+    stageReplace,
+    clearPendingReplace,
+    pendingReplace,
     fileNameChanged,
     saveDraft,
+    saveAs,
+    confirmDiscard,
     pickDirectory,
     removeDir,
     rescanAll,

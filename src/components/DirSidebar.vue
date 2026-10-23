@@ -10,15 +10,22 @@
  * Scrollbar），轨道已在全局样式里去掉，不留原生滚动条。
  */
 <script setup lang="ts">
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../store";
+import { useListKeyboard } from "../composables/useListKeyboard";
 import { formatDims } from "../utils/format";
 
 const { t } = useI18n();
 
 const {
   sidebarWidth,
+  files,
   filteredFiles,
+  selected,
+  searchText,
+  dupBusy,
+  scanDuplicatesInline,
   tableColumns,
   tableKey,
   checkedKeys,
@@ -49,14 +56,82 @@ const {
   clearChecks,
   ctxMenu,
   revealRow,
+  sortKey,
+  sortOrder,
+  setSort,
 } = useAppStore();
+
+/** 排序字段清单：顺序就是下拉里的顺序，值对应 store 的 SortKey。
+ *  单独列一份是为了下拉能显示「按路径」这一项（它不是排序字段）。 */
+const SORT_FIELDS = [
+  { key: "fileName", label: "files.sortByFileName" },
+  { key: "name", label: "files.sortByName" },
+  { key: "mcVersionName", label: "files.sortByVersion" },
+  { key: "timeModified", label: "files.sortByTime" },
+  { key: "author", label: "files.sortByAuthor" },
+] as const;
+
+/** 下拉当前值：未排序时用空串表示「按路径」 */
+const sortFieldValue = computed(() => sortKey.value ?? "");
+
+/** 表格容器：键盘导航要绑在它上面，而不是 window——
+ *  绑 window 会让整个应用抢方向键，在搜索框里按方向键就动不了光标。 */
+const tableHost = ref<HTMLElement | null>(null);
+
+/** 当前选中行在列表里的下标。
+ *
+ * 这份表不分页，filteredFiles 就是屏幕上的全部行，因此下标可以直接由
+ * 选中项的路径在 filteredFiles 里查出来。按路径而不是按对象引用比：
+ * 列表重排或重新扫描后对象会被换掉，引用比较会失效。
+ */
+function activeRowIndex(): number {
+  const cur = selected.value;
+  if (!cur) return -1;
+  return filteredFiles.value.findIndex((f) => f.path === cur.path);
+}
+
+useListKeyboard({
+  host: tableHost,
+  rowCount: () => filteredFiles.value.length,
+  activeIndex: activeRowIndex,
+  onSelect: (i) => {
+    const target = filteredFiles.value[i];
+    if (target) void onRowClick(target as never);
+  },
+  // 这份表不分页，翻页键退回为「跳首/末行」
+  paged: () => false,
+});
+
+/** 选字段：选中即按该字段升序排；选「按路径」则取消排序。
+ *
+ * 下拉只负责「选哪个字段」，不负责换方向——重复选同一个字段仍然是升序，
+ * 不会莫名其妙变成降序。换方向由旁边的 ↑/↓ 按钮做。 */
+function onSortFieldChange(v: unknown) {
+  if (v === "" || v === undefined) {
+    setSort(null, null);
+    return;
+  }
+  setSort(v as (typeof SORT_FIELDS)[number]["key"], "ascend");
+}
 </script>
 
 <template>
   <div class="sidebar" :style="{ width: sidebarWidth + 'px' }">
     <!-- 文件操作条：在目录栏顶部、靠左。
-         作用于勾选的文件；未勾选时禁用，避免误操作到「看起来选中」的行。 -->
+         作用于勾选的文件；未勾选时禁用，避免误操作到「看起来选中」的行。
+         搜索与重复筛查放在这里而不是顶部工具条：它们作用于这张列表，
+         入口与被作用的对象应当在同一区域。 -->
     <div class="sidebar__ops">
+      <a-input-search
+        v-model="searchText"
+        size="mini"
+        :placeholder="t('files.searchPlaceholder')"
+        class="sidebar__search"
+        allow-clear
+      />
+      <a-button size="mini" :loading="dupBusy" @click="scanDuplicatesInline">
+        {{ t("files.duplicates") }}
+      </a-button>
       <a-button
         size="mini"
         status="danger"
@@ -119,9 +194,13 @@ const {
       </template>
     </a-alert>
 
-    <a-table
-      :key="tableKey"
-      :columns="tableColumns"
+    <!-- 键盘导航的挂载点：事件绑在这个 div 上而不是 a-table 组件上
+         （组件实例不是 DOM，拿不到 addEventListener）。tabindex 让它可以
+         获得焦点，用户点一下列表再按方向键就会在这里命中。 -->
+    <div ref="tableHost" class="sidebar__table-host" tabindex="0">
+      <a-table
+        :key="tableKey"
+        :columns="tableColumns"
       :data="filteredFiles"
       :pagination="false"
       row-key="path"
@@ -161,14 +240,53 @@ const {
       <template #empty>
         <a-empty :description="t('files.empty')" />
       </template>
-    </a-table>
+      </a-table>
+    </div>
 
-    <!-- 目录栏底部：只放多选操作 -->
+    <!-- 目录栏底部：多选与排序操作 -->
     <div class="sidebar__checks">
+      <!-- 搜索时把「共多少、匹配多少」一并给出来：只显示匹配数会让人
+           以为文件变少了 -->
       <span class="hint-dim">
-        {{ t("files.checkedCount", { checked: checkedCount, total: filteredFiles.length }) }}
+        <template v-if="searchText">
+          {{
+            t("files.checkedCountOfAll", {
+              checked: checkedCount,
+              total: filteredFiles.length,
+              all: files.length,
+              matched: filteredFiles.length,
+            })
+          }}
+        </template>
+        <template v-else>
+          {{ t("files.checkedCount", { checked: checkedCount, total: filteredFiles.length }) }}
+        </template>
       </span>
       <span class="preview__spacer" />
+      <!-- 排序：字段下拉 + 方向按钮。放在这条而不是列头上，因为要排的
+           「名称 / 时间 / 作者」并不是列表列（列表只有文件名/版本/尺寸/方块数），
+           为排序把它们加成列会把目录栏撑宽，与布局优化冲突。
+           方向按钮只在选了字段后可用：按路径排序无所谓升序降序。 -->
+      <a-select
+        :model-value="sortFieldValue"
+        size="mini"
+        :title="t('files.sortToggleTip')"
+        style="width: 116px"
+        @change="onSortFieldChange"
+      >
+        <a-option value="">{{ t("files.sortByPath") }}</a-option>
+        <a-option v-for="f in SORT_FIELDS" :key="f.key" :value="f.key">
+          {{ t(f.label) }}
+        </a-option>
+      </a-select>
+      <a-button
+        size="mini"
+        :disabled="!sortKey"
+        :title="sortOrder === 'descend' ? t('files.sortDesc') : t('files.sortAsc')"
+        @click="sortKey && setSort(sortKey, sortOrder === 'ascend' ? 'descend' : 'ascend')"
+      >
+        {{ sortOrder === "descend" ? "↓" : "↑" }}
+      </a-button>
       <a-button size="mini" :disabled="filteredFiles.length === 0" @click="checkAll">
         {{ t("files.checkAll") }}
       </a-button>
@@ -180,7 +298,7 @@ const {
       </a-button>
     </div>
 
-    <!-- 行的右键菜单：只保留「打开文件夹」 -->
+    <!-- 行的右键菜单：只保留「打开所在目录」 -->
     <div
       v-if="ctxMenu.open"
       class="ctx-menu"

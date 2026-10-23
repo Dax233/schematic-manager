@@ -12,8 +12,14 @@ import type { ComputedRef, Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { loadUiState, saveUiState, scanLitematics } from "../api";
 import { currentLocale, isLocale, locale, setLocale, t } from "../i18n";
-import type { StatusText } from "./fileList";
-import { EXPORT_SIZES, VIEW_PRESETS } from "../render/scene3d";
+import type { ExportAspect, SavedViewPreset } from "../render/scene3d";
+import type { SortKey, SortOrder, StatusText } from "./fileList";
+import {
+  EXPORT_ASPECTS,
+  EXPORT_SHORT_EDGES,
+  isBuiltinView,
+  sanitizeViewPresets,
+} from "../render/scene3d";
 import { isLogLevel } from "../utils/run_log";
 import type { LogLevel } from "../utils/run_log";
 import { reportUiWarning } from "../utils/run_log_report";
@@ -27,6 +33,10 @@ import type { SchematicSummary } from "../types";
 interface UiState {
   version: 1;
   sidebarWidth: number;
+  /** 预览面板高度；缺失时用默认值 */
+  previewHeight?: number;
+  /** 预览舞台宽度；缺失时用默认值 */
+  previewWidth?: number;
   /** 已添加的目录（顺序保持），下次启动自动重新扫描 */
   dirs: string[];
   /** 已勾选显示的目录；缺失时视为全部显示 */
@@ -35,15 +45,40 @@ interface UiState {
   columnWidths?: Record<string, number>;
   activeView: string;
   brightness: number;
+  /** 导出尺寸的短边像素数（旧版含义是正方形边长，取值同样落在合法档位内） */
   exportSize: number;
+  /** 导出尺寸的宽高比标识；缺失时按 1:1 处理 */
+  exportAspect?: string;
+  /** 用户保存的自定义视角预设；读回时逐条校验 */
+  savedViews?: unknown;
   searchText: string;
   /** 界面语言；认不出来的值按默认语言处理 */
   locale?: string;
   /** 运行日志等级；缺失或认不出来的值按 "info" 处理 */
   logLevel?: string;
+  /** 列表排序字段与方向；都没选时按路径排序（原行为） */
+  sortKey?: string;
+  sortOrder?: string;
 }
 
 const UI_STATE_VERSION = 1;
+
+/** 排序字段的合法取值，与 fileList 的 SortKey 保持一致 */
+const SORT_KEYS: readonly SortKey[] = [
+  "fileName",
+  "name",
+  "mcVersionName",
+  "timeModified",
+  "author",
+];
+
+function isSortKey(v: unknown): v is SortKey {
+  return typeof v === "string" && (SORT_KEYS as readonly string[]).includes(v);
+}
+
+function isSortOrder(v: unknown): v is SortOrder {
+  return v === "ascend" || v === "descend";
+}
 
 /** 界面状态域用到的其他域成员（循环引用回避见 fileList.ts）。
  *
@@ -54,6 +89,14 @@ export interface UiStateDeps {
   sidebarWidth: Ref<number>;
   /** 侧栏宽度钳制（composables/useSidebarResize） */
   clampSidebar: (w: number) => number;
+  /** 预览面板高度（composables/usePreviewResize） */
+  previewHeight: Ref<number>;
+  /** 预览面板高度钳制（composables/usePreviewResize） */
+  clampPreviewHeight: (h: number) => number;
+  /** 预览舞台宽度（composables/usePreviewResize） */
+  previewWidth: Ref<number>;
+  /** 预览舞台宽度钳制（composables/usePreviewResize） */
+  clampPreviewWidth: (w: number) => number;
   /** 各目录的文件清单（fileList） */
   dirItems: Ref<Record<string, SchematicSummary[]>>;
   /** 已加载目录列表（fileList） */
@@ -66,10 +109,18 @@ export interface UiStateDeps {
   activeView: Ref<string>;
   /** 预览亮度（scenePreview） */
   brightness: Ref<number>;
-  /** 预览导出尺寸（scenePreview） */
+  /** 预览导出尺寸的短边像素数（scenePreview） */
   exportSize: Ref<number>;
+  /** 预览导出尺寸的宽高比（scenePreview） */
+  exportAspect: Ref<ExportAspect>;
+  /** 用户保存的自定义视角预设（scenePreview） */
+  savedViews: Ref<SavedViewPreset[]>;
   /** 文件搜索词（fileList） */
   searchText: Ref<string>;
+  /** 列表排序字段（fileList）；null 表示按路径 */
+  sortKey: Ref<SortKey | null>;
+  /** 列表排序方向（fileList） */
+  sortOrder: Ref<SortOrder | null>;
   /** 状态栏内容（fileList）；恢复完成后汇报目录数 */
   status: Ref<StatusText>;
   /** 运行日志等级（backups）；本身也是要记住的界面形态 */
@@ -84,15 +135,21 @@ export function createUiStateSlice(s: UiStateDeps) {
     return {
       version: UI_STATE_VERSION,
       sidebarWidth: s.sidebarWidth.value,
+      previewHeight: s.previewHeight.value,
+      previewWidth: s.previewWidth.value,
       dirs: s.loadedDirs.value,
       enabledDirs: Array.from(s.enabledDirs.value),
       columnWidths: { ...s.colWidths.value },
       activeView: s.activeView.value,
       brightness: s.brightness.value,
       exportSize: s.exportSize.value,
+      exportAspect: s.exportAspect.value,
+      savedViews: s.savedViews.value,
       searchText: s.searchText.value,
       locale: currentLocale(),
       logLevel: s.logLevel.value,
+      sortKey: s.sortKey.value ?? undefined,
+      sortOrder: s.sortOrder.value ?? undefined,
     };
   }
 
@@ -169,17 +226,46 @@ export function createUiStateSlice(s: UiStateDeps) {
     if (typeof st.sidebarWidth === "number") {
       s.sidebarWidth.value = s.clampSidebar(st.sidebarWidth);
     }
-    if (typeof st.activeView === "string" && st.activeView in VIEW_PRESETS) {
+    if (typeof st.previewHeight === "number") {
+      s.previewHeight.value = s.clampPreviewHeight(st.previewHeight);
+    }
+    if (typeof st.previewWidth === "number") {
+      s.previewWidth.value = s.clampPreviewWidth(st.previewWidth);
+    }
+    // 只认内置预设的键。不能写成 `st.activeView in VIEW_PRESETS`：`in` 会
+    // 沿原型链查到 constructor、toString 这类键，放进来会让取景算出 NaN。
+    // 自定义预设的 `custom:` 键在这里被排除——它要连 savedViews 一起校验，
+    // 而恢复顺序上没法保证两者对得上，不如回到默认视角更可预期。
+    if (typeof st.activeView === "string" && isBuiltinView(st.activeView)) {
       s.activeView.value = st.activeView;
     }
     if (typeof st.brightness === "number") {
       s.brightness.value = Math.min(2, Math.max(0.5, st.brightness));
     }
-    if (typeof st.exportSize === "number" && EXPORT_SIZES.includes(st.exportSize as never)) {
+    if (
+      typeof st.exportSize === "number" &&
+      EXPORT_SHORT_EDGES.includes(st.exportSize as never)
+    ) {
       s.exportSize.value = st.exportSize;
+    }
+    // 宽高比只认预设里的值：脏值会让导出尺寸算得毫无道理，
+    // 而用户在界面上看不出是「记住了坏值」还是「导出坏了」
+    if (typeof st.exportAspect === "string" && EXPORT_ASPECTS.some((a) => a.key === st.exportAspect)) {
+      s.exportAspect.value = st.exportAspect as ExportAspect;
+    }
+    // 自定义视角预设逐条过校验：磁盘上的数据可能是旧版本写的或被手工改坏，
+    // 把脏值套进相机会得到一个指向 NaN 的画面，且用户看不出是数据坏了
+    if (st.savedViews !== undefined) {
+      s.savedViews.value = sanitizeViewPresets(st.savedViews);
     }
     if (typeof st.searchText === "string") {
       s.searchText.value = st.searchText;
+    }
+    // 排序只认约定里的字段与方向：脏值留下去会让列表顺序变得无法解释，
+    // 而用户看不出是「记住了坏值」还是「排序坏了」
+    if (isSortKey(st.sortKey) && isSortOrder(st.sortOrder)) {
+      s.sortKey.value = st.sortKey;
+      s.sortOrder.value = st.sortOrder;
     }
     // 语言先恢复：后面那些提示文案要用它来出
     if (isLocale(st.locale)) {
@@ -237,10 +323,17 @@ export function createUiStateSlice(s: UiStateDeps) {
   // 记住界面改动。逐个监听而不是 watch 一个大对象：后者要么深比较整棵状态树，
   // 要么在 restoreUiState 写入时也触发一次无谓回写。
   watch(s.sidebarWidth, persistUiState);
+  watch(s.previewHeight, persistUiState);
+  watch(s.previewWidth, persistUiState);
   watch(s.activeView, persistUiState);
   watch(s.brightness, persistUiState);
   watch(s.exportSize, persistUiState);
+  watch(s.exportAspect, persistUiState);
+  // 预设是数组：deep 才能感知增删与改名
+  watch(s.savedViews, persistUiState, { deep: true });
   watch(s.searchText, persistUiState);
+  // 排序：点一次列头就换一种顺序，属于用户对界面的调整
+  watch([s.sortKey, s.sortOrder], persistUiState);
   // 语言也是要记住的界面形态
   watch(locale, persistUiState);
   // 日志等级由「日志管理」窗口里的选择器改动，同样要记住
