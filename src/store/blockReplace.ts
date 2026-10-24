@@ -19,6 +19,24 @@ import { listBlockVersions, listBlocks, previewReplace, searchBlocks } from "../
 import type { BlockHit, BlockRow, ReplaceRule, SchematicSummary, VersionOption } from "../types";
 
 /** 方块替换域用到的其他域成员（循环引用回避见 fileList.ts） */
+export interface ReplaceEditorSnapshot {
+  open: boolean;
+  form: {
+    fromName: string;
+    fromPropsText: string;
+    toName: string;
+    toPropsText: string;
+    inheritProps: boolean;
+  };
+  preview: number | null;
+  pickQuery: string;
+  hits: BlockHit[];
+  names: Record<string, NamedRecord>;
+  namesQueried: string[];
+  activeBlockKey: string | null;
+  versions: VersionOption[];
+}
+
 export interface BlockReplaceDeps {
   /** 文件列表域的当前选中；替换的作用对象 */
   selected: Ref<SchematicSummary | null>;
@@ -126,8 +144,10 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
   async function lookupBlockName(raw: string) {
     const id = bareBlockId(raw);
     if (!id || blockNameQueried(id)) return;
+    const generation = editorGeneration;
     try {
       const hits = await searchBlocks(id, 50);
+      if (generation !== editorGeneration || !replaceOpen.value) return;
       // 只认名字完全一致的命中：搜索是模糊匹配，取自第一项会把
       // minecraft:oak_stairs 显示成 minecraft:oak_planks 这类近邻的名字
       const exact = hits.find((h) => h.name === id);
@@ -196,6 +216,7 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
   watch(
     replaceForm,
     () => {
+      if (restoringSnapshot) return;
       replacePreview.value = null;
       previewSeq += 1;
     },
@@ -204,8 +225,7 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
 
   // 卸载时清掉待触发的查询：否则组件已销毁仍会发一次无意义的请求
   onBeforeUnmount(() => {
-    for (const timer of blockNameTimers.values()) clearTimeout(timer);
-    blockNameTimers.clear();
+    invalidateRequests();
   });
 
   /** 解析 "key=value,key2=value2" 形式的属性限定；空串表示不限定 */
@@ -244,17 +264,39 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
   let allBlocksLoaded = false;
   /** 全量请求序号：只接受最后一次全量请求的结果 */
   let allBlocksSeq = 0;
-  /** 在途请求数：搜索与全量共用转圈标志，各自结束时不互相抢 */
-  let pendingLoads = 0;
+  let editorGeneration = 0;
+  let restoringSnapshot = false;
 
-  function beginLoad() {
-    pendingLoads += 1;
-    blockSearching.value = true;
+  function invalidateRequests() {
+    editorGeneration++;
+    previewSeq++;
+    blockSearchSeq++;
+    allBlocksSeq++;
+    pendingLoads.clear();
+    blockSearching.value = false;
+    replaceBusy.value = false;
+    for (const timer of blockNameTimers.values()) clearTimeout(timer);
+    blockNameTimers.clear();
   }
 
-  function endLoad() {
-    pendingLoads = Math.max(0, pendingLoads - 1);
-    blockSearching.value = pendingLoads > 0;
+  watch(replaceOpen, (open, previous) => {
+    if (!open && previous) invalidateRequests();
+  });
+
+  /** 每次请求独立结算，旧请求的 finally 不影响新会话的加载状态。 */
+  const pendingLoads = new Set<number>();
+  let nextLoadId = 1;
+
+  function beginLoad(): number {
+    const id = nextLoadId++;
+    pendingLoads.add(id);
+    blockSearching.value = true;
+    return id;
+  }
+
+  function endLoad(id: number) {
+    pendingLoads.delete(id);
+    blockSearching.value = pendingLoads.size > 0;
   }
 
   /** 把检索结果里的名字记下来（并标记为已查过），点选时就不必再查 */
@@ -281,7 +323,7 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
       else void loadAllBlocks();
       return;
     }
-    beginLoad();
+    const loadId = beginLoad();
     try {
       const hits = await searchBlocks(q, 200);
       if (seq !== blockSearchSeq) return; // 已有更新的查询，丢弃这份过期结果
@@ -291,7 +333,7 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
       if (seq !== blockSearchSeq) return;
       Message.error(t("replace.searchFailed", { error: String(e) }));
     } finally {
-      endLoad();
+      endLoad(loadId);
     }
   }
 
@@ -303,7 +345,7 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
    */
   async function loadAllBlocks() {
     const seq = ++allBlocksSeq;
-    beginLoad();
+    const loadId = beginLoad();
     try {
       const hits = await listBlocks();
       if (seq !== allBlocksSeq) return;
@@ -318,7 +360,7 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
       // 不能留一个空列表了事：用户会以为方块库里一个方块都没有
       Message.error(t("replace.listFailed", { error: String(e) }));
     } finally {
-      endLoad();
+      endLoad(loadId);
     }
   }
 
@@ -371,6 +413,7 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
    * 是整个物品的合计，用户会以为另一个形态也一起替换。
    */
   async function openReplaceFor(row: BlockRow) {
+    invalidateRequests();
     const { name, propsText } = sourceOf(row);
     activeBlock.value = { key: row.key };
     replaceForm.value.fromName = name;
@@ -416,8 +459,11 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
     // 目标方块默认列出全部方块：用户往往还不知道要换成什么，先给全貌再筛
     void loadAllBlocks();
     if (blockVersions.value.length === 0) {
+      const generation = editorGeneration;
       try {
-        blockVersions.value = await listBlockVersions();
+        const versions = await listBlockVersions();
+        if (generation !== editorGeneration || !replaceOpen.value) return;
+        blockVersions.value = versions;
       } catch (e) {
         Message.error(t("replace.loadVersionsFailed", { error: String(e) }));
       }
@@ -438,7 +484,7 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
     replaceBusy.value = true;
     try {
       const r = await previewReplace(cur.path, rule);
-      if (seq !== previewSeq) return;
+      if (seq !== previewSeq || !replaceOpen.value || s.selected.value?.path !== cur.path) return;
       replacePreview.value = r.replaced;
     } catch (e) {
       if (seq !== previewSeq) return;
@@ -467,6 +513,44 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
     replaceOpen.value = false;
   }
 
+  function captureReplaceEditor(): ReplaceEditorSnapshot {
+    invalidateRequests();
+    return {
+      open: replaceOpen.value,
+      form: { ...replaceForm.value },
+      preview: replacePreview.value,
+      pickQuery: blockPickQuery.value,
+      hits: [...blockHits.value],
+      names: { ...blockNames.value },
+      namesQueried: [...blockNamesQueried.value],
+      activeBlockKey: activeBlock.value?.key ?? null,
+      versions: [...blockVersions.value],
+    };
+  }
+
+  function restoreReplaceEditor(snapshot: ReplaceEditorSnapshot) {
+    invalidateRequests();
+    restoringSnapshot = true;
+    activeBlock.value = snapshot.activeBlockKey ? { key: snapshot.activeBlockKey } : null;
+    replaceForm.value = { ...snapshot.form };
+    replacePreview.value = snapshot.preview;
+    blockPickQuery.value = snapshot.pickQuery;
+    blockHits.value = [...snapshot.hits];
+    blockNames.value = { ...snapshot.names };
+    blockNamesQueried.value = new Set(snapshot.namesQueried);
+    blockVersions.value = [...snapshot.versions];
+    replaceOpen.value = snapshot.open;
+    queueMicrotask(() => {
+      restoringSnapshot = false;
+    });
+    if (snapshot.open && snapshot.hits.length === 0) void loadAllBlocks();
+  }
+
+  function clearReplaceEditor() {
+    replaceOpen.value = false;
+    invalidateRequests();
+  }
+
   return {
     activeBlock,
     replaceOpen,
@@ -485,6 +569,9 @@ export function createBlockReplaceSlice(s: BlockReplaceDeps) {
     pickBlock,
     doPreview,
     doReplace,
+    captureReplaceEditor,
+    restoreReplaceEditor,
+    clearReplaceEditor,
   };
 }
 

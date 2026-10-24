@@ -92,10 +92,12 @@ export function saveSchematicAs(
 
 /**
  * 组装前端渲染所需的场景。
- * 基础库由后端按「版本库」准备的内容解析，前端只提供投影文件路径。
+ * 基础库由后端按「版本库」准备的内容解析。传入 regionName 时只构建该子区，
+ * 不传时构建整个文件；子区选择不改变统计、保存或替换的作用范围。
  */
-export function buildScene(schematicPath: string): Promise<SceneData> {
-  return logged<SceneData>("build_scene", { schematicPath });
+export function buildScene(schematicPath: string, regionName?: string): Promise<SceneData> {
+  if (regionName === undefined) return logged<SceneData>("build_scene", { schematicPath });
+  return logged<SceneData>("build_scene", { schematicPath, regionName });
 }
 
 /** 跨版本检索方块 */

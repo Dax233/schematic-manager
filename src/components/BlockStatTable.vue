@@ -43,6 +43,7 @@ const {
   onBlockColumnResize,
   onBlockRowClick,
   openReplaceFor,
+  saving,
 } = useAppStore();
 
 /** 键盘导航的挂载点，见 DirSidebar 里同样的用法 */
@@ -72,7 +73,7 @@ useListKeyboard({
   // 回车打开选中行的替换窗口：方向键只移动当前行，不替用户做决定
   onActivate: (i) => {
     const target = blockPageRows.value[i];
-    if (target) void openReplaceFor(target);
+    if (target && !saving.value) void openReplaceFor(target);
   },
   // 方块表分页：翻页键切页，不移动选中
   paged: () => true,
@@ -192,7 +193,7 @@ useListKeyboard({
           <!-- 行内替换入口：点它打开替换窗口，并把这一行设为源方块。
              行点击只负责高亮（表格首先是统计表），因此要阻止冒泡 -->
           <template #act="{ record }">
-            <a-link class="block-act" @click.stop="openReplaceFor(record)">{{
+            <a-link class="block-act" :disabled="saving" @click.stop="openReplaceFor(record)">{{
               t("stats.replaceRow")
             }}</a-link>
           </template>

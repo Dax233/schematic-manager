@@ -110,7 +110,7 @@ pub struct DirectoryNode {
     pub name: String,
     /// 相对于扫描根目录的路径，由 `strip_prefix` 计算；根节点为空串。
     pub relative_path: String,
-    /// 当前目录直接包含的普通文件，不递归混入后代文件。
+    /// 当前目录直接包含的 `.litematic` 文件，不递归混入后代文件。
     pub file_paths: Vec<String>,
     /// 当前目录的直接子目录，包括没有投影文件的目录。
     pub children: Vec<DirectoryNode>,
