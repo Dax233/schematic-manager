@@ -3,8 +3,8 @@
 use crate::app::backup;
 use crate::block::names::{block_display_names, entity_display_names, tile_display_names};
 use crate::schematic::litematic::{self, Summary};
-use super::dto::{SchematicSummary, BlockCount, EntityCount, EntityInstanceDto, ScanResult, SceneDto, SaveOutcome, AnalysisResult};
-use super::shared::{SCAN_MAX_DEPTH, SkipReport, collect_litematics, exe_dir, open_db};
+use super::dto::{SchematicSummary, BlockCount, EntityCount, EntityInstanceDto, RegionSummary, ScanResult, SceneDto, SaveOutcome, AnalysisResult};
+use super::shared::{SCAN_MAX_DEPTH, SkipReport, collect_directory, exe_dir, open_db};
 use std::path::{Path, PathBuf};
 
 /// 由内部摘要转换为对前端的契约
@@ -57,7 +57,8 @@ pub fn scan_litematics(dir: String, max_depth: Option<u32>) -> ScanResult {
     let depth = max_depth.unwrap_or(SCAN_MAX_DEPTH).min(16);
     let mut found: Vec<PathBuf> = Vec::new();
     let mut skipped = SkipReport::default();
-    collect_litematics(Path::new(&dir), depth, &mut found, &mut skipped);
+    let root_path = Path::new(&dir);
+    let root = collect_directory(root_path, root_path, depth, &mut found, &mut skipped);
     found.sort();
 
     ScanResult {
@@ -70,6 +71,7 @@ pub fn scan_litematics(dir: String, max_depth: Option<u32>) -> ScanResult {
             .collect(),
         skipped_dirs: skipped.count,
         skipped_paths: skipped.paths,
+        root,
     }
 }
 
@@ -79,6 +81,11 @@ pub fn analyze_schematic(app: tauri::AppHandle, path: String) -> Result<Analysis
     let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
     let sc = litematic::Schematic::load(&path).map_err(|e| e.to_string())?;
+    Ok(analyze_loaded(&sc, db))
+}
+
+/// 对已载入的投影生成分析结果，便于在不创建应用句柄的情况下验证区域与统计。
+fn analyze_loaded(sc: &litematic::Schematic, db: &crate::block::db::BlockDb) -> AnalysisResult {
     let a = sc.analyze();
     // 按投影自己的 dataVersion 选版本，语言表才与投影内容对得上
     let vi = db.pick_version(sc.summary().data_version);
@@ -132,16 +139,25 @@ pub fn analyze_schematic(app: tauri::AppHandle, path: String) -> Result<Analysis
         })
         .collect();
 
-    Ok(AnalysisResult {
+    AnalysisResult {
         distinct_block_types: types.len(),
         distinct_states: blocks.len(),
         blocks,
         entities,
         tile_entities: tiles,
+        regions: sc
+            .regions
+            .iter()
+            .map(|r| RegionSummary {
+                name: r.name.clone(),
+                position: r.pos,
+                size: r.size,
+            })
+            .collect(),
         entity_instances,
         non_air_total: a.non_air_total,
         air_total: a.air_total,
-    })
+    }
 }
 
 /// 组装前端 Three.js 渲染所需的场景。
@@ -149,12 +165,18 @@ pub fn analyze_schematic(app: tauri::AppHandle, path: String) -> Result<Analysis
 /// 方块库作为应用资源随包分发，路径由这里解析，
 /// 前端不必知道它在哪个目录，也不必关心各平台的资源布局差异。
 #[tauri::command]
-pub fn build_scene(app: tauri::AppHandle, schematic_path: String) -> Result<SceneDto, String> {
+pub fn build_scene(
+    app: tauri::AppHandle,
+    schematic_path: String,
+    region_name: Option<String>,
+) -> Result<SceneDto, String> {
     let loaded = open_db(&app).map_err(|e| e.to_string())?;
     let db = &loaded.db;
-    crate::render::scene::build_with_db(&schematic_path, db)
-        .map(SceneDto::from)
-        .map_err(|e| e.to_string())
+    let scene = match region_name {
+        Some(name) => crate::render::scene::build_region_with_db(&schematic_path, db, &name),
+        None => crate::render::scene::build_with_db(&schematic_path, db),
+    };
+    scene.map(SceneDto::from).map_err(|e| e.to_string())
 }
 
 /// 把当前投影另存为一个新文件，并把未保存的元数据改动一并写进去。

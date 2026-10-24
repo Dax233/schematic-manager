@@ -210,6 +210,44 @@ fn enclosing_and_origin_are_reported() {
 }
 
 #[test]
+fn region_scene_uses_only_the_selected_region() {
+    let mut sc = test_schematic();
+    sc.regions[0].name = "selected".into();
+    sc.regions[0].pos = [7, -3, 2];
+    sc.regions[0].size = [1, 1, 1];
+    sc.regions[0].volume = 1;
+    sc.regions[0].indices = vec![0];
+    sc.regions.push(Region {
+        name: "other".into(),
+        pos: [-30, -20, -10],
+        size: [4, 4, 4],
+        volume: 64,
+        bits: 2,
+        palette: vec![BlockState::new("mod:unknown")],
+        indices: vec![0; 64],
+        ..Default::default()
+    });
+    let db = test_db();
+
+    let full = build_from(&sc, &db).unwrap();
+    assert_eq!(full.unresolved_blocks, 1);
+    let scene = build_from_region(&sc, &db, "selected").unwrap();
+    assert_eq!(scene.origin, [7, -3, 2]);
+    assert_eq!(scene.enclosing, [1, 1, 1], "单区外框应取区域尺寸而非全投影元数据");
+    assert_eq!(scene.unresolved_blocks, 0, "其他区域的未知方块不应计入单区统计");
+    assert_eq!(scene.total_triangles / 2, 6, "单方块区域的六个边界面都应保留");
+}
+
+#[test]
+fn unknown_region_name_is_an_error() {
+    let sc = test_schematic();
+    let db = test_db();
+    let err = build_from_region(&sc, &db, "missing").unwrap_err().to_string();
+    assert!(err.contains("missing"), "错误应指出未找到的区域：{err}");
+    assert!(err.contains("区域"), "错误应说明失败对象：{err}");
+}
+
+#[test]
 fn adjacent_blocks_hide_shared_faces() {
     // 两个相邻的完整立方体：贴合的那两个面应被剔除，
     // 只留下 2 个方块 × 6 面 - 2 个共享面 × 2 = 10 个面

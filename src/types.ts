@@ -112,7 +112,21 @@ export interface EntityTexture {
 }
 
 /** 目录扫描结果 */
-export interface ScanResult {  items: SchematicSummary[];
+export interface DirectoryNode {
+  path: string;
+  name: string;
+  relativePath: string;
+  /** 只包含当前目录的直接文件，不包含后代目录 */
+  filePaths: string[];
+  children: DirectoryNode[];
+  /** 达到扫描深度，尚未读取该目录的子项 */
+  truncated: boolean;
+}
+
+export interface ScanResult {
+  items: SchematicSummary[];
+  /** 目录树根，包含没有投影文件的目录 */
+  root: DirectoryNode;
   /** 因权限或 IO 错误被跳过的目录数 */
   skippedDirs: number;
   /** 被跳过的目录路径（最多前若干条） */
@@ -296,7 +310,15 @@ export interface SaveOutcome {
   backupPath: string;
 }
 
+export interface RegionSummary {
+  name: string;
+  position: [number, number, number];
+  size: [number, number, number];
+}
+
 export interface AnalysisResult {
+  /** 按文件中的实际 Regions 返回，供子区列表与预览选择 */
+  regions: RegionSummary[];
   blocks: BlockCount[];
   entities: EntityCount[];
   tileEntities: EntityCount[];

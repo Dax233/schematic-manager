@@ -10,7 +10,7 @@
  * 批量导出读取文件列表域的勾选项。依赖只声明本域用到的成员，
  * 而不是整棵 store，避免类型上的循环引用（见 store/fileList.ts）。
  */
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import * as THREE from "three";
 import type { ComputedRef, Ref } from "vue";
 import { Message } from "@arco-design/web-vue";
@@ -43,6 +43,27 @@ export interface ScenePreviewDeps {
   analysis: Ref<AnalysisResult | null>;
   /** 文件列表域已勾选且无解析错误的文件；批量导出的对象 */
   checkedFiles: ComputedRef<SchematicSummary[]>;
+  /** 新文件选中时清除上一个文件的子区选择 */
+  resetRegion: () => void;
+}
+
+export interface SceneCameraSnapshot {
+  position: [number, number, number];
+  target: [number, number, number];
+  up?: [number, number, number];
+  ortho?: boolean;
+  zoom?: number;
+  frustum?: { left: number; right: number; top: number; bottom: number };
+}
+
+export interface SceneEditorSnapshot {
+  scene: SceneData | null;
+  sceneError: string;
+  activeRegion: string | null;
+  activeView: string;
+  orthoView: boolean;
+  brightness: number;
+  camera: SceneCameraSnapshot | null;
 }
 
 /**
@@ -54,7 +75,7 @@ export interface ScenePreviewDeps {
  * 口径是「统计表里的那一行」——即「方块」页签数量列看到的数：按物品合计、
  * 忽略朝向一类的状态差异。用户看到的数字与这里的判断因此是同一个。
  */
-const SCENE_BLOCK_LIMIT = 30000;
+export const SCENE_BLOCK_LIMIT = 30000;
 
 /** 按名称比较，结果与运行环境的语言数据无关。
  *
@@ -72,6 +93,9 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
   const sceneError = ref("");
   const brightness = ref(1.45);
   const activeView = ref("left45");
+  const activeRegion = ref<string | null>(null);
+  let sceneGeneration = 0;
+  let cameraToRestore: SceneCameraSnapshot | null = null;
   /** 预览区右键菜单的位置；open 为 false 时不显示。
    *
    * 与投影列表的行右键菜单分开存放：那个作用于文件行，这个作用于 3D 画布，
@@ -109,22 +133,105 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
    */
   const manualRenderPath = ref("");
 
+  function resetRegion() {
+    activeRegion.value = null;
+  }
+
+  /** 恢复活动视角；场景和组件都就绪后再调用，避免画布尚未挂载。 */
+  async function restoreView() {
+    await nextTick();
+    if (cameraToRestore && viewer.value?.restoreCameraPose) {
+      viewer.value.restoreCameraPose(cameraToRestore);
+      cameraToRestore = null;
+    } else if (activeView.value.startsWith("custom:")) {
+      applySavedViewByName(activeView.value.slice(7));
+      viewer.value?.setOrtho(orthoView.value);
+    } else {
+      viewer.value?.applyViewPreset(activeView.value);
+      viewer.value?.setOrtho(orthoView.value);
+    }
+  }
+
   // 场景加载失败不弹消息：错误长期展示在预览区里（sceneError），
   // 与「点一下、弹一条就消失」的瞬时操作不同
   async function loadScene(record: SchematicSummary) {
+    const regionName = activeRegion.value;
+    const generation = ++sceneGeneration;
     scene.value = null;
     sceneError.value = "";
     // 方块数过大且用户还没点过「开始渲染」：不生成几何，预览区给出按钮。
-    // 这里直接返回，连构建命令都不发——省下的正是卡顿的那一段。
-    if (sceneGate.value) return;
+    if (sceneGate.value) {
+      sceneLoading.value = false;
+      return;
+    }
     sceneLoading.value = true;
     try {
-      scene.value = await buildScene(record.path);
+      const data = await buildScene(record.path, regionName ?? undefined);
+      if (
+        generation !== sceneGeneration ||
+        s.selected.value?.path !== record.path ||
+        activeRegion.value !== regionName
+      ) {
+        return;
+      }
+      scene.value = data;
+      await restoreView();
     } catch (e) {
-      sceneError.value = String(e);
+      if (generation === sceneGeneration && s.selected.value?.path === record.path) {
+        sceneError.value = String(e);
+      }
     } finally {
-      sceneLoading.value = false;
+      if (generation === sceneGeneration) sceneLoading.value = false;
     }
+  }
+
+  function setActiveRegion(name: string | null) {
+    if (activeRegion.value === name) return;
+    activeRegion.value = name;
+    const cur = s.selected.value;
+    if (cur) void loadScene(cur);
+  }
+
+  function captureSceneEditor(): SceneEditorSnapshot {
+    sceneGeneration++;
+    sceneLoading.value = false;
+    return {
+      scene: scene.value,
+      sceneError: sceneError.value,
+      activeRegion: activeRegion.value,
+      activeView: activeView.value,
+      orthoView: orthoView.value,
+      brightness: brightness.value,
+      camera: viewer.value?.cameraPose() ?? null,
+    };
+  }
+
+  function restoreSceneEditor(snapshot: SceneEditorSnapshot) {
+    sceneGeneration++;
+    scene.value = snapshot.scene;
+    sceneError.value = snapshot.sceneError;
+    activeRegion.value = snapshot.activeRegion;
+    activeView.value = snapshot.activeView;
+    orthoView.value = snapshot.orthoView;
+    brightness.value = snapshot.brightness;
+    sceneLoading.value = false;
+    manualRenderPath.value = "";
+    cameraToRestore = snapshot.camera;
+    void restoreView();
+  }
+
+  function invalidateScene() {
+    sceneGeneration++;
+    scene.value = null;
+    sceneError.value = "";
+    sceneLoading.value = false;
+  }
+
+  function clearSceneEditor() {
+    invalidateScene();
+    activeRegion.value = null;
+    manualRenderPath.value = "";
+    cameraToRestore = null;
   }
 
   /** 用户明确要求渲染当前文件（方块数超过阈值时用） */
@@ -751,6 +858,14 @@ export function createScenePreviewSlice(s: ScenePreviewDeps) {
     sceneError,
     brightness,
     activeView,
+    activeRegion,
+    setActiveRegion,
+    resetRegion,
+    captureSceneEditor,
+    restoreSceneEditor,
+    invalidateScene,
+    clearSceneEditor,
+    restoreView,
     viewMenu,
     orthoView,
     savedViews,

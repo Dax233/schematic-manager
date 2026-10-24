@@ -99,6 +99,25 @@ pub struct EntityInstanceDto {
     pub z: f64,
 }
 
+/// 扫描目录树中的一个节点。
+///
+/// 文件路径只挂在直接包含它们的目录上，前端展开子目录时不必从祖先节点
+/// 重复过滤整棵树的文件。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryNode {
+    pub path: String,
+    pub name: String,
+    /// 相对于扫描根目录的路径，由 `strip_prefix` 计算；根节点为空串。
+    pub relative_path: String,
+    /// 当前目录直接包含的 `.litematic` 文件，不递归混入后代文件。
+    pub file_paths: Vec<String>,
+    /// 当前目录的直接子目录，包括没有投影文件的目录。
+    pub children: Vec<DirectoryNode>,
+    /// 到达递归深度上限时为真，此时未读取当前目录的内容。
+    pub truncated: bool,
+}
+
 /// 目录扫描结果
 ///
 /// 带上 skipped：不可读的子目录会被跳过，若不告知用户，
@@ -111,6 +130,7 @@ pub struct ScanResult {
     pub skipped_dirs: u32,
     /// 被跳过的目录路径（最多记录前若干个，便于用户定位）
     pub skipped_paths: Vec<String>,
+    pub root: DirectoryNode,
 }
 
 /// 方块替换规则
@@ -417,6 +437,15 @@ pub struct FileOpOutcome {
     pub total_bytes: u64,
 }
 
+/// 投影中一个区域的名称、归一化位置和尺寸。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegionSummary {
+    pub name: String,
+    pub position: [i32; 3],
+    pub size: [i32; 3],
+}
+
 /// 完整分析结果
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -424,6 +453,7 @@ pub struct AnalysisResult {
     pub blocks: Vec<BlockCount>,
     pub entities: Vec<EntityCount>,
     pub tile_entities: Vec<EntityCount>,
+    pub regions: Vec<RegionSummary>,
     /// 逐个实体的 id 与坐标，供以后做实体预览
     pub entity_instances: Vec<EntityInstanceDto>,
     pub non_air_total: u64,
