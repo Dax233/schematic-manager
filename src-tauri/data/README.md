@@ -54,3 +54,6 @@
 
 普通方块替换与版本转换共用完整属性域；开启继承时保留持久、含水等合法状态。
 缺失物品和实体与方块分别列出并校验用户选择。新版唱片固定使用命名的经验修补红色玻璃板；苍白木船实体允许选择旧版木种并迁移库存和乘客。未知实体及缺少库存迁移规则的缺失容器物品明确拒绝，不静默丢弃内容。
+
+## 容器物品的最大堆叠数
+item-stacks.json.gz 来自 PrismarineJS/minecraft-data（MIT，许可见 item-stacks-LICENSE.txt），使用 dataPaths.json 明确指定的各版本物品表；来源 URL、SHA256 和缺失版本见 item-stacks-sources.json。tools/update_item_stacks.py 可重新生成。仅匹配精确数据版本，未知物品/版本的盒数显示未知，不套用相邻版本。物品自身的 minecraft:max_stack_size 组件优先。盒数为总数除以27格容量的理论折算，按物品ID合并，不考虑不同附魔/名称不能合堆的实际装箱差异。

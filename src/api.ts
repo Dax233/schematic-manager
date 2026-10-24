@@ -65,6 +65,11 @@ export function analyzeSchematic(path: string): Promise<AnalysisResult> {
   return logged<AnalysisResult>("analyze_schematic", { path });
 }
 
+/** 汇总已保存投影中所有容器的物品。 */
+export function containerItems(path: string): Promise<import("./types").ContainerItem[]> {
+  return logged<import("./types").ContainerItem[]>("container_items", { path });
+}
+
 /**
  * 保存元数据。未提供的字段保持不变。
  * 保存前会由后端自动备份原件，备份失败则不写入。

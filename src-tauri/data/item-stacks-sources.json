@@ -1,0 +1,161 @@
+{
+  "index": {
+    "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/dataPaths.json",
+    "sha256": "ec79172719a76eba50ab674da727e268a4ffb45d076315b894a98bca62e090d1"
+  },
+  "inputs": [
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.13.2/items.json",
+      "sha256": "9282b71d45df8fcd3317e47d1cc9f7a6108097eefca002897fe60c4b395b3616"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.14/items.json",
+      "sha256": "f71816d848081cf239196c4616879bbd0d9434fffee35512b88cb1f2680bef46"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.14.4/items.json",
+      "sha256": "f71816d848081cf239196c4616879bbd0d9434fffee35512b88cb1f2680bef46"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.15.2/items.json",
+      "sha256": "d0cfaae99ec3704acb29e66ef35ab22082760f6a09192a057bf4146ed83e0668"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.16.1/items.json",
+      "sha256": "94132023a25ffbe5410c186a263dce79a3e6f469f196e2978778e9a129a69021"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.16.2/items.json",
+      "sha256": "d159c2e45ac8f6238b50b4630114f860c1fad22f5a29a97588a4355a83290520"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.17/items.json",
+      "sha256": "c453f3120952f444f00f455ea375c1798f930221b29958a32c80f2a796586e77"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.18/items.json",
+      "sha256": "5fdfce78e13c290bac836d6c3f6db2612896b77bd3afd40d2e2d5a1dfc6472aa"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.19/items.json",
+      "sha256": "8762a2401d42470c4c69283843e3a5c0b8cf87259c058da372c802214a44df77"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.19.2/items.json",
+      "sha256": "8762a2401d42470c4c69283843e3a5c0b8cf87259c058da372c802214a44df77"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.19.3/items.json",
+      "sha256": "b2ed080d8750b167dcc0e5d9251df2fe6f7dfb9be49a1adff4b19bb35243008b"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.19.4/items.json",
+      "sha256": "53fce79e4c11b6a0531270693df00d44cf620dd6112ed3c799af710d21c68cc3"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.20/items.json",
+      "sha256": "28e0d0291f1428de987581506d034be00867c60d5af5ba331dff125a9f4bbfb0"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.20.2/items.json",
+      "sha256": "28e0d0291f1428de987581506d034be00867c60d5af5ba331dff125a9f4bbfb0"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.20.3/items.json",
+      "sha256": "e871a6ffff0cbbf23f7c05d404dd988d7119e43d8321be7cce537bd519ab98ca"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.20.5/items.json",
+      "sha256": "ac48eb74412d528b02d7309136b759df7e0ea51eead7a68dd04e685a95316861"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.21.1/items.json",
+      "sha256": "f0960c81bbd2b10f9ab6187c567dec4f88fee7893d7b119423045abb635631f6"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.21.11/items.json",
+      "sha256": "0031a948bf8210aaf68d4964499cb2c31f2c3bf5d7339439540ca82a9eb28686"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.21.3/items.json",
+      "sha256": "bf9c9e954aaa52f9dd96557929f886a339934583429f80f70990f166c8e4fce4"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.21.4/items.json",
+      "sha256": "f88fb4279715c23e86ff103a09e20a4b15d6b8aa52559bb4d7364258a9d8225d"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.21.5/items.json",
+      "sha256": "f294b108ddbbc3424a2215f73852e54576ce2c25347c619bcb8c2906b1cdfadd"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.21.6/items.json",
+      "sha256": "6b6c2aa7fee614184b2b2c21eccd7aa842e8490cb7775db2956462e41c48842a"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.21.8/items.json",
+      "sha256": "9becbb9e911d0ab56f5f82b278dd029dd95b1367094029863a8fb9784e8df2f4"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/1.21.9/items.json",
+      "sha256": "c5fdefe659ccc6cd72a642551ada58d835c925df3f5036525f04dd9d16bff7d1"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/PrismarineJS/minecraft-data/master/data/pc/26.1/items.json",
+      "sha256": "0d085dbf8a6fa129b94f696b77286d65ce7b04476eab398492558ab03cc1c45e"
+    }
+  ],
+  "versions": {
+    "1631": "pc/1.13.2",
+    "1952": "pc/1.14",
+    "1957": "pc/1.14",
+    "1968": "pc/1.14",
+    "1976": "pc/1.14.4",
+    "2225": "pc/1.15.2",
+    "2227": "pc/1.15.2",
+    "2230": "pc/1.15.2",
+    "2566": "pc/1.16.1",
+    "2567": "pc/1.16.1",
+    "2578": "pc/1.16.2",
+    "2580": "pc/1.16.2",
+    "2584": "pc/1.16.2",
+    "2586": "pc/1.16.2",
+    "2724": "pc/1.17",
+    "2730": "pc/1.17",
+    "2860": "pc/1.18",
+    "2865": "pc/1.18",
+    "2975": "pc/1.18",
+    "3105": "pc/1.19",
+    "3120": "pc/1.19.2",
+    "3218": "pc/1.19.3",
+    "3337": "pc/1.19.4",
+    "3463": "pc/1.20",
+    "3465": "pc/1.20",
+    "3578": "pc/1.20.2",
+    "3698": "pc/1.20.3",
+    "3700": "pc/1.20.3",
+    "3837": "pc/1.20.5",
+    "3839": "pc/1.20.5",
+    "3953": "pc/1.21.1",
+    "3955": "pc/1.21.1",
+    "4082": "pc/1.21.3",
+    "4189": "pc/1.21.4",
+    "4325": "pc/1.21.5",
+    "4435": "pc/1.21.6",
+    "4440": "pc/1.21.8",
+    "4554": "pc/1.21.9",
+    "4556": "pc/1.21.9",
+    "4671": "pc/1.21.11",
+    "4786": "pc/26.1"
+  },
+  "unavailable": [
+    "1.14.2",
+    "1.19.1",
+    "1.21.2",
+    "1.21.7",
+    "26.1.1",
+    "26.1.2",
+    "26.2",
+    "26.3"
+  ]
+}

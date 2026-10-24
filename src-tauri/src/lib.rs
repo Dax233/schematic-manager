@@ -104,6 +104,7 @@ pub fn run() {
             commands::schematic::peek_schematic,
             commands::schematic::scan_litematics,
             commands::schematic::analyze_schematic,
+            commands::schematic::container_items,
             commands::blocks::render_block_icons,
             commands::schematic::mc_version_name,
             commands::schematic::build_scene,

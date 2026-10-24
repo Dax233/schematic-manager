@@ -5,6 +5,13 @@
 import zhCN from "./zh-CN";
 
 const enUS: typeof zhCN = {
+  inventory: {
+    title: "Container contents", name: "Item name", count: "Total", boxes: "Box equivalents",
+    search: "Search item name or ID", empty: "No container items found",
+    capacity: "27 slots × maximum stack size; theoretical capacity, not packed boxes",
+    unknown: "Maximum stack size is unknown for this version or item",
+    hint: "All regions of the saved file, including container entities and nested shulker contents; excludes item frames and mob equipment. Grouped by item ID regardless of names or enchantments. Boxes are theoretical capacity equivalents; unknown capacities show —.",
+  },
   lang: {
     label: "Language",
     zhCN: "简体中文",

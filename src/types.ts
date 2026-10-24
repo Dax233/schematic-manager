@@ -425,3 +425,10 @@ export interface UpdateInfo {
   /** 最新发布是否为预览版。界面据此标出性质，由用户自己决定要不要更新 */
   latestPrerelease: boolean;
 }
+export interface ContainerItem {
+  name: string;
+  count: number;
+  boxes: number | null;
+  zhName: string;
+  enName: string;
+}

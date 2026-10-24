@@ -13,6 +13,7 @@ import EntityTable from "./EntityTable.vue";
 import ExportDialog from "./ExportDialog.vue";
 import ViewPresetDialog from "./ViewPresetDialog.vue";
 import RegionList from "./RegionList.vue";
+import ContainerItems from "./ContainerItems.vue";
 import { PRESET_MENU } from "../render/scene3d";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -284,6 +285,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="preview__actions">
             <a-button size="small" :disabled="saving" @click="openConvert">{{ t("detail.convert") }}</a-button>
+            <ContainerItems />
             <a-button
               type="primary"
               size="small"

@@ -84,6 +84,24 @@ pub fn analyze_schematic(app: tauri::AppHandle, path: String) -> Result<Analysis
     Ok(analyze_loaded(&sc, db))
 }
 
+/// 独立读取已保存投影的全部容器填充材料，不修改投影文件。
+#[tauri::command]
+pub fn container_items(app: tauri::AppHandle, path: String) -> Result<Vec<crate::schematic::inventory::ItemCount>, String> {
+    let loaded = open_db(&app).map_err(|e|e.to_string())?;
+    let sc = litematic::Schematic::load(&path).map_err(|e|e.to_string())?;
+    let version = sc.summary().data_version;
+    let mut rows = crate::schematic::inventory::count(&sc.root,version).map_err(|e|e.to_string())?;
+    let vi = loaded.db.pick_version(version);
+    for row in &mut rows {
+        let key = format!("item.{}",row.name.replace(':',"."));
+        let (zh,en) = crate::block::names::lookup_lang(&loaded.db,vi,&key);
+        let (block_zh,block_en) = block_display_names(&loaded.db,vi,&row.name);
+        row.zh_name = if zh.is_empty() {block_zh} else {zh};
+        row.en_name = if en.is_empty() {block_en} else {en};
+    }
+    Ok(rows)
+}
+
 /// 对已载入的投影生成分析结果，便于在不创建应用句柄的情况下验证区域与统计。
 fn analyze_loaded(sc: &litematic::Schematic, db: &crate::block::db::BlockDb) -> AnalysisResult {
     let a = sc.analyze();

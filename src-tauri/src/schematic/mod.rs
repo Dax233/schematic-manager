@@ -8,3 +8,4 @@ pub(crate) mod replace;
 pub(crate) mod legacy_items;
 pub(crate) mod legacy_entities;
 pub(crate) mod data_replacements;
+pub(crate) mod inventory;

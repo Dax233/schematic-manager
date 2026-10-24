@@ -1,0 +1,14 @@
+Source: https://github.com/PrismarineJS/minecraft-data
+License statement: https://github.com/PrismarineJS/minecraft-data#license
+
+The upstream README declares:
+
+## License
+
+MIT
+
+Some of the data was extracted manually or automatically from wiki.vg and minecraft.gamepedia.com.
+If required by one of the sources the license might change to something more appropriate.
+
+This distribution includes only derived item identifiers and maximum stack sizes.
+Source URLs and hashes are listed in item-stacks-sources.json.
