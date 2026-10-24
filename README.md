@@ -15,6 +15,31 @@
 > 本程序仅限于免费分享，禁止任何销售行为。
 > 作者：黑山大叔 — https://space.bilibili.com/19428259
 
+## 本分支的改动与下载
+
+本仓库是 [heiheids/schematic-manager](https://github.com/heiheids/schematic-manager) 的 fork，保留原作者署名与 AGPL-3.0 许可。这里维护的是投影降级兼容修复，并持续合入上游文件管理与预览功能。
+
+[下载本分支构建](https://github.com/Dax233/schematic-manager/releases) · [查看自动构建状态](https://github.com/Dax233/schematic-manager/actions/workflows/ci.yml)
+
+- 物品组件降级支持 **Minecraft 1.20.5–1.21.4 → 1.20.4**，输出 Litematic v6.1；迁移容器、展示框、装备、嵌套容器、书页以及受支持的实体数据。
+- 缺失的方块、物品和实体分别列出，可独立选择替代品；苍白木船和运输船可选择旧版木种，保留位置、乘客与库存。
+- 新版唱片以命名、附有经验修补的红色玻璃板标记，**不模拟唱片的音频或比较器信号**。转换后报告原内容、替代品、数量、相对坐标、槽位与数据路径。
+- 使用完整方块注册信息识别水、岩浆、气泡柱、墙上头颅和告示牌；开启属性继承时保留目标支持的树叶持久、含水等状态。
+- 不能安全迁移的组件、实体或带库存/方块实体数据的缺失容器物品，会明确报错并停止保存。普通已有容器内部的物品仍可降级替换。
+
+这些修复不保证任意 Minecraft 版本互转，也不能绕过服务器权限、Litematica 粘贴设置或聊天命令长度限制。请保留原始文件，并在目标游戏环境中验证。程序的更新检查指向本 fork 的 Releases。
+
+### 自动构建与发布
+
+沿用并扩展 `.github/workflows/ci.yml`，先运行类型检查、测试和发布脚本检查，再构建：
+
+- 推送 `main`：自动创建 `v<版本>-dev.<运行号>` 预发布，使用 release 优化构建。
+- 推送与清单版本一致的 `vX.Y.Z` 标签：发布正式版；成功后自动递增主分支 PATCH 版本。
+- 手动运行 Actions：默认只检查；在 `main` 上勾选 `publish` 可构建预发布。PR 只检查，不发布。
+- 产物包含 Windows x64/ARM64 安装包及 `-portable.exe` 直接运行版、Linux x64/ARM64 deb、macOS Intel/Apple Silicon DMG。Windows 直接运行版仍需要 WebView2 Runtime，并使用现有应用数据目录。
+
+Fork 首次使用时需在 GitHub 的 Actions 页面启用工作流；发布任务使用仓库自带 `GITHUB_TOKEN` 的 `contents: write` 权限，不需要另外配置个人令牌。下载表在全部平台成功后生成；若发布仍显示“产物正在构建中”，请先检查 Actions 状态。
+
 ## 功能
 
 | 功能 | 说明 |

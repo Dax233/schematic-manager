@@ -13,10 +13,10 @@ use std::cmp::Ordering;
 use std::time::Duration;
 
 /// 检测目标仓库
-pub const REPO: &str = "heiheids/schematic-manager";
+pub const REPO: &str = "Dax233/schematic-manager";
 
 /// 取最近 50 条发布，够覆盖一个阶段的开发构建
-const RELEASES_URL: &str = "https://api.github.com/repos/heiheids/schematic-manager/releases?per_page=50";
+const RELEASES_URL: &str = "https://api.github.com/repos/Dax233/schematic-manager/releases?per_page=50";
 
 /// 编译进二进制的版本号。
 ///

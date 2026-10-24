@@ -9,6 +9,15 @@ const REPO = "heiheids/schematic-manager";
 
 const COMMITS = ["feat(ui): 新增示例功能", "fix(png): 修复示例缺陷", "ci: 调整发布流程"];
 
+test("Windows 直接运行版与安装包分别展示并链接到 fork", () => {
+  const assets = ["schematic-manager_0.1.2-dev.1_x64-portable.exe", "schematic-manager_0.1.2-dev.1_arm64-portable.exe", "schematic-manager_0.1.2-dev.1_x64-setup.exe"];
+  assert.equal(classify(assets[0]).format, "EXE (直接运行)");
+  assert.equal(classify(assets[1]).arch, "arm64");
+  assert.equal(classify(assets[2]).format, "EXE (安装包)");
+  const body = render("v0.1.2-dev.1", assets, [], {repo: "Dax233/schematic-manager"});
+  for (const asset of assets) assert.ok(body.includes(`https://github.com/Dax233/schematic-manager/releases/download/v0.1.2-dev.1/${asset}`));
+});
+
 // 各平台的真实产物名：前缀取自 productName，dev 构建的版本号带 -dev.N 段
 const ASSETS = [
   "schematic-manager_0.0.1-dev.42_x64-setup.exe",

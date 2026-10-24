@@ -15,6 +15,26 @@ English | [简体中文](README.md)
 > This program is distributed for free only; selling it in any form is prohibited.
 > Author: 黑山大叔 — https://space.bilibili.com/19428259
 
+## Fork changes and downloads
+
+This is a fork of [heiheids/schematic-manager](https://github.com/heiheids/schematic-manager), retaining the original attribution and AGPL-3.0 license. It adds schematic downgrade compatibility fixes while integrating upstream workspace and preview improvements.
+
+[Download this fork](https://github.com/Dax233/schematic-manager/releases) · [Build status](https://github.com/Dax233/schematic-manager/actions/workflows/ci.yml)
+
+- Item-component downgrades support **Minecraft 1.20.5–1.21.4 to 1.20.4**, producing Litematic v6.1, including supported inventories, item frames, equipment, nested containers, books and entity data.
+- Missing blocks, items and entities are listed separately with editable replacements. Pale oak boats and chest boats can use an older wood type while retaining position, passengers and inventory.
+- New music discs become named red stained glass panes enchanted with Mending. These markers **do not reproduce disc audio or comparator output**. Reports include original/replacement IDs, counts, relative coordinates, slots and data paths.
+- Exact block registries preserve supported properties such as leaf persistence and waterlogging, and recognize fluids, bubble columns and wall-mounted blocks correctly.
+- Unsupported components, entities and missing outer items carrying inventory or block-entity data cause an explicit error before saving. Items inside existing supported containers can still be replaced.
+
+This is not universal version conversion. Server permissions, Litematica paste settings and command-length limits still apply. Keep the originals and verify in the target game. Update checks use this fork's Releases.
+
+### Automated releases
+
+The inherited `.github/workflows/ci.yml` checks types, tests and release scripts before building optimized release binaries. Pushes to `main` produce `v<version>-dev.<run number>` prereleases. A matching `vX.Y.Z` tag produces a stable release and then increments the main branch PATCH version. Manual runs only check by default; select `publish` on `main` to publish a prerelease. Pull requests never publish.
+
+Downloads include Windows x64/ARM64 installers and `-portable.exe` executables, Linux x64/ARM64 deb packages, and Intel/Apple Silicon macOS DMGs. Standalone Windows executables require WebView2 Runtime and use the existing application data directory. Enable Actions in a new fork; publishing uses the built-in `GITHUB_TOKEN` with `contents: write`, without a personal token. Download tables appear after all platforms finish successfully; check Actions if a release still says artifacts are being prepared.
+
 ## Features
 
 | Feature | Description |

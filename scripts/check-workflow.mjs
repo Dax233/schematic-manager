@@ -210,8 +210,8 @@ check("有「递增版本号到下一 PATCH」任务（正式发布才执行）"
   raw.includes("递增版本号到下一 PATCH"));
 check("递增版本号以 tag 版本为基准（--next-of）",
   /bump-version\.mjs --next-of/.test(raw));
-check("发布链路只在 push 事件运行（PR 与手动触发只跑检查）",
-  /if:\s*github\.event_name == 'push'/.test(raw));
+check("发布链路支持 push，手动发布限制为 main",
+  /if:\s*github\.event_name == 'push'/.test(raw) && raw.includes("inputs.publish && github.ref == 'refs/heads/main'"));
 
 // ---------------------------------------------------------------- 9 用途说明
 console.log(`\n任务数 ${jobNames.length}，矩阵键 ${[...matrixKeys].join(", ")}`);

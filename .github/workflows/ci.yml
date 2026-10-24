@@ -5,7 +5,7 @@ name: 构建与发布
 #   2. push 形如 v1.2.3 的 tag -> 正式发布，tag 版本必须与仓库内版本号一致；
 #                               发布后自动把仓库内版本号递增到下一 PATCH 并推回 main
 #   3. pull_request          -> 只跑质量检查，不产生 Release
-#   4. 手动触发               -> 同 3
+#   4. 手动触发               -> 默认只检查；main 分支勾选 publish 可构建预发布
 #
 # dev tag 由 prepare 任务用 GITHUB_TOKEN 经 API 创建，按 GitHub 规则
 # 不会触发新的工作流运行，因此不存在自触发循环。
@@ -15,6 +15,11 @@ on:
     tags: [ 'v*' ]
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: '构建并发布开发版（仅 main 分支）'
+        type: boolean
+        default: false
 
 # 创建 Release、上传资产、写回说明、回推版本号提交需要 contents: write
 permissions:
@@ -163,8 +168,8 @@ jobs:
   prepare:
     name: 解析 Release 与版本
     needs: [ quality, integration ]
-    # 只在 push（分支或 tag）时发布；PR 与手动触发只跑检查
-    if: github.event_name == 'push'
+    # push 自动发布；手动发布仅允许 main，PR 始终只检查
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     # 只做版本计算与几次 API 调用，正常几秒结束；设上限以免异常时长时间占用
     timeout-minutes: 5
@@ -191,7 +196,7 @@ jobs:
   build:
     name: 构建 ${{ matrix.target }}
     needs: prepare
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -279,6 +284,21 @@ jobs:
           releaseId: ${{ needs.prepare.outputs.release_id }}
           tagName: ${{ needs.prepare.outputs.tag }}
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: 上传 Windows 直接运行版
+        if: startsWith(matrix.runner, 'windows')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          arch=x64
+          if [[ "$BUILD_TARGET" == aarch64-* ]]; then arch=arm64; fi
+          asset="schematic-manager_${RELEASE_VERSION}_${arch}-portable.exe"
+          cp "src-tauri/target/$BUILD_TARGET/release/schematic-manager.exe" "$asset"
+          gh release upload "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY" --clobber
 
   # ---------------------------------------------------------------- 写回说明
   # 全部平台构建完成后，从提交记录与已上传资产生成说明写回 Release。

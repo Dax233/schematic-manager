@@ -19,18 +19,18 @@
  */
 export function classify(name) {
   if (typeof name !== "string") return null;
-  // NSIS 安装包带 -setup 后缀；裸 _x64.exe 不是本仓库的产物
-  const m = /_(x64|arm64|amd64|aarch64)(-setup\.exe|\.deb|\.dmg)$/.exec(name);
+  // 区分 NSIS 安装包与直接运行版；裸 _x64.exe 不作为约定产物。
+  const m = /_(x64|arm64|amd64|aarch64)(-setup\.exe|-portable\.exe|\.deb|\.dmg)$/.exec(name);
   if (!m) return null;
   const [, archRaw, suffix] = m;
-  const ext = suffix === "-setup.exe" ? "exe" : suffix.slice(1);
+  const ext = suffix.endsWith(".exe") ? "exe" : suffix.slice(1);
   const PLATFORM_OF_EXT = { exe: "Windows", deb: "Linux", dmg: "macOS" };
   const FORMAT_LABEL = { exe: "EXE (安装包)", deb: "deb", dmg: "DMG" };
   return {
     name,
     platform: PLATFORM_OF_EXT[ext],
     arch: archRaw === "amd64" || archRaw === "x64" ? "x86_64" : "arm64",
-    format: FORMAT_LABEL[ext],
+    format: suffix === "-portable.exe" ? "EXE (直接运行)" : FORMAT_LABEL[ext],
   };
 }
 
