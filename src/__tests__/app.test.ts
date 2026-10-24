@@ -6025,8 +6025,13 @@ describe("多会话并发与状态边界", () => {
     await w.unmount();
 
     const fresh = await mountTwo();
-    const cards = fresh.findAll(".schematic-card");
-    await cards[1].trigger("keydown", { key: "Enter" });
+    // 按内容定位而不是下标：卡片顺序取决于运行环境的排序规则，
+    // 中文与拉丁文文件名在不同 ICU 数据下先后不同
+    const otherCard = fresh
+      .findAll(".schematic-card")
+      .find((card) => card.text().includes("other.litematic"));
+    expect(otherCard, "应能找到 other 卡片").toBeTruthy();
+    await otherCard!.trigger("keydown", { key: "Enter" });
     await flushPromises();
     const editors = fresh.findAll(".workspace-tab__label").filter((tab) => tab.attributes("title")?.includes("litematic"));
     expect(editors).toHaveLength(1);

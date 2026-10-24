@@ -213,6 +213,15 @@ export function createFileListSlice(s: FileListDeps) {
     pruneChecks(files.value);
   }
 
+  /** 按码元比较，结果与运行环境的语言数据无关。
+   *
+   * 不用 localeCompare：同一份文件在不同系统上会排出不同顺序，
+   * 用户看到的列表顺序与「记住了哪个文件」都会随机器变化。
+   */
+  function comparePath(a: string, b: string): number {
+    return a < b ? -1 : a > b ? 1 : 0;
+  }
+
   /** 全部目录合并后的文件列表，只含被勾选目录的文件，按路径排序保证顺序稳定 */
   const files = computed<SchematicSummary[]>(() => {
     const byPath = new Map<string, SchematicSummary>();
@@ -222,7 +231,7 @@ export function createFileListSlice(s: FileListDeps) {
         if (!byPath.has(item.path)) byPath.set(item.path, item);
       }
     }
-    return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
+    return [...byPath.values()].sort((a, b) => comparePath(a.path, b.path));
   });
 
   const selected = ref<SchematicSummary | null>(null);
@@ -395,7 +404,7 @@ export function createFileListSlice(s: FileListDeps) {
       .filter((g) => g.paths.length > 1)
       .map((g) => ({ ...g, paths: g.paths.filter((p) => !confirmed.has(p)).sort() }))
       .filter((g) => g.paths.length > 0)
-      .sort((a, b) => a.paths[0].localeCompare(b.paths[0]));
+      .sort((a, b) => comparePath(a.paths[0], b.paths[0]));
   }
 
   /** 默认勾选「多于重复文件」：每组保留第一份，其余勾上待处理。
@@ -489,7 +498,7 @@ export function createFileListSlice(s: FileListDeps) {
   function sortFiles(list: SchematicSummary[]): SchematicSummary[] {
     const key = sortKey.value;
     const order = sortOrder.value;
-    if (!key || !order) return [...list].sort((a, b) => a.path.localeCompare(b.path));
+    if (!key || !order) return [...list].sort((a, b) => comparePath(a.path, b.path));
     const dir = order === "descend" ? -1 : 1;
     return [...list].sort((a, b) => {
       const va = sortValue(a, key);
@@ -498,13 +507,13 @@ export function createFileListSlice(s: FileListDeps) {
       const ea = va === "";
       const eb = vb === "";
       if (ea !== eb) return ea ? 1 : -1;
-      if (ea && eb) return a.path.localeCompare(b.path);
+      if (ea && eb) return comparePath(a.path, b.path);
       const cmp =
         typeof va === "number" && typeof vb === "number"
           ? va - vb
           : String(va).localeCompare(String(vb), "zh-Hans-CN");
       // 值相同时按路径定序，保证顺序稳定（否则每次重排都可能换位置）
-      return cmp !== 0 ? cmp * dir : a.path.localeCompare(b.path);
+      return cmp !== 0 ? cmp * dir : comparePath(a.path, b.path);
     });
   }
 
