@@ -1,6 +1,84 @@
 use super::*;
 
 #[test]
+fn listed_nested_items_use_selected_replacements_and_discs_remain_markers() {
+    use crate::schematic::data_replacements::{self,Choice,Kind};
+    let log=stack("minecraft:pale_oak_log",32,c(vec![("minecraft:custom_name",text("\"材料\""))]));
+    let box_item=stack("minecraft:shulker_box",1,c(vec![("minecraft:container",Value::List(vec![c(vec![
+        ("slot",Value::Int(5)),("item",log),
+    ])],10))]));
+    let input=root(vec![c(vec![("Items",Value::List(vec![box_item,stack("minecraft:music_disc_creator",1,c(vec![]))],10))])]);
+    let rows=data_replacements::analyze(&input,4189,3700).unwrap();
+    assert_eq!(rows.len(),2);
+    let logs=rows.iter().find(|r|r.name=="minecraft:pale_oak_log").unwrap();
+    assert_eq!(logs.count,32);
+    let choices=vec![Choice{kind:Kind::Item,name:logs.name.clone(),replacement:"minecraft:spruce_log".into()},
+        Choice{kind:Kind::Item,name:"minecraft:music_disc_creator".into(),replacement:data_replacements::MARKER.into()}];
+    let result=prepare_with_choices(&input,4189,3700,Some(&choices)).unwrap().unwrap();
+    assert_eq!(result.replacements.len(),2);
+    let items=result.root.get("Regions").unwrap().get("r").unwrap().get("TileEntities").unwrap().as_list().unwrap()[0].get("Items").unwrap().as_list().unwrap();
+    let nested=&items[0].get("tag").unwrap().get("BlockEntityTag").unwrap().get("Items").unwrap().as_list().unwrap()[0];
+    assert_eq!(nested.get("id"),Some(&text("minecraft:spruce_log")));
+    assert_eq!(nested.get("Count"),Some(&Value::Byte(32)));
+    assert_eq!(nested.get("Slot"),Some(&Value::Byte(5)));
+    assert_eq!(nested.get("tag").unwrap().get("display").unwrap().get("Name"),Some(&text("\"材料\"")));
+    assert_eq!(items[1].get("id"),Some(&text(data_replacements::MARKER)));
+    assert!(items[1].get("tag").unwrap().get("Enchantments").is_some());
+    let before=input.clone();
+    assert!(prepare_with_choices(&input,4189,3700,Some(&choices[..1])).is_err());
+    let mut invalid=choices.clone();invalid[1].replacement="minecraft:music_disc_13".into();
+    assert!(prepare_with_choices(&input,4189,3700,Some(&invalid)).is_err());
+    assert_eq!(input,before);
+}
+
+#[test]
+fn marking_a_filled_container_rejects_instead_of_ignoring_inner_choices() {
+    use crate::schematic::data_replacements::{self,Choice};
+    let outer=stack("minecraft:pale_oak_chest_boat",1,c(vec![("minecraft:container",Value::List(vec![c(vec![
+        ("slot",Value::Int(0)),("item",stack("minecraft:music_disc_creator",1,c(vec![]))),
+    ])],10))]));
+    let input=root(vec![c(vec![("Items",Value::List(vec![outer],10))])]);
+    let before=input.clone();
+    let mut choices:Vec<_>=data_replacements::analyze(&input,4189,3700).unwrap().into_iter()
+        .map(|row|Choice {kind:row.kind,name:row.name,replacement:data_replacements::MARKER.into()}).collect();
+    let error=prepare_with_choices(&input,4189,3700,Some(&choices)).unwrap_err().to_string();
+    assert!(error.contains("内部选择无法生效"));
+    choices.iter_mut().find(|row|row.name=="minecraft:pale_oak_chest_boat").unwrap().replacement="minecraft:stick".into();
+    assert!(prepare_with_choices(&input,4189,3700,Some(&choices)).unwrap_err().to_string().contains("库存迁移规则"));
+    let nested=c(vec![("SpawnPotentials",Value::List(vec![c(vec![("data",c(vec![("entity",c(vec![
+        ("Passengers",Value::List(vec![c(vec![("HandItems",Value::List(vec![stack("minecraft:stone",1,c(vec![]))],10))])],10)),
+    ]))]))])],10))]);
+    let outer=stack("minecraft:pale_oak_chest_boat",1,c(vec![("minecraft:block_entity_data",nested)]));
+    let embedded=root(vec![c(vec![("Items",Value::List(vec![outer],10))])]);
+    assert!(prepare(&embedded,4189,3700).unwrap_err().to_string().contains("库存迁移规则"));
+    assert!(error.contains("Items[0]"));
+    assert_eq!(input,before);
+}
+
+#[test]
+fn pale_boats_are_listed_separately_and_keep_passengers_position_and_inventory() {
+    use crate::schematic::data_replacements::{self,Choice,Kind};
+    let position=Value::List(vec![Value::Double(1.5),Value::Double(4.0),Value::Double(-2.5)],6);
+    let boat=c(vec![("id",text("minecraft:pale_oak_chest_boat")),("Pos",position.clone()),
+        ("Items",Value::List(vec![stack("minecraft:pale_oak_log",6,c(vec![]))],10)),
+        ("Passengers",Value::List(vec![c(vec![("id",text("minecraft:pale_oak_boat"))])],10))]);
+    let input=c(vec![("Regions",c(vec![("r",c(vec![("Entities",Value::List(vec![boat],10))]))]))]);
+    let rows=data_replacements::analyze(&input,4189,3700).unwrap();assert_eq!(rows.len(),3);
+    let choices:Vec<_>=rows.iter().map(|r|Choice{kind:r.kind,name:r.name.clone(),replacement:match r.kind {
+        Kind::Item=>"minecraft:oak_log".into(),
+        Kind::Entity=>if r.name.ends_with("chest_boat") {"minecraft:chest_boat[Type=cherry]"} else {"minecraft:boat[Type=spruce]"}.into(),
+    }}).collect();
+    let result=prepare_with_choices(&input,4189,3700,Some(&choices)).unwrap().unwrap();
+    assert_eq!(result.replacements.len(),3);
+    let boat=&result.root.get("Regions").unwrap().get("r").unwrap().get("Entities").unwrap().as_list().unwrap()[0];
+    assert_eq!(boat.get("id"),Some(&text("minecraft:chest_boat")));
+    assert_eq!(boat.get("Type"),Some(&text("cherry")));
+    assert_eq!(boat.get("Pos"),Some(&position));
+    assert_eq!(boat.get("Items").unwrap().as_list().unwrap()[0].get("id"),Some(&text("minecraft:oak_log")));
+    assert_eq!(boat.get("Passengers").unwrap().as_list().unwrap()[0].get("Type"),Some(&text("spruce")));
+}
+
+#[test]
 fn sword_keeps_unbreakable_and_sweeping_level() {
     let mut item = stack("minecraft:netherite_sword", 1, c(vec![
         ("minecraft:unbreakable", c(vec![])),

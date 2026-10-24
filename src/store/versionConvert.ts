@@ -85,11 +85,14 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
 
   /** 列定义随界面语言变化，用 computed 包住，切语言后表头跟着变 */
   const convColumns = computed(() => [
+    { title: t("convert.colKind"), slotName: "kind", width: 80 },
     { title: t("convert.colFrom"), slotName: "from" },
     { title: t("convert.colCount"), dataIndex: "count", width: 80 },
     { title: t("convert.colRepl"), slotName: "repl" },
     { title: t("convert.colState"), slotName: "state", width: 96 },
   ]);
+
+  function convKey(item: ConvertItem): string { return `${item.kind ?? "block"}:${item.name}`; }
 
   /** 这一项最终会用到的替代品：已指定优先，其次自动推荐 */
   function convReplacementOf(i: ConvertItem): string {
@@ -139,12 +142,19 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
 
   /** 点左侧某一行：右侧列表接下来填的就是它 */
   function selectConvRow(item: ConvertItem) {
-    convActiveName.value = item.name;
+    const previousKind = convActiveItem.value?.kind ?? "block";
+    convActiveName.value = convKey(item);
+    if ((item.kind ?? "block") !== previousKind || previousKind !== "block") {
+      ++convPickSeq;
+      convPickHits.value = [];
+      convPickBusy.value = false;
+      void onConvPickSearch(convPickQuery.value);
+    }
   }
 
   /** 当前正在指定替代品的那一项；没有（还没点过任何行）时为 null */
   const convActiveItem = computed(
-    () => convItems.value.find((i) => i.name === convActiveName.value) ?? null,
+    () => convItems.value.find((i) => convKey(i) === convActiveName.value) ?? null,
   );
 
   /** 这个方块是否存在于目标版本。
@@ -155,6 +165,9 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
    * 由调用方决定是拦下还是只提醒。
    */
   function convHitInTarget(hit: BlockHit): boolean {
+    if (convActiveItem.value?.kind && convActiveItem.value.kind !== "block") {
+      return Boolean(convActiveItem.value.options?.some((option) => option.name === hit.name));
+    }
     const idx = convTargetIdx.value;
     if (idx === undefined) return false;
     return hit.versions.some((v) => v.index === idx);
@@ -166,6 +179,15 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
     // 记下这次查询的序号：逐字符搜索会并发多个请求，慢的旧响应回来时
     // 不能覆盖新结果，否则列表内容与输入框里的关键字对不上
     const seq = ++convPickSeq;
+    const active = convActiveItem.value;
+    if (active?.kind && active.kind !== "block") {
+      const query = q.toLocaleLowerCase();
+      convPickHits.value = (active.options ?? [])
+        .filter((option) => `${option.name} ${option.nameZh} ${option.nameEn}`.toLocaleLowerCase().includes(query))
+        .map((option) => ({name: option.name, zh: option.nameZh, en: option.nameEn, versions: []}));
+      convPickBusy.value = false;
+      return;
+    }
     if (!q) {
       convPickHits.value = [];
       // 空查询自己就是最新的一次查询，而它在途的前一次查询已经因为序号
@@ -203,7 +225,7 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
 
   /** 点选右侧列表里的方块，填给当前选中的那一行 */
   function pickConvBlock(hit: BlockHit) {
-    const target = convItems.value.find((i) => i.name === convActiveName.value);
+    const target = convActiveItem.value;
     if (!target) {
       Message.warning(t("convert.pickNoRow"));
       return;
@@ -225,7 +247,8 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
 
   /** 手输的方块 ID 也要显示名字：改动后延迟查一次（逐字符查太费） */
   function scheduleConvNameLookup(item: ConvertItem) {
-    const key = item.name;
+    if (item.kind && item.kind !== "block") return;
+    const key = convKey(item);
     const pending = convNameTimers.get(key);
     if (pending !== undefined) clearTimeout(pending);
     convNameTimers.set(
@@ -307,13 +330,18 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
     }
     convBusy.value = true;
     try {
-      convItems.value = await analyzeConversion(cur.path, convTargetIdx.value);
+      convItems.value = (await analyzeConversion(cur.path, convTargetIdx.value))
+        .map((item) => ({...item, key: convKey(item)}));
       convAnalyzed.value = true;
       // 分析结果自带源方块与自动推荐的两个名字，一次收进缓存：
       // 界面上凡出现方块 ID 的地方都要显示名字，逐条回查既慢又没必要
       const names: Record<string, NamedRecord> = { ...convNames.value };
       const checked = new Set(convNamesQueried.value);
       for (const i of convItems.value) {
+        for (const option of i.options ?? []) {
+          names[option.name] = {zhName: option.nameZh, enName: option.nameEn};
+          checked.add(option.name);
+        }
         names[i.name] = { zhName: i.nameZh, enName: i.nameEn };
         checked.add(i.name);
         if (i.suggested) {
@@ -381,6 +409,7 @@ export function createVersionConvertSlice(s: VersionConvertDeps) {
   }
 
   return {
+    convKey,
     convReport,
     convReportOpen,
     convOpen,

@@ -1536,7 +1536,7 @@ describe("版本转换", () => {
     );
   }
 
-  it("分析失败后不应再显示「可以直接转换」", async () => {
+  it("分析失败后不应再显示「未发现需要指定替代品」", async () => {
     // 这条防的是：分析失败的 catch 只清空条目、不复位 convAnalyzed，
     // 于是模板把「已分析且条目为空」当成「方块都存在」，展示绿色成功提示，
     // 且确定按钮可用，点下去会用空条目执行转换。
@@ -1611,15 +1611,15 @@ describe("版本转换", () => {
     analyze!.click();
     await flushPromises();
     expect(document.body.textContent, "首次分析成功应给出成功提示").toContain(
-      "可以直接转换",
+      "未发现需要指定替代品",
     );
 
     analyze!.click();
     await flushPromises();
     expect(
       document.body.textContent,
-      "分析失败后不应残留「可以直接转换」的成功提示",
-    ).not.toContain("可以直接转换");
+      "分析失败后不应残留「未发现需要指定替代品」的成功提示",
+    ).not.toContain("未发现需要指定替代品");
     w.unmount();
   });
 });
@@ -1762,6 +1762,37 @@ describe("版本转换窗口（中文名与替代品点选）", () => {
     await flushPromises();
     return w;
   }
+
+  it("同名方块与库存物品独立选择，实体选项随当前行切换并提交", async () => {
+    const w = await openAndAnalyze();
+    const base = mockInvoke.getMockImplementation()!;
+    const rows = [
+      {kind: "block", name: "minecraft:pale_oak_log", nameZh: "苍白原木方块", count: 8, suggested: "minecraft:birch_log", suggestedZh: "白桦原木", chosen: "", options: []},
+      {kind: "item", name: "minecraft:pale_oak_log", nameZh: "苍白原木物品", count: 64, suggested: "minecraft:birch_log", suggestedZh: "白桦原木", chosen: "", options: [{name: "minecraft:spruce_log", nameZh: "云杉原木", nameEn: "Spruce Log"}, {name: "minecraft:birch_log", nameZh: "白桦原木", nameEn: "Birch Log"}]},
+      {kind: "entity", name: "minecraft:pale_oak_boat", nameZh: "苍白木船", count: 1, suggested: "minecraft:boat[Type=birch]", suggestedZh: "白桦木船", chosen: "", options: [{name: "minecraft:boat[Type=birch]", nameZh: "白桦木船", nameEn: "Birch Boat"}, {name: "minecraft:boat[Type=cherry]", nameZh: "樱花木船", nameEn: "Cherry Boat"}]},
+    ];
+    mockInvoke.mockImplementation((async (cmd: string, args: never) => {
+      if (cmd === "analyze_conversion") return rows;
+      if (cmd === "apply_conversion") return {replacedKinds: 1, replacedBlocks: 8, skippedKinds: 0, outputPath: "/p/new.litematic", compatibilityReplacements: []};
+      return base(cmd, args);
+    }) as never);
+    findButton("分析差异")!.click(); await flushPromises();
+    rowByText("苍白原木物品")!.click(); await flushPromises();
+    const pick = (text: string) => [...document.querySelectorAll<HTMLButtonElement>(".conv-pick__item")].find(b => b.textContent?.includes(text));
+    pick("minecraft:spruce_log")!.click(); await flushPromises();
+    expect(rowByText("苍白原木方块")!.textContent).toContain("minecraft:birch_log");
+    expect(rowByText("苍白原木物品")!.textContent).toContain("minecraft:spruce_log");
+    rowByText("苍白木船")!.click(); await flushPromises();
+    expect(pick("minecraft:spruce_log")).toBeUndefined();
+    pick("Type=cherry")!.click(); await flushPromises();
+    findButton("开始转换")!.click(); await flushPromises();
+    const call = [...mockInvoke.mock.calls].reverse().find(([cmd]) => cmd === "apply_conversion");
+    const sent = (call?.[1] as {items: {kind: string; chosen: string}[]}).items;
+    expect(sent.find(i => i.kind === "block")?.chosen).toBe("");
+    expect(sent.find(i => i.kind === "item")?.chosen).toBe("minecraft:spruce_log");
+    expect(sent.find(i => i.kind === "entity")?.chosen).toBe("minecraft:boat[Type=cherry]");
+    w.unmount();
+  });
 
   it.each([true, false])("转换结束按实际替换情况显示兼容报告（有替换：%s）", async (hasReplacement) => {
     const w = await openAndAnalyze();

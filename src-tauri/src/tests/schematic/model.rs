@@ -54,7 +54,7 @@ fn defaults_use_first_occurrence_not_alphabetical() {
         ],
         multipart: Vec::new(),
     };
-    let db = db_with(bd, "1.20.1", 3465);
+    let db = db_with(bd, "unregistered", 0);
     let info = DbBlockInfo { db: &db, version: &db.versions[0] };
     let d = info.default_props("minecraft:oak_stairs");
     assert_eq!(
@@ -183,7 +183,7 @@ fn prop_domain_comes_from_condition_strings() {
         ],
         multipart: Vec::new(),
     };
-    let db = db_with(bd, "1.20.1", 3465);
+    let db = db_with(bd, "unregistered", 0);
     let (domain, defaults) = block_prop_domain(&db, &db.versions[0], "minecraft:oak_stairs").unwrap();
 
     let facing = domain.get("facing").expect("应有 facing");
@@ -204,7 +204,7 @@ fn prop_domain_includes_multipart_conditions() {
         variants: vec![var("north=true", 0)],
         multipart: vec![var("waterlogged=true", 0), var("south=true", 0)],
     };
-    let db = db_with(bd, "1.20.1", 3465);
+    let db = db_with(bd, "unregistered", 0);
     let (domain, _) = block_prop_domain(&db, &db.versions[0], "minecraft:oak_fence").unwrap();
     assert!(domain.contains_key("north"));
     assert!(domain.contains_key("south"), "multipart 的条件也应计入");
@@ -237,7 +237,7 @@ fn defaults_fall_back_to_domain_first_value() {
         variants: vec![var("facing=north", 0), var("shape=outer_left|shape=straight", 0)],
         multipart: Vec::new(),
     };
-    let db = db_with(bd, "1.20.1", 3465);
+    let db = db_with(bd, "unregistered", 0);
     let info = DbBlockInfo { db: &db, version: &db.versions[0] };
     let d = info.default_props("minecraft:oak_stairs");
     assert!(d.iter().any(|(k, v)| k == "facing" && v == "north"));

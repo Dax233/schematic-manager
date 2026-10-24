@@ -1,6 +1,30 @@
 use super::*;
 use crate::schematic::litematic::{BlockState, Region};
 
+#[test]
+fn ordinary_leaf_replacement_keeps_nonvisual_properties_and_can_reset_to_defaults() {
+    let db = crate::block::db::BlockDb {
+        strings:vec![], langs:vec![],textures:vec![],models:vec![],pixels:vec![],
+        versions:vec![crate::block::db::VersionDef {
+            name:"1.20.4".into(),data_version:3700,lang_idx:0,texture_by_path:Default::default(),
+            blocks:vec![],langs:vec![],is_overlay:false,
+        }],
+    };
+    let info=crate::schematic::model::DbBlockInfo {db:&db,version:&db.versions[0]};
+    for inherit in [true,false] {
+        let mut leaf=BlockState::new("minecraft:pale_oak_leaves");
+        for (k,v) in [("persistent","true"),("waterlogged","true"),("distance","7")] {leaf.set_prop(k,v);}
+        let mut sc=schematic_with(vec![leaf],vec![0,0]);
+        let mut replacement=rule("minecraft:pale_oak_leaves","minecraft:birch_leaves");
+        replacement.inherit_props=inherit;
+        assert_eq!(replace_blocks(&mut sc,&replacement,&info,0).replaced,2);
+        let after=&sc.regions[0].palette[sc.regions[0].indices[0] as usize];
+        assert_eq!(after.prop("persistent"),Some(if inherit {"true"} else {"false"}));
+        assert_eq!(after.prop("waterlogged"),Some(if inherit {"true"} else {"false"}));
+        assert_eq!(after.prop("distance"),Some("7"));
+    }
+}
+
 /// 一个只认识楼梯类方块的方块库替身
 struct Stairs {
     props: Vec<(String, String)>,

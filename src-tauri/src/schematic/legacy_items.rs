@@ -25,6 +25,7 @@ pub struct PreparedData {
 struct Migration {
     location: String,
     replacements: Vec<CompatibilityReplacement>,
+    choices: Vec<super::data_replacements::Choice>,
 }
 
 fn known_id(id: &str, names: &str) -> bool {
@@ -324,13 +325,31 @@ fn downgrade_item(value: &mut Value, path: &str, migration: &mut Migration) -> A
         return Ok(());
     }
     let id = value.get("id").and_then(Value::as_str)
-        .ok_or_else(|| invalid(path, "物品缺少 id"))?;
-    if !known_id(id, include_str!("../../data/items-1.20.4.txt")) {
+        .ok_or_else(|| invalid(path, "物品缺少 id"))?.to_string();
+    if !known_id(&id, include_str!("../../data/items-1.20.4.txt")) {
         let count = value.get("count").or_else(|| value.get("Count")).and_then(Value::as_i64)
             .and_then(|v| i8::try_from(v).ok()).filter(|v| *v > 0)
             .ok_or_else(|| invalid(path, "物品数量应在旧版可表示的 1–127 范围内"))?;
-        *value = placeholder(value, id, count, path, migration);
-        return Ok(());
+        let replacement = migration.choices.iter().find(|choice|
+            choice.kind == super::data_replacements::Kind::Item && choice.name == id)
+            .map(|choice| choice.replacement.clone()).unwrap_or_else(|| super::data_replacements::MARKER.into());
+        if let Some(data) = value.get("components") {
+                let container = data.get("minecraft:container").and_then(Value::as_list).is_some_and(|items| !items.is_empty());
+                let embedded = data.get("minecraft:block_entity_data").is_some_and(|value| !matches!(value, Value::Compound(fields) if fields.is_empty()));
+                if container || embedded {
+                    return Err(invalid(path, "缺失物品携带库存或方块实体数据：尚未实现对应的结构及库存迁移规则，内部选择无法生效"));
+                }
+            }
+        if replacement == super::data_replacements::MARKER {
+            *value = placeholder(value, &id, count, path, migration);
+            return Ok(());
+        }
+        migration.replacements.push(CompatibilityReplacement {
+            original_id: id, replacement_id: replacement.clone(), count: count as i32,
+            location: migration.location.clone(), path: path.into(),
+            slot: value.get("Slot").and_then(Value::as_i64).map(|v| v as u8),
+        });
+        value.set("id", Value::String(replacement));
     }
     if value.get("count").is_none() && value.get("components").is_none() {
         return Ok(());
@@ -356,6 +375,19 @@ fn downgrade_item(value: &mut Value, path: &str, migration: &mut Migration) -> A
 }
 
 fn downgrade_contents(value: &mut Value, path: &str, migration: &mut Migration) -> AppResult<()> {
+    if let Some(id) = value.get("id").and_then(Value::as_str).map(str::to_string) {
+        if let Some(choice) = migration.choices.iter().find(|choice|
+            choice.kind == super::data_replacements::Kind::Entity && choice.name == id) {
+            let (target, wood) = super::data_replacements::entity_target(&choice.replacement)
+                .ok_or_else(|| invalid(path,"实体替代品无效"))?;
+            insert(value, "Type", Value::String(wood.into()), path)?;
+            value.set("id",Value::String(target.into()));
+            migration.replacements.push(CompatibilityReplacement {
+                original_id: id, replacement_id: choice.replacement.clone(), count: 1,
+                location: migration.location.clone(), path: path.into(), slot: None,
+            });
+        }
+    }
     crate::schematic::legacy_entities::downgrade(value, path)?;
     let Value::Compound(fields) = value else { return Err(invalid(path, "实体应为复合标签")); };
     for (key, item) in fields {
@@ -442,14 +474,25 @@ fn reject_unhandled_items(value: &Value, path: &str) -> AppResult<()> {
 
 /// 在副本上迁移数据；失败时调用方的版本号、方块及实体均保持原样。
 pub fn prepare(root: &Value, source: i32, target: i32) -> AppResult<Option<PreparedData>> {
+    prepare_with_choices(root, source, target, None)
+}
+
+/// 显式清单必须覆盖分析出的全部缺失项，避免转换时悄悄采用另一种替代品。
+pub fn prepare_with_choices(root: &Value, source: i32, target: i32, choices: Option<&[super::data_replacements::Choice]>) -> AppResult<Option<PreparedData>> {
     if source < 3837 || target >= 3837 {
         return Ok(None);
     }
     if target != 3700 || source > 4189 {
         return Err(invalid("MinecraftDataVersion", "跨越物品组件格式的降级目前支持 1.20.5–1.21.4 → 1.20.4"));
     }
+    let missing = super::data_replacements::analyze(root, source, target)?;
+    let defaults: Vec<_> = missing.iter().map(|row| super::data_replacements::Choice {
+        kind: row.kind, name: row.name.clone(), replacement: row.suggested.clone(),
+    }).collect();
+    let choices = choices.unwrap_or(&defaults);
+    super::data_replacements::validate(&missing, choices)?;
     let mut result = root.clone();
-    let mut migration = Migration::default();
+    let mut migration = Migration {choices: choices.to_vec(), ..Default::default()};
     let Value::Compound(fields) = &mut result else { return Err(invalid("/", "根节点应为复合标签")); };
     if let Some((_, regions)) = fields.iter_mut().find(|(key, _)| key == "Regions") {
         let Value::Compound(regions) = regions else { return Err(invalid("Regions", "应为复合标签")); };

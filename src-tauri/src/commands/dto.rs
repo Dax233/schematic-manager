@@ -190,6 +190,10 @@ pub struct VersionOptionDto {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConvertItemDto {
+    #[serde(default = "block_conversion_kind")]
+    pub kind: String,
+    #[serde(default)]
+    pub options: Vec<ConversionOptionDto>,
     pub name: String,
     /// 源方块的中英两个名字。界面上凡是出现方块 ID 的地方都要一并给出名字，
     /// 只给 ID 时用户无法确认自己要替换的到底是哪一个方块；而界面语言可以切换，
@@ -206,6 +210,17 @@ pub struct ConvertItemDto {
     /// 推荐替代品的英文名；没有推荐时为空
     pub suggested_en: String,
     pub chosen: String,
+}
+
+fn block_conversion_kind() -> String { "block".into() }
+
+/// 可选旧版替代品的标识与显示名称。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversionOptionDto {
+    pub name: String,
+    pub name_zh: String,
+    pub name_en: String,
 }
 
 /// 可作为转换目标的版本

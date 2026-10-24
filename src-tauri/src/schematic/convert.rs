@@ -65,33 +65,6 @@ fn target_names(target: &crate::block::db::VersionDef) -> Vec<String> {
     names.into_iter().collect()
 }
 
-/// 转换只使用目标版本的完整原版属性；模组属性由目标资源包提供。
-struct ConversionInfo<'a> {
-    fallback: crate::schematic::model::DbBlockInfo<'a>,
-}
-
-impl crate::schematic::replace::BlockInfo for ConversionInfo<'_> {
-    fn supports_prop(&self, block: &str, prop: &str, value: &str) -> bool {
-        if let Some(name) = block.strip_prefix("minecraft:") {
-            if let Some(registry) = crate::block::registry::get(self.fallback.version.data_version) {
-                return registry.get(name).and_then(|(domain, _)| domain.get(prop))
-                    .is_some_and(|values| values.iter().any(|v| v == value));
-            }
-        }
-        self.fallback.supports_prop(block, prop, value)
-    }
-
-    fn default_props(&self, block: &str) -> Vec<(String, String)> {
-        if let Some(name) = block.strip_prefix("minecraft:") {
-            if let Some(registry) = crate::block::registry::get(self.fallback.version.data_version) {
-                return registry.get(name).map(|(_, defaults)| defaults.iter()
-                    .map(|(key, value)| (key.clone(), value.clone())).collect()).unwrap_or_default();
-            }
-        }
-        self.fallback.default_props(block)
-    }
-}
-
 /// 为一个在原版/目标版本中消失的方块推荐替代品。
 ///
 /// 先找同后缀（`_stairs`、`_slab` 之类），再找同前缀（`deepslate_` 之类）。
@@ -206,6 +179,13 @@ pub fn convert(
     target_idx: usize,
     items: &[ConvertItem],
 ) -> AppResult<ConvertOutcome> {
+    convert_with_choices(sc, db, source_idx, target_idx, items, None)
+}
+
+pub fn convert_with_choices(
+    sc: &mut Schematic, db: &BlockDb, source_idx: usize, target_idx: usize,
+    items: &[ConvertItem], choices: Option<&[super::data_replacements::Choice]>,
+) -> AppResult<ConvertOutcome> {
     let Some(target) = db.versions.get(target_idx) else {
         return Err(AppError::Parse("目标版本不存在".into()));
     };
@@ -229,11 +209,11 @@ pub fn convert(
         .and_then(|v| v.as_i64()).and_then(|v| i32::try_from(v).ok())
         .unwrap_or(source.data_version);
     let mut out = ConvertOutcome::default();
-    if let Some(prepared) = crate::schematic::legacy_items::prepare(&sc.root, source_version, target.data_version)? {
+    if let Some(prepared) = crate::schematic::legacy_items::prepare_with_choices(&sc.root, source_version, target.data_version, choices)? {
         sc.root = prepared.root;
         out.compatibility_replacements = prepared.replacements;
     }
-    let info = ConversionInfo { fallback: crate::schematic::model::DbBlockInfo { db, version: target } };
+    let info = crate::schematic::model::DbBlockInfo { db, version: target };
 
     for it in items {
         let repl = it.replacement();

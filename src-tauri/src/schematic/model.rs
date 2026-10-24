@@ -124,13 +124,19 @@ pub type PropDomain = BTreeMap<String, Vec<String>>;
 
 /// 收集方块支持的属性取值域。
 ///
-/// 信息全部来自变体与 multipart 的条件串——方块库并不单独存属性表，
-/// 条件串里出现过的 prop=value 就是该方块支持的取值。
+/// 原版使用精确版本的完整注册信息，避免遗漏不影响外观的含水、永久保留等属性。
+/// 模组和没有注册信息的版本继续使用资源包中的变体条件。
 pub fn block_prop_domain(
     db: &BlockDb,
     version: &VersionDef,
     name: &str,
 ) -> Option<(PropDomain, Vec<(String, String)>)> {
+    if let Some(name) = name.strip_prefix("minecraft:") {
+        if let Some(registry) = crate::block::registry::get(version.data_version) {
+            return registry.get(name).map(|(domain, defaults)|
+                (domain.clone(), defaults.iter().map(|(key, value)| (key.clone(), value.clone())).collect()));
+        }
+    }
     let bd = find_block(db, version, name)?;
     let mut domain: PropDomain = BTreeMap::new();
     // 默认值取自第一个变体的条件：blockstate 文件里默认变体排在前面，

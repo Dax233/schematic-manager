@@ -35,6 +35,7 @@ const {
   convItems,
   convAnalyzed,
   convColumns,
+  convKey,
   convActiveItem,
   convPickQuery,
   convPickHits,
@@ -104,7 +105,7 @@ const convTableHost = ref<HTMLElement | null>(null);
 function convActiveIndex(): number {
   const cur = convActiveItem.value;
   if (!cur) return -1;
-  return convPageRows.value.findIndex((r) => r.name === cur.name);
+  return convPageRows.value.findIndex((r) => convKey(r) === convKey(cur));
 }
 
 useListKeyboard({
@@ -217,7 +218,7 @@ async function onPrepareVersion(opt: TargetOption) {
  */
 function convRowClass(raw: TableData): string {
   const rec = raw as unknown as ConvertItem;
-  return convActiveItem.value?.name === rec.name ? "conv-row--active" : "";
+  return convActiveItem.value && convKey(convActiveItem.value) === convKey(rec) ? "conv-row--active" : "";
 }
 
 function onConvRowClick(raw: TableData) {
@@ -245,6 +246,13 @@ function replName(rec: ConvertItem): string {
   if (name) return name;
   return convNameQueried(id) ? t("convert.replNotFound") : t("convert.replQuerying");
 }
+
+function replacementOptions(item: ConvertItem) {
+  return (item.options ?? []).map(option => {
+    const name = displayName({zhName: option.nameZh, enName: option.nameEn});
+    return {value: option.name, label: name ? `${name} · ${option.name}` : option.name};
+  });
+}
 </script>
 
 <template>
@@ -254,7 +262,7 @@ function replName(rec: ConvertItem): string {
     :width="1180"
     :ok-loading="convBusy"
     :ok-text="t('convert.ok')"
-    :ok-button-props="{ disabled: convTargetIdx === undefined || !selected || !convAnalyzed }"
+    :ok-button-props="{ disabled: convTargetIdx === undefined || !selected || !convAnalyzed || convItems.some(item => item.kind && item.kind !== 'block' && !item.options?.some(option => option.name === convReplacementOf(item))) }"
     :body-style="{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }"
     @ok="doConvert"
     modal-class="conv-window"
@@ -319,11 +327,12 @@ function replName(rec: ConvertItem): string {
                 total: convItems.length,
               }"
               :row-class="convRowClass"
-              row-key="name"
+              row-key="key"
               size="small"
               @row-click="onConvRowClick"
               @page-change="(p: number) => (convPage = p)"
             >
+              <template #kind="{ record }">{{ t(`convert.kind_${record.kind || 'block'}`) }}</template>
               <template #from="{ record }">
                 <div class="conv-block">
                   <!-- 名字由后端随分析结果给出。当前语言缺这一项时退回另一种语言，
@@ -345,12 +354,18 @@ function replName(rec: ConvertItem): string {
                      出来的推荐；用户自己选过或填过的行不上色 -->
                 <div class="conv-block" :class="`conv-block--${convReplState(record)}`">
                   <a-input
+                    v-if="!record.kind || record.kind === 'block'"
                     v-model="record.chosen"
                     :placeholder="record.suggested || t('convert.replPlaceholder')"
                     size="small"
                     allow-clear
                     @input="scheduleConvNameLookup(record)"
                   />
+                  <a-select v-else :model-value="record.chosen || undefined" allow-search allow-clear size="small"
+                    @change="(value: unknown) => (record.chosen = typeof value === 'string' ? value : '')"
+                    :placeholder="record.suggested || t('convert.unsupportedEntity')"
+                    :disabled="!record.options?.length"
+                    :options="replacementOptions(record)" />
                   <!-- 实际会用到的替代品：显示名称 + 方块 ID 都写成正文。
                        只靠输入框的 placeholder 显示自动推荐时，一旦聚焦或点开
                        就看不见了，用户无法确认转换时究竟会换成哪个方块。 -->
@@ -379,7 +394,7 @@ function replName(rec: ConvertItem): string {
           <div class="conv-split__pane conv-split__pane--pick">
             <a-input-search
               v-model="convPickQuery"
-              :placeholder="t('common.searchBlocks')"
+              :placeholder="t('convert.searchReplacement')"
               size="small"
               :loading="convPickBusy"
               allow-clear

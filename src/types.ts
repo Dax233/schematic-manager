@@ -187,6 +187,9 @@ export interface VersionOption {
 
 /** 转换中需要处理的一项 */
 export interface ConvertItem {
+  kind?: "block" | "item" | "entity";
+  options?: { name: string; nameZh: string; nameEn: string }[];
+  key?: string;
   name: string;
   /** 源方块的中英两个名字；界面按当前语言取一套 */
   nameZh: string;

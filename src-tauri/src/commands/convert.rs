@@ -37,11 +37,39 @@ pub fn analyze_conversion(
     // target_index 来自前端、可能越界，但 lang_index 取不到版本时返回空表。
     let source_idx = db.pick_version(sc.summary().data_version).unwrap_or(target_index);
 
-    Ok(convert_items_with_zh(
+    let target = db.versions.get(target_index).ok_or_else(|| "目标版本不存在".to_string())?;
+    let mut rows = convert_items_with_zh(
         crate::schematic::convert::analyze(&sc, db, target_index),
         &crate::block::search::lang_index(db, source_idx),
         &crate::block::search::lang_index(db, target_index),
-    ))
+    );
+    for row in crate::schematic::data_replacements::analyze(&sc.root, sc.summary().data_version, target.data_version).map_err(|e|e.to_string())? {
+        let (name_zh,name_en) = data_names(db,source_idx,&row.name);
+        let (suggested_zh,suggested_en) = data_names(db,target_index,&row.suggested);
+        rows.push(ConvertItemDto {
+            kind: match row.kind {crate::schematic::data_replacements::Kind::Item=>"item",crate::schematic::data_replacements::Kind::Entity=>"entity"}.into(),
+            options: row.options.into_iter().map(|name| {
+                let (name_zh,name_en) = data_names(db,target_index,&name);
+                super::dto::ConversionOptionDto {name,name_zh,name_en}
+            }).collect(),
+            name_zh, name_en, suggested_zh, suggested_en,
+            name: row.name, count: row.count, suggested: row.suggested, chosen: String::new(),
+        });
+    }
+    Ok(rows)
+}
+
+fn data_names(db: &crate::block::db::BlockDb, version: usize, id: &str) -> (String,String) {
+    let item_id = if let Some((boat,wood)) = crate::schematic::data_replacements::entity_target(id) {
+        let suffix = if boat.ends_with("chest_boat") {"chest_boat"} else {"boat"};
+        let suffix = if wood=="bamboo" {if suffix=="boat" {"raft"} else {"chest_raft"}} else {suffix};
+        format!("minecraft:{wood}_{suffix}")
+    } else {id.to_string()};
+    for key in [format!("item.{}",item_id.replace(':',".")),format!("entity.{}",item_id.replace(':',".")),item_id.clone()] {
+        let names = crate::block::names::lookup_lang(db,Some(version),&key);
+        if !names.0.is_empty() || !names.1.is_empty() {return names;}
+    }
+    crate::block::names::block_display_names(db,Some(version),&item_id)
 }
 
 /// 给转换条目补上中英文名。
@@ -56,6 +84,7 @@ fn convert_items_with_zh(
     items
         .into_iter()
         .map(|i| ConvertItemDto {
+            kind: "block".into(), options: vec![],
             // 源方块先查原版本的表，再退到目标版本的表：它在原版本里一定存在，
             // 但投影用的版本号不一定能在库里对上，那时只能靠目标版本的表
             name_zh: name_from_tables(&i.name, &[source_langs, target_langs], false),
@@ -144,8 +173,20 @@ pub fn apply_conversion(
         crate::schematic::convert::safe_file_component(&target.name)
     ));
 
+    let mut choices = Vec::new();
+    for item in &items {
+        let kind = match item.kind.as_str() {
+            "block" => continue,
+            "item" => crate::schematic::data_replacements::Kind::Item,
+            "entity" => crate::schematic::data_replacements::Kind::Entity,
+            _ => return Err("未知转换条目类别".into()),
+        };
+        choices.push(crate::schematic::data_replacements::Choice {kind, name:item.name.clone(),
+            replacement: if item.chosen.trim().is_empty() {item.suggested.clone()} else {item.chosen.trim().into()}});
+    }
     let items: Vec<crate::schematic::convert::ConvertItem> = items
         .into_iter()
+        .filter(|item| item.kind == "block")
         .map(|i| crate::schematic::convert::ConvertItem {
             name: i.name,
             count: i.count,
@@ -154,7 +195,7 @@ pub fn apply_conversion(
         })
         .collect();
 
-    let out = crate::schematic::convert::convert(&mut sc, db, source_idx, target_index, &items)
+    let out = crate::schematic::convert::convert_with_choices(&mut sc, db, source_idx, target_index, &items, Some(&choices))
         .map_err(|e| e.to_string())?;
     // 只有真的替换过方块才需要重编码 BlockStates 与调色板；
     // 若仅改版本号（方块都没变），save_to 仍会序列化整个 root，
